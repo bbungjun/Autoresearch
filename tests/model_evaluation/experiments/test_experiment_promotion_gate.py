@@ -16,6 +16,10 @@ WORKFLOW = PROJECT_ROOT / ".github/workflows/auto-research-promotion.yml"
 DEV_PROMOTION_WORKFLOW = PROJECT_ROOT / ".github/workflows/auto-research-dev-promotion.yml"
 ISSUE_FORM = PROJECT_ROOT / ".github/ISSUE_TEMPLATE/auto_research.yml"
 RENDERED_FORM_FIXTURE = PROJECT_ROOT / "tests/fixtures/auto_research_issue_form_rendered.md"
+_requires_active_promotion_workflows = pytest.mark.skipif(
+    not WORKFLOW.is_file() or not DEV_PROMOTION_WORKFLOW.is_file(),
+    reason="조직 자동 실험 경로 부재로 비활성화된 promotion 워크플로우 계약 테스트",
+)
 
 
 def _issue_body(**values: str) -> str:
@@ -182,6 +186,7 @@ def _experiment_id_patterns() -> dict[str, str]:
     return found
 
 
+@_requires_active_promotion_workflows
 def test_experiment_id_pattern_is_identical_everywhere() -> None:
     """정규식이 5개 정의 지점에서 동일해야 한다(#495 버그 B)."""
     patterns = _experiment_id_patterns()
@@ -189,6 +194,7 @@ def test_experiment_id_pattern_is_identical_everywhere() -> None:
     assert len(set(patterns.values())) == 1, f"정규식이 갈라져 있습니다: {patterns}"
 
 
+@_requires_active_promotion_workflows
 @pytest.mark.parametrize(
     "experiment_id",
     [
@@ -208,6 +214,7 @@ def test_divergent_experiment_ids_are_judged_identically(experiment_id: str) -> 
     assert len(set(verdicts.values())) == 1, f"{experiment_id} 판정 불일치: {verdicts}"
 
 
+@_requires_active_promotion_workflows
 def test_promotion_workflow_uses_dispatch_gate_and_draft_pr() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
@@ -256,6 +263,7 @@ def _gate_reason_expressions() -> dict[str, str]:
     return found
 
 
+@_requires_active_promotion_workflows
 def test_gate_reason_prefers_gate_failure_over_lineage_success() -> None:
     """gate 실패 갈래가 lineage 사유보다 **먼저** 평가되어야 한다(#495).
 
@@ -278,12 +286,14 @@ def test_gate_reason_prefers_gate_failure_over_lineage_success() -> None:
         )
 
 
+@_requires_active_promotion_workflows
 def test_gate_reason_covers_cancelled_outcome() -> None:
     """gate가 cancelled로 끝나도 사유가 남아야 한다(#495)."""
     for step_name, expression in _gate_reason_expressions().items():
         assert "steps.gate.outcome == 'cancelled'" in expression, step_name
 
 
+@_requires_active_promotion_workflows
 def test_promotion_workflow_records_result_when_gate_step_fails() -> None:
     """gate step이 실패·취소로 끝나도 소스 이슈에 코멘트가 남아야 한다(#495 C·D-1)."""
     parsed = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
@@ -298,6 +308,7 @@ def test_promotion_workflow_records_result_when_gate_step_fails() -> None:
     assert "steps.gate.outcome == 'cancelled'" in condition
 
 
+@_requires_active_promotion_workflows
 def test_promotion_workflow_validates_metric_inputs_before_gate() -> None:
     """지표를 lineage에서 검증해 gate의 float() 폭발을 막는다(#495 D-1)."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -306,6 +317,7 @@ def test_promotion_workflow_validates_metric_inputs_before_gate() -> None:
     assert "must be a finite decimal" in workflow
 
 
+@_requires_active_promotion_workflows
 @pytest.mark.parametrize(
     ("value", "accepted"),
     [
@@ -343,6 +355,7 @@ def test_metric_input_pattern_matches_previous_float_behaviour(value: str, accep
     assert (matched and is_finite) is accepted, f"{value!r} 판정이 기대와 다릅니다"
 
 
+@_requires_active_promotion_workflows
 def test_promotion_workflow_separates_rejection_kinds() -> None:
     """입력 거부·계보 불일치·비교 기각을 다른 사유 코드로 구분한다(#495 D-3)."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -353,6 +366,7 @@ def test_promotion_workflow_separates_rejection_kinds() -> None:
     assert "RejectionError" in workflow
 
 
+@_requires_active_promotion_workflows
 def test_promotion_workflow_failure_comment_has_fallbacks() -> None:
     """실패 코멘트의 모든 항목이 빈 backtick으로 렌더되지 않는다(#495 D-2)."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -391,6 +405,7 @@ def _workflow_accepts_registry_uri(
     return any(registry_uri.endswith(suffix) for suffix in resolved)
 
 
+@_requires_active_promotion_workflows
 @pytest.mark.parametrize(
     ("registry_uri", "accepted"),
     [
@@ -415,6 +430,7 @@ def test_promotion_gate_registry_rule_accepts_only_candidate_coordinates(
     assert _workflow_accepts_registry_uri(registry_uri) is accepted
 
 
+@_requires_active_promotion_workflows
 def test_promotion_workflow_keeps_registry_rule_structure() -> None:
     """suffix 두 개를 OR로 받아들이는 구조 자체를 고정한다.
 
@@ -430,6 +446,7 @@ def test_promotion_workflow_keeps_registry_rule_structure() -> None:
     assert "if (!registryUri.startsWith('gs://'))" in workflow
 
 
+@_requires_active_promotion_workflows
 def test_promotion_workflow_rejects_non_passed_paired_outcome() -> None:
     """paired 비교가 실패·기각인데 승격 PR이 만들어지지 않도록 고정한다."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -733,6 +750,7 @@ def _promotion_workflow() -> dict:
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
 
+@_requires_active_promotion_workflows
 def test_workflow_accepts_days_since_last_promotion_as_optional_input() -> None:
     inputs = _promotion_workflow()[True]["workflow_dispatch"]["inputs"]
 
@@ -740,6 +758,7 @@ def test_workflow_accepts_days_since_last_promotion_as_optional_input() -> None:
     assert inputs["days_since_last_promotion"]["required"] is False
 
 
+@_requires_active_promotion_workflows
 def test_workflow_reads_elapsed_days_from_dispatch_payload_too() -> None:
     """`repository_dispatch`로 오는 producer도 같은 값을 실을 수 있어야 한다."""
     env = _promotion_workflow()["jobs"]["create-promotion-pr"]["env"]
@@ -747,6 +766,7 @@ def test_workflow_reads_elapsed_days_from_dispatch_payload_too() -> None:
     assert "client_payload.days_since_last_promotion" in env["DAYS_SINCE_LAST_PROMOTION"]
 
 
+@_requires_active_promotion_workflows
 def test_hard_retrain_limit_days_defaults_to_unset() -> None:
     """값이 확정되기 전에는 비워 둔다(spec §8.3).
 
@@ -759,6 +779,7 @@ def test_hard_retrain_limit_days_defaults_to_unset() -> None:
     assert env["HARD_RETRAIN_LIMIT_DAYS"] == ""
 
 
+@_requires_active_promotion_workflows
 def test_gate_step_passes_hard_limit_arguments() -> None:
     steps = _promotion_workflow()["jobs"]["create-promotion-pr"]["steps"]
     gate = next(step for step in steps if step.get("id") == "gate")
@@ -769,6 +790,7 @@ def test_gate_step_passes_hard_limit_arguments() -> None:
     assert "else None" in gate["run"]
 
 
+@_requires_active_promotion_workflows
 def test_workflow_validates_elapsed_days_as_non_negative_integer() -> None:
     """gate step이 `int()`로 파싱하므로 형식 검증이 그 앞에 있어야 한다.
 
@@ -799,6 +821,7 @@ def _draft_pr_script() -> str:
     return step["with"]["script"]
 
 
+@_requires_active_promotion_workflows
 def test_draft_pr_title_distinguishes_hard_limit_promotion() -> None:
     script = _draft_pr_script()
 
@@ -807,12 +830,14 @@ def test_draft_pr_title_distinguishes_hard_limit_promotion() -> None:
     assert "metric 통과 후보" in script
 
 
+@_requires_active_promotion_workflows
 def test_draft_pr_body_warns_that_metric_did_not_pass() -> None:
     script = _draft_pr_script()
 
     assert "지표 기준을 통과하지 못했습니다" in script
 
 
+@_requires_active_promotion_workflows
 def test_draft_pr_body_records_elapsed_days_is_an_approximation() -> None:
     """spec §6.1 — 근사는 값을 구하는 쪽의 성질이라 여기에 남긴다.
 
@@ -824,6 +849,7 @@ def test_draft_pr_body_records_elapsed_days_is_an_approximation() -> None:
     assert "근사치" in script
 
 
+@_requires_active_promotion_workflows
 def test_draft_pr_branches_on_gate_reason_not_on_passed_flag() -> None:
     """`passed`는 두 승격 경로에서 모두 true다 — 사유로 갈라야 구분된다."""
     script = _draft_pr_script()
@@ -831,6 +857,7 @@ def test_draft_pr_branches_on_gate_reason_not_on_passed_flag() -> None:
     assert "GATE_REASON === 'hard_retrain_limit_reached'" in script
 
 
+@_requires_active_promotion_workflows
 def test_draft_pr_does_not_claim_metric_gate_pass_for_hard_limit() -> None:
     """"통과한 dev 후보 SHA"는 하드 리밋 경로에서 사실이 아니다."""
     script = _draft_pr_script()
@@ -892,6 +919,7 @@ def test_no_guardrail_declared_means_no_floor_at_all_today() -> None:
 # ---------------------------------------------------------------------------
 
 
+@_requires_active_promotion_workflows
 def test_gate_step_emits_policy_version_to_github_output() -> None:
     """`policy_version`은 **결과에 남아야** 존재 이유가 성립한다(spec §5).
 
@@ -904,12 +932,14 @@ def test_gate_step_emits_policy_version_to_github_output() -> None:
     assert "policy_version={decision.policy_version}" in gate["run"]
 
 
+@_requires_active_promotion_workflows
 def test_draft_pr_body_records_gate_policy_version() -> None:
     script = _draft_pr_script()
 
     assert "GATE_POLICY_VERSION" in script
 
 
+@_requires_active_promotion_workflows
 def test_gate_step_validates_the_policy_constant_itself() -> None:
     """정책 상수는 lineage step의 입력 검증을 거치지 않는다 — 여기서 막아야 한다.
 

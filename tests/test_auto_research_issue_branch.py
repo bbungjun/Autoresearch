@@ -13,6 +13,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FORM_PATH = PROJECT_ROOT / ".github/ISSUE_TEMPLATE/auto_research.yml"
 PROMOTION_WORKFLOW = PROJECT_ROOT / ".github/workflows/auto-research-dev-promotion.yml"
 RENDERED_FORM_FIXTURE = PROJECT_ROOT / "tests/fixtures/auto_research_issue_form_rendered.md"
+_requires_active_dev_promotion_workflow = pytest.mark.skipif(
+    not PROMOTION_WORKFLOW.is_file(),
+    reason="조직 자동 실험 경로 부재로 비활성화된 auto-research-dev-promotion.yml 계약 테스트",
+)
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from tools import auto_research_issue_branch as issue_branch  # noqa: E402
@@ -906,6 +910,7 @@ def load_promotion_workflow() -> dict[object, object]:
     return parsed
 
 
+@_requires_active_dev_promotion_workflow
 def test_promotion_workflow_has_only_completion_triggers_and_minimum_permissions() -> None:
     workflow = load_promotion_workflow()
 
@@ -928,6 +933,7 @@ def test_promotion_workflow_has_only_completion_triggers_and_minimum_permissions
     }
 
 
+@_requires_active_dev_promotion_workflow
 def test_promotion_workflow_uses_all_candidate_lineage_before_selector_and_dev_merge_only() -> None:
     workflow = load_promotion_workflow()
     job = workflow["jobs"]["promote-completed-experiment"]
@@ -977,6 +983,7 @@ def test_promotion_workflow_uses_all_candidate_lineage_before_selector_and_dev_m
     assert "pulls." not in script
 
 
+@_requires_active_dev_promotion_workflow
 def test_promotion_workflow_marker_idempotency_blocks_changed_result_sets_before_merge() -> None:
     workflow = load_promotion_workflow()
     steps = workflow["jobs"]["promote-completed-experiment"]["steps"]
@@ -1197,6 +1204,7 @@ def test_select_best_candidate_rejects_candidate_count_above_contract_limit() ->
         )
 
 
+@_requires_active_dev_promotion_workflow
 def test_promotion_workflow_validates_coordinate_before_global_queue_and_uses_trusted_checkout() -> None:
     workflow = load_promotion_workflow()
     validation_job = workflow["jobs"]["validate-coordinate"]
@@ -1261,6 +1269,7 @@ def test_promotion_workflow_validates_coordinate_before_global_queue_and_uses_tr
     }
 
 
+@_requires_active_dev_promotion_workflow
 def test_promotion_workflow_caps_candidates_before_lineage_or_compare_requests() -> None:
     workflow = load_promotion_workflow()
     steps = workflow["jobs"]["promote-completed-experiment"]["steps"]
@@ -1276,6 +1285,7 @@ def test_promotion_workflow_caps_candidates_before_lineage_or_compare_requests()
     assert script.index(cap_check) < script.index("github.rest.repos.compareCommits")
 
 
+@_requires_active_dev_promotion_workflow
 def test_promotion_workflow_claims_before_merge_and_recovers_pending_state() -> None:
     workflow = load_promotion_workflow()
     steps = workflow["jobs"]["promote-completed-experiment"]["steps"]
@@ -1326,6 +1336,7 @@ def test_promotion_workflow_claims_before_merge_and_recovers_pending_state() -> 
     assert merge_call.start() < marker_update.start()
 
 
+@_requires_active_dev_promotion_workflow
 def test_promotion_workflow_confirms_selector_sha_was_lineage_verified_before_merge() -> None:
     workflow = load_promotion_workflow()
     steps = workflow["jobs"]["promote-completed-experiment"]["steps"]
@@ -1341,6 +1352,7 @@ def test_promotion_workflow_confirms_selector_sha_was_lineage_verified_before_me
     assert "pending|merged|no_qualified|merge_conflict|merge_api_failed" in script
 
 
+@_requires_active_dev_promotion_workflow
 def test_promotion_workflow_leaves_pending_marker_when_state_update_fails() -> None:
     workflow = load_promotion_workflow()
     steps = workflow["jobs"]["promote-completed-experiment"]["steps"]
@@ -1362,6 +1374,7 @@ def test_promotion_workflow_leaves_pending_marker_when_state_update_fails() -> N
     )
 
 
+@_requires_active_dev_promotion_workflow
 def test_promotion_workflow_keeps_malformed_201_response_outside_merge_api_catch() -> None:
     workflow = load_promotion_workflow()
     steps = workflow["jobs"]["promote-completed-experiment"]["steps"]
@@ -1388,6 +1401,7 @@ def test_promotion_workflow_keeps_malformed_201_response_outside_merge_api_catch
     assert body.index("} catch (error) {") < body.index("requireMatch(mergeResponse.data.sha")
 
 
+@_requires_active_dev_promotion_workflow
 def test_promotion_workflow_fails_terminal_merge_failure_without_reconciliation_or_remerge() -> None:
     workflow = load_promotion_workflow()
     steps = workflow["jobs"]["promote-completed-experiment"]["steps"]
@@ -1408,6 +1422,7 @@ def test_promotion_workflow_fails_terminal_merge_failure_without_reconciliation_
     assert terminal_state.start() < script.index("github.rest.repos.merge")
 
 
+@_requires_active_dev_promotion_workflow
 def test_promotion_workflow_fails_after_recording_new_merge_failure_state() -> None:
     workflow = load_promotion_workflow()
     steps = workflow["jobs"]["promote-completed-experiment"]["steps"]

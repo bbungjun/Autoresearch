@@ -4,6 +4,7 @@ import subprocess
 import tarfile
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -12,12 +13,17 @@ WORKFLOW_PATH = (
 )
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 APPLICATION_DOCKERFILE = REPOSITORY_ROOT / "deployment/Dockerfile.app"
+_requires_active_release_workflow = pytest.mark.skipif(
+    not WORKFLOW_PATH.is_file(),
+    reason="조직 자원 부재로 비활성화된 release.yml 워크플로우 계약 테스트",
+)
 
 
 def _load_workflow() -> dict:
     return yaml.load(WORKFLOW_PATH.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
 
 
+@_requires_active_release_workflow
 def test_release_workflow_publishes_application_image_directly():
     workflow = _load_workflow()
     triggers = workflow["on"]
@@ -39,6 +45,7 @@ def test_release_workflow_publishes_application_image_directly():
     ]
 
 
+@_requires_active_release_workflow
 def test_release_workflow_requires_main_ancestor_for_source_sha():
     workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
 
@@ -51,6 +58,7 @@ def test_release_workflow_requires_main_ancestor_for_source_sha():
     assert workflow_text.count('git merge-base --is-ancestor "$source_sha" origin/main') == 3
 
 
+@_requires_active_release_workflow
 def test_release_workflow_publishes_serving_image_with_immutable_verification():
     workflow = _load_workflow()
     job = workflow["jobs"]["publish-serving-image"]
@@ -84,6 +92,7 @@ def test_release_workflow_publishes_serving_image_with_immutable_verification():
     assert "$GITHUB_STEP_SUMMARY" in workflow_text
 
 
+@_requires_active_release_workflow
 def test_release_workflow_opens_an_airflow_digest_promotion_pr():
     workflow = _load_workflow()
     job = workflow["jobs"]["promote-airflow-digest"]
@@ -111,6 +120,7 @@ def test_release_workflow_opens_an_airflow_digest_promotion_pr():
     assert "scripts/promote_batch_image.py" in workflow_text
 
 
+@_requires_active_release_workflow
 def test_release_workflow_verifies_all_public_batch_commands():
     workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
 
@@ -128,6 +138,7 @@ def test_release_workflow_verifies_all_public_batch_commands():
     assert ".contract_version" in workflow_text
 
 
+@_requires_active_release_workflow
 def test_release_workflow_injects_the_code_archive_before_verifying_commands():
     # #750: 이미지가 코드를 담지 않으므로, 계약 검증은 아카이브를 주입해
     # 실행해야 한다. 주입 없이 검증하면 부트스트랩이 exit 2로 죽는다.
@@ -139,6 +150,7 @@ def test_release_workflow_injects_the_code_archive_before_verifying_commands():
     assert "CODE_ARCHIVE_LOCAL_PATH" in script
 
 
+@_requires_active_release_workflow
 def test_release_workflow_still_opens_the_batch_digest_promotion_pr():
     # #750 결정 2: digest 정본은 Git(values.yaml)에 남긴다. 이 테스트가
     # 깨지면 전환이 범위를 벗어난 것이다.
@@ -225,6 +237,7 @@ def test_repository_does_not_keep_legacy_airflow_runtime_surface():
     assert all(not (REPOSITORY_ROOT / path).exists() for path in legacy_files)
 
 
+@_requires_active_release_workflow
 def test_release_workflow_promotes_every_orchestration_image_including_executor():
     """executor를 빼면 실험을 실제로 실행하는 이미지만 옛 digest로 남는다.
 
@@ -260,6 +273,7 @@ def test_release_workflow_promotes_every_orchestration_image_including_executor(
     assert checkout["with"]["ref"] == "main"
 
 
+@_requires_active_release_workflow
 def test_release_workflow_limits_orchestration_promotion_to_approved_manifests():
     """executor digest는 launcher CronJob 안에 있다 — 허용 경로가 그대로여야 한다."""
     workflow = _load_workflow()

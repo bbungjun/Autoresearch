@@ -20,6 +20,7 @@
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +30,10 @@ DEV_PROMOTION_WORKFLOW = WORKFLOWS / "auto-research-dev-promotion.yml"
 PROMOTION_WORKFLOW = WORKFLOWS / "auto-research-promotion.yml"
 CI_WORKFLOW = WORKFLOWS / "ci.yml"
 LINT_WORKFLOW = WORKFLOWS / "lint.yml"
+_requires_active_promotion_workflows = pytest.mark.skipif(
+    not DEV_PROMOTION_WORKFLOW.is_file() or not PROMOTION_WORKFLOW.is_file(),
+    reason="조직 자동 실험 경로 부재로 비활성화된 promotion 워크플로우 계약 테스트",
+)
 
 # main-protection(ruleset 18360502)의 required status check 컨텍스트.
 REQUIRED_STATUS_CHECK_CONTEXTS = (
@@ -45,6 +50,7 @@ def _load(path: Path) -> dict:
     return yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
 
 
+@_requires_active_promotion_workflows
 def test_dev_promotion_merges_dev_ref_without_pull_request() -> None:
     """dev 병합이 PR을 거치지 않고 ref를 직접 갱신함을 고정한다.
 
@@ -70,6 +76,7 @@ def test_ci_and_lint_push_triggers_are_main_only() -> None:
         assert "branches" not in triggers["pull_request"], path.name
 
 
+@_requires_active_promotion_workflows
 def test_documented_promotion_fail_closed_messages_exist() -> None:
     """문서가 인용하는 승격 fail-closed 메시지가 실재함을 고정한다.
 

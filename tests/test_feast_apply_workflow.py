@@ -31,6 +31,10 @@ from feature_repo.env import ENV_DEV, ENV_PROD, online_full_scan_for_deletion
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 APPLY_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "feast-apply.yml"
 CODE_ARCHIVE_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "code-archive.yml"
+pytestmark = pytest.mark.skipif(
+    not APPLY_WORKFLOW.is_file() or not CODE_ARCHIVE_WORKFLOW.is_file(),
+    reason="조직 자원 부재로 비활성화된 Feast·code archive 워크플로우 계약 테스트",
+)
 
 _DERIVATION_START = 'if [[ "$AUTORESEARCH_ENV" == "dev" ]]'
 _APPLY_STEP = "Fetch Redis CA and run feast apply"

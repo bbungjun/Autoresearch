@@ -22,6 +22,10 @@ DOCKERIGNORE = REPOSITORY_ROOT / ".dockerignore"
 RELEASE_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "release.yml"
 CI_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml"
 API_LLM_MODULE = REPOSITORY_ROOT / "applications" / "experiment_platform" / "api" / "llm.py"
+_requires_active_release_workflow = pytest.mark.skipif(
+    not RELEASE_WORKFLOW.is_file(),
+    reason="조직 자원 부재로 비활성화된 release.yml 워크플로우 계약 테스트",
+)
 
 
 def test_api_image_excludes_codex_and_runner_image_pins_codex() -> None:
@@ -114,6 +118,7 @@ def test_api_llm_module_defers_codex_execution_import() -> None:
     assert "applications.experiment_platform.shared.codex" not in top_level_imports
 
 
+@_requires_active_release_workflow
 def test_release_workflow_publishes_api_and_runner_digests() -> None:
     """Release는 동일 source SHA의 API·Runner immutable digest를 각각 발행한다."""
     workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
@@ -189,6 +194,7 @@ def test_executor_image_seals_the_phase2_runtime_contract() -> None:
     assert "USER appuser" in dockerfile
 
 
+@_requires_active_release_workflow
 def test_executor_release_verification_runs_phase2_toolchain_and_entrypoints() -> None:
     """Release가 immutable executor digest에서 실제 Stage 6 runtime을 점검한다.
 
@@ -275,6 +281,7 @@ def _load_release_workflow() -> dict[str, object]:
     return parsed
 
 
+@_requires_active_release_workflow
 @pytest.mark.parametrize(
     ("job_name", "dockerfile", "image_name", "import_modules"),
     (
