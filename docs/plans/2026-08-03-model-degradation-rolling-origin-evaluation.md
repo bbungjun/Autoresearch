@@ -8,7 +8,7 @@
 간격을 두고 반복하는 진짜 다중 origin은 이 구현 범위가 아니다(spec §10).
 
 **구현 시 반드시 지킬 경계**(spec §8 재확인): `src/pipeline/experiment_evaluation.py`
-(`evaluate_experiment`/`decide_promotion`)는 **#493(담당: hyochangsung)이 작업 중**이다.
+(`evaluate_experiment`/`decide_promotion`)는 **#493에서 판정 엔진 단일화 작업 중인 파일**이다.
 이 plan의 어떤 Task도 그 파일을 수정하지 않는다. `paired_experiment.py`,
 `promotion_gate.py`도 읽기만 하고 호출하지 않는다.
 
@@ -229,7 +229,7 @@ Task 7-B(최종 실행)가 가능하다 — "Task 4 구현 → 최종 실행 →
       선택 근거&Trade-off에는 spec §7의 caveat("1차 목표는 측정 프레임워크 동작 증명,
       이 축소 설정의 열화/비열화 결론 자체는 재학습 주기 정책의 확정 근거로 쓰지 않는다")
       를 그대로 옮긴다.
-- [ ] 결과가 포트폴리오·팀 문서로 승격할 가치가 있는지 확인받는다(`CLAUDE.local.md` 관례).
+- [ ] 결과를 포트폴리오·추적 문서로 정리할 가치가 있는지 판단한다(`CLAUDE.local.md` 관례).
 
 검증: 실행 로그와 결과 JSON을 `experiments/2026-08-03_model-degradation-rolling-origin/`에
 `raw_final_run.json`으로 보관.

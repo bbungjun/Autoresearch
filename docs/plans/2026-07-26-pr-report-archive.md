@@ -806,7 +806,7 @@ uv run python -m http.server 8765 --directory .tmp/pr-report-archive-site
 
 - 데스크톱과 모바일 폭에서 텍스트 겹침이나 가로 스크롤이 없다.
 - 카드에 번호·제목·작성자·머지 날짜·요약 3줄이 보인다.
-- `345`, `ONNX`, `waieiches` 검색이 해당 카드만 남긴다.
+- `345`, `ONNX`, `example-user` 검색이 해당 카드만 남긴다.
 - 존재하지 않는 검색어에서 빈 결과 문구가 보인다.
 - `리포트 보기`가 `/pr/<번호>/` 상대 경로를 가리킨다.
 

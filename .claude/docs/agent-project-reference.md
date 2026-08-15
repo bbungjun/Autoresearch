@@ -2,15 +2,15 @@
 
 > Last Updated: 2026-07-24
 
-폴더별 책임과 팀 소유권 경계를 찾기 위한 문서입니다. "새 코드를 어디에
-두는가?", "Y는 누가 소유하는가?" 질문에 답합니다. 디렉토리 구조 지도와 배포
-이미지 목록의 정본은 `README.md`이며 여기에 복제하지 않습니다.
+폴더별 책임과 저장소·모듈 경계를 찾기 위한 문서입니다. "새 코드를 어디에
+두는가?", "Y는 어느 코드·저장소에서 담당하는가?" 질문에 답합니다. 디렉토리
+구조 지도와 배포 이미지 목록의 정본은 `README.md`이며 여기에 복제하지 않습니다.
 
 ## When To Use This Doc
 
 - 새 코드를 추가할 위치를 정해야 할 때
-- 팀 도메인 경계와 소유권을 확인해야 할 때
-- 폴더 간 책임 경계(무엇을 소유하지 않는지)를 확인해야 할 때
+- 코드 영역과 책임 경계를 확인해야 할 때
+- 폴더 간 책임 경계(무엇을 담당하지 않는지)를 확인해야 할 때
 
 ## Docs Layout
 
@@ -22,7 +22,7 @@ docs/
 ├── plans/                   # 진행 중 구현 계획 (완료 시 archive로)
 ├── guides/                  # 운영·아키텍처 가이드 (상시 갱신)
 ├── runbooks/                # 운영 절차·트러블슈팅 기록 (상시 갱신)
-├── reports/                 # 팀 공유용 시각화 리포트 (HTML)
+├── reports/                 # 공유용 시각화 리포트 (HTML)
 └── archive/                 # 완료·과거 문서 보존 (수정하지 않음)
 ```
 
@@ -31,23 +31,20 @@ docs/
   옮깁니다.
 - 코드 디렉토리 안에 문서를 두지 않습니다(모듈 사용법은 `docs/guides/`).
 
-## Team Ownership & Domains
+## Code Areas & Responsibilities
 
-| 도메인 | 팀원 | 책임 | 주요 경로 |
-|---|---|---|---|
-| **Model Training** | waieiches, hyochangsung | 모델 구조, 학습 파이프라인, 평가 지표, MLflow 연동 | `autoresearch/model_training/`, `autoresearch/model_evaluation/`, `autoresearch/model_registry/` |
-| **Feast Features** | waieiches, hyochangsung | 피처 정의, 피처 엔지니어링, 피처 스토어 연동 | `feature_repo/`, `autoresearch/feature_engineering/` |
-| **YouTube Collection & Release** | Noah-JuYong | YouTube 수집 파이프라인·복원력 레이어·프록시, release/배포 자동화 워크플로우 | `autoresearch/data_collection/`, `applications/youtube_api_proxy/`, `.github/workflows/` |
-| **Airflow Orchestration** | bbungjun | DAG 정의, 스케줄링, 오케스트레이션 | `SKYAHO/Autoresearch-airflow` |
-| **GCP Infrastructure** | hyeongyu-data | 클라우드·Kubernetes 리소스, IAM, 시크릿 기반 | `SKYAHO/Autoresearch-infra` |
-| **Agent Orchestration** | (미지정) | FastAPI 채팅 저장 API, Codex CLI/OpenAI 호출, PostgreSQL 저장 | `applications/experiment_platform/` |
+| 도메인 | 책임 | 주요 경로 |
+|---|---|---|
+| **Model Training** | 모델 구조, 학습 파이프라인, 평가 지표, MLflow 연동 | `autoresearch/model_training/`, `autoresearch/model_evaluation/`, `autoresearch/model_registry/` |
+| **Feast Features** | 피처 정의, 피처 엔지니어링, 피처 스토어 연동 | `feature_repo/`, `autoresearch/feature_engineering/` |
+| **YouTube Collection & Release** | YouTube 수집 파이프라인·복원력 레이어·프록시, release/배포 자동화 워크플로우 | `autoresearch/data_collection/`, `applications/youtube_api_proxy/`, `.github/workflows/` |
+| **Airflow Orchestration** | DAG 정의, 스케줄링, 오케스트레이션 | `SKYAHO/Autoresearch-airflow` |
+| **GCP Infrastructure** | 클라우드·Kubernetes 리소스, IAM, 시크릿 기반 | `SKYAHO/Autoresearch-infra` |
+| **Agent Orchestration** | FastAPI 채팅 저장 API, Codex CLI/OpenAI 호출, PostgreSQL 저장 | `applications/experiment_platform/` |
+| **Reranking Serving** | 리랭킹 API | `applications/reranking_api/` |
+| **Recommendation** | 정책 라운드, 일일 추천 폐루프 | `autoresearch/recommendation/` |
 
-> `applications/reranking_api/`(리랭킹 API)와 `autoresearch/recommendation/`(정책 라운드·
-> 일일 추천 폐루프)의 도메인 소유는 미지정입니다. #149에서 확정 예정이었으나 그 논의는
-> #754로 대체됐고, #754도 구조만 정하고 소유는 정하지 않았습니다. 해당 영역 변경은 팀
-> 확인 후 진행합니다.
-
-## Ownership Boundaries
+## Responsibility Boundaries
 
 ### `autoresearch/data_collection/`
 - **책임:** YouTube API 수집, 변환, GCS 적재, 백필. 복원력 레이어
@@ -308,7 +305,7 @@ docs/
 
 ## Key Extension Rules
 
-1. **도메인 소유권 확인:** 애플리케이션·ML은 이 저장소, Airflow와 GCP
+1. **저장소 책임 경계 확인:** 애플리케이션·ML은 이 저장소, Airflow와 GCP
    인프라는 각각 전용 저장소에서 변경합니다.
 2. **올바른 위치에 배치:** 위 책임 경계를 따르고 도메인 간 결합을
    피합니다.
@@ -322,7 +319,7 @@ docs/
 
 ## Verification Checklist
 
-- [ ] 코드가 팀 도메인에 맞는 폴더에 있다.
+- [ ] 코드가 영역별 책임에 맞는 폴더에 있다.
 - [ ] 공개 CLI에 schedule·retry·KPO 같은 Airflow 정책이 들어가지 않았다.
 - [ ] 스키마 변경 시 pydantic 모델과 테스트를 함께 수정했다.
 - [ ] 새 기능에 테스트가 있다.

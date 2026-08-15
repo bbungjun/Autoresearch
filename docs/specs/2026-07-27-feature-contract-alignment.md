@@ -160,8 +160,8 @@ vs 영상 category) 비교로 나오는 파생값(현재 `compute_interaction_co
 고려해 "1일 결손은 stale 허용(60h 상한), 2일+는 null"로 완화. null-on-any-gap이 아니라
 bounded-stale이다.
 
-**남은 의존(서빙 도메인)**: 2일+ 결손 시 online 조회가 실제 null을 반환하므로, 서빙이 null
-피처를 처리하는지는 @hyochangsung(Feature Store 공동소유) 별도 확인 — #357 코멘트로 요청됨.
+**남은 의존(서빙 도메인)**: 2일+ 결손 시 online 조회가 실제 null을 반환하므로, 서빙의 null
+피처 처리 여부는 별도 확인이 필요하다. 이 의존은 #357 코멘트에 기록했다.
 
 **학습 단계까지 관철(#358)**: (C)의 "결손을 null로 드러낸다"를 학습 파이프라인에서도 지킨다 —
 feast 조회 결과에서 **UserDynamic 피처가 전부 null인 행(ttl 초과/결손)은 채우지 않고 드롭**한다

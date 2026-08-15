@@ -13,7 +13,7 @@
 > **[이슈 흡수 — #485, 2026-08-04]** 이 spec이 다루던 rolling-origin 측정 하네스는
 > 설계·구현 변경 없이 그대로 유효하다. `#485`(최신성·모델 열화 기반 시간축 평가)와
 > 범위가 겹쳐 `#471`을 close하고 이 문서·구현을 `#485`로 흡수했다 — 정정이나 대체가
-> 아니라 **소유 이슈 이동 + 범위 확장**이다. 구현물은 브랜치
+> 아니라 **관련 이슈 이동 + 범위 확장**이다. 구현물은 브랜치
 > `feat/471-model-degradation-rolling-origin`에 보존되어 있으며 그대로 재사용한다.
 > 재사용/신규 경계는 아래 "`#485` 흡수 경계" 절을 참고한다.
 
@@ -50,7 +50,7 @@ evaluation), 성능이 꺾이는 지점을 Plotly로 시각화해 재학습 주�
   이 spec은 조건 하나(고정된 코드 버전)를 시간 축으로만 이동한다.
 - **승격 여부 판정**(`eligible`/`reject`/`hold`) — `autoresearch/model_evaluation/experiment_evaluation.py`
   (`evaluate_experiment:365`, `decide_promotion:511`)의 영역이며, 이 파일은 현재
-  **#493(담당: hyochangsung)이 판정 엔진 단일화 작업 중**이다. 이 spec은 이 모듈을
+  **#493에서 판정 엔진 단일화 작업 중인 파일**이다. 이 spec은 이 모듈을
   호출하지도, 수정하지도 않는다(§8).
 - **다중 시드 유의성 검정 로직 자체의 재작성** — `seed_sweep.py`가 이미 구현했다
   (#407/#441). 이 spec은 그 함수를 day별로 반복 호출할 뿐 판정 통계를 새로 만들지
@@ -286,7 +286,7 @@ W + H + (N - 1) × S ≤ A - D
 
 학습 spine 커버리지 가드 자체는 `usable_days ≥ min_days`(기본 3, `build_training_dataset.py:85` `DEFAULT_MIN_COVERAGE_DAYS`)만 요구하므로 `W`의 하한은 `D` 값과 무관하게 사실상 3이다.
 
-멘토 사례(180일 학습/10일 검증 = 190일)는 `D=0`으로 가장 낙관적으로 잡아도 현재 가용 데이터(`A=27`일)의 **약 7배**를 요구한다 — 이슈 본문이 이미 이 우려("팀 데이터가 적으므로 샘플링 방식 확정 필요")를 제기했고, 이번 조사로 수치로 확인됐다. §7에서 대안을 다룬다.
+멘토 사례(180일 학습/10일 검증 = 190일)는 `D=0`으로 가장 낙관적으로 잡아도 현재 가용 데이터(`A=27`일)의 **약 7배**를 요구한다 — 이슈 본문이 이미 이 우려("가용 데이터가 적으므로 샘플링 방식 확정 필요")를 제기했고, 이번 조사로 수치로 확인됐다. §7에서 대안을 다룬다.
 
 **결손일 영향**: `phase0-audit.md:28-34,47-53`의 07-07~07-26 20일 창 기준, `training_entity`는 백필 후에도 6/20일 결손(action_log 없는 날). 근거는 같은 문서 "action_log 없는 날은 impression(=학습 예제) 자체가 없어 PIT 조회 대상이 아니다" — 즉 결손일은 §2.3의 `missing_date` 상태로 분류되고 평가 포인트가 될 수 없다. `video_feature`도 18/20(07-08, 07-11 결손). 2026-07-27 이후 결손율이 이어지는지는 **확인 실패** — Task 1 실측에 포함한다.
 
@@ -322,11 +322,11 @@ age를 뽑아내는 구체적 방법(`feast_retrieval.py` 쪽에 이미 노출�
 
 ## 8. #493과의 경계
 
-`autoresearch/model_evaluation/experiment_evaluation.py`(`evaluate_experiment:365`, `decide_promotion:511`)는 **#493(담당: hyochangsung)이 판정 엔진 단일화 작업 중인 파일**이다. 이 spec은:
+`autoresearch/model_evaluation/experiment_evaluation.py`(`evaluate_experiment:365`, `decide_promotion:511`)는 **#493에서 판정 엔진 단일화 작업 중인 파일**이다. 이 spec은:
 
 - 이 파일을 **수정하지 않는다**(함수 추가·시그니처 변경 모두 금지).
 - `paired_experiment.py`, `promotion_gate.py`도 **읽기만 한다** — 애초에 rolling-origin은 승격 판정이 아니므로 호출 대상도 아니다.
-- 향후 열화 시점 산출물(`degradation_point`)이 재학습 주기 정책(후속 이슈) 또는 `#461` 승격 게이트 payload에 연결될 필요가 생기면, **"연결 지점"만 문서로 남긴다**: `RollingOriginResult.degradation_point`를 promotion 판정에 반영하려면 `experiment_evaluation.py`에 무엇이 필요한지를 이 spec의 "알려진 계약 간극" 절(§10)에 적어 두고, 실제 배선은 하지 않는다 — 필요해지면 별도 이슈로 효창님께 요청한다.
+- 향후 열화 시점 산출물(`degradation_point`)이 재학습 주기 정책(후속 이슈) 또는 `#461` 승격 게이트 payload에 연결될 필요가 생기면, **"연결 지점"만 문서로 남긴다**: `RollingOriginResult.degradation_point`를 promotion 판정에 반영하려면 `experiment_evaluation.py`에 무엇이 필요한지를 이 spec의 "알려진 계약 간극" 절(§10)에 적어 두고, 실제 배선은 하지 않는다 — 필요해지면 별도 이슈로 분리한다.
 
 ## 9. 완료 조건과의 대응
 
@@ -334,7 +334,7 @@ age를 뽑아내는 구체적 방법(`feast_retrieval.py` 쪽에 이미 노출�
 | --- | --- |
 | 임의 cutoff 입력 → Plotly 열화 곡선 | `run_rolling_origin` + 시각화 스크립트(§2) |
 | 열화 시작 지점 자동 탐지 + 구조화된 값 | `detect_degradation_point`(단순 임계값, 판정 규칙 §2.4, 통계적 방법 기각 근거 §6) |
-| 최소 1회 실제 데이터 실행 보고서 | §7의 축소 설정으로 실행, `CLAUDE.local.md`의 실험 기록 관례(`experiments/`, git 미추적)를 따라 raw 결과를 남기고, 가치가 있으면 팀 문서로 승격 |
+| 최소 1회 실제 데이터 실행 보고서 | §7의 축소 설정으로 실행, `CLAUDE.local.md`의 실험 기록 관례(`experiments/`, git 미추적)를 따라 raw 결과를 남기고, 가치가 있으면 추적 문서로 정리 |
 
 ## 범위 제외
 
@@ -352,7 +352,7 @@ age를 뽑아내는 구체적 방법(`feast_retrieval.py` 쪽에 이미 노출�
 - **`insufficient_rows` 임계치 결정 방식 미확정**: §1의 `DEFAULT_MIN_ROWS_PER_DAY`(5000, 학습 spine 기준)를 평가일 판정에도 그대로 쓸지, 평가 목적에 맞는 별도 값을 쓸지 plan 단계에서 결정한다.
 - **평가일 provenance의 `dataset_id`/`fingerprint` 산출 방법 미확정**: §2.3에서 `TrainingSnapshotManifest`(§1) 재사용 여부를 열어 뒀다 — 무겁다고 판단되면 평가 전용 경량 스키마를 plan 단계에서 새로 정의한다.
 - **시드 반복 범위 축소**: §1에서 1차 구현은 시드 1개로 좁혔다. `seed_sweep.run_seed_sweep`으로 일별 다중 시드까지 확장하면 비용이 `일수 × 시드수`로 곱해지므로, 확장 여부는 §3 실측 결과와 함께 plan 단계에서 재검토한다.
-- **degradation_point → 승격 게이트 연결**: §8에서 명시한 대로 이 spec은 배선하지 않는다. 연결이 필요해지면 `#493`(experiment_evaluation.py 담당)과 조율이 선행돼야 한다.
+- **degradation_point → 승격 게이트 연결**: §8에서 명시한 대로 이 spec은 배선하지 않는다. 연결이 필요해지면 `#493`의 `experiment_evaluation.py` 계약과 충돌하지 않는지 먼저 확인한다.
 - **video 피처 age 추출 방법**: §4에서 "확인 실패"로 남긴 대로, `feast_retrieval.py`가 age를 이미 노출하는지는 plan 단계에서 조사가 필요하다.
 - **video staleness는 현재 CLI에서 도달 불가능**(PR #510 리뷰): 평가일 CSV는 `MODEL_FEATURE_COLUMNS + clicked`만 담고 `video_id`/`event_timestamp`(엔티티 키)를 보존하지 않는다. `_resolve_staleness_summary`는 이 두 컬럼이 없으면 `UNAVAILABLE`로 안전하게 떨어지도록 수정했지만(크래시 방지), `measure-degradation` CLI가 `bigquery_client`/`bigquery_project`/`bigquery_dataset`를 아예 받지 않아 이 기능은 지금 공개 경로로 켤 방법이 없다. 켜려면 (a) 평가일 조립이 엔티티 키를 보존하도록 계약을 확장하거나 (b) CLI에 BigQuery 연결 옵션을 추가해야 하며, 둘 다 이 PR 범위 밖이다. 또한 `_resolve_staleness_summary`는 하루 전체에 단일 as_of(그날 KST 자정)를 쓰므로, 실제 per-row PIT 대비 **체계적으로 더 stale한 방향**(최대 ~24h)으로 치우친다 — 정확한 값은 평가 CSV가 행별 `event_timestamp`를 보존해야 가능하다.
 - **baseline과 per-day forward ROC-AUC는 산출 경로가 다르다**(PR #510 리뷰): `baseline_val_roc_auc`는 cutoff 학습의 랜덤 val 분할 지표이고 `per_day`는 forward held-out 지표다. 이 저장소의 실측(`experiments/2026-07-31_training-window-length/notes.md`)은 랜덤 val이 실제 다음 날 성능보다 **약 4%p 높게** 나옴을 보였다 — `elapsed_days` 0~1 부근에서 잡히는 `degradation_point`가 이 상수 오프셋 때문인지 실제 열화인지는 이 결과만으로 구분되지 않는다. baseline 정의를 `per_day[0]` 기준으로 바꾸는 안은 §2.4 계약 변경이라 이 PR에서 다루지 않았다 — **`#485`가 이어받아 §2.4를 부분 supersede했다**(`docs/specs/2026-08-04-temporal-signal-promotion-integration.md` §4.3, 위 §2.4의 admonition 참고).
