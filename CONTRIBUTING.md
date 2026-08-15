@@ -3,8 +3,8 @@
 AutoResearch 프로젝트에 기여해 주셔서 감사합니다.
 원활한 협업을 위해 아래 규칙을 따라 주세요.
 
-- 기준 저장소: `SKYAHO/Autoresearch`
-- 기준 Project: `SKYAHO / Autoresearch`
+- 기준 저장소: `bbungjun/Autoresearch`
+- 기준 Project: 현재 없음
 
 ---
 
@@ -187,16 +187,24 @@ PR은 작게 유지합니다. 무관한 리팩터링과 기능 변경을 섞지 
 **머지 후 자동 흐름**:
 
 ```
-PR merge → PR Status: Done → Closes #issue로 이슈 close → Issue Status: Done
+PR merge → Closes #issue로 이슈 close
 ```
 
-머지 직후 Project에서 항목이 사라진 것처럼 보이면 `Done` 컬럼을 먼저 확인합니다.
+> **현재 비활성 — 옛 조직 GitHub Projects 자동 전환**: 개인 저장소에는
+> Project가 없어 아래 전환은 동작하지 않습니다. 복구 근거로 과거 흐름을
+> 보존합니다: `PR merge → PR Status: Done → Closes #issue로 이슈 close
+> → Issue Status: Done`. 당시에는 항목이 사라진 것처럼 보이면 `Done`
+> 컬럼을 확인했습니다.
 
 ---
 
 ## GitHub Projects 운영
 
-Project는 현재 상태를 보여주는 보드로 사용합니다.
+> **현재 비활성**: 아래는 `SKYAHO / Autoresearch` 조직 Project 운영
+> 기록입니다. 개인 저장소에는 Project가 없어 자동 추가·상태 전환·
+> 이슈 close 자동화가 동작하지 않습니다. 복구 근거로 과거 절차를 보존합니다.
+
+옛 조직 Project는 작업 상태를 보여주는 보드로 사용했습니다.
 
 | 상태 | 의미 | 전환 |
 |------|------|------|
@@ -204,9 +212,9 @@ Project는 현재 상태를 보여주는 보드로 사용합니다.
 | `In Progress` | 작업 중 | 브랜치를 따고 작업을 시작하면 직접 이동 |
 | `Done` | 완료 | merge/close 시 자동 전환 |
 
-켜져 있는 자동화: open 이슈/PR 자동 추가(`is:issue,pr is:open`), 추가 시 `Todo` 설정, close/merge 시 `Done` 설정, Project에서 `Done`으로 옮기면 이슈 자동 close.
+당시 켜져 있던 자동화: open 이슈/PR 자동 추가(`is:issue,pr is:open`), 추가 시 `Todo` 설정, close/merge 시 `Done` 설정, Project에서 `Done`으로 옮기면 이슈 자동 close.
 
-Project의 `Add item`으로 제목만 추가하면 Issue Form을 우회하게 되므로, 새 작업은 Issues 화면에서 생성합니다.
+옛 조직 Project의 `Add item`으로 제목만 추가하면 Issue Form을 우회했으며, 새 작업은 현재도 Issues 화면에서 생성합니다.
 
 ---
 
@@ -349,7 +357,7 @@ fail-closed 검사만 있으며, **생성 이후의 force-push·삭제 자체는
 conversation이 해결됐는지, 충돌이나 CI 실패가 있는지 확인합니다. 최종 머지 여부는
 사람이 판정합니다.
 
-**Project에 항목이 안 보일 때**: `Done` 컬럼과 view filter를 확인합니다. 이미 closed/merged된 항목은 자동 추가 필터(`is:issue,pr is:open`)에 걸리지 않을 수 있습니다.
+**현재 비활성 — 옛 조직 Project에 항목이 안 보일 때**: `Done` 컬럼과 view filter를 확인했습니다. 이미 closed/merged된 항목은 자동 추가 필터(`is:issue,pr is:open`)에 걸리지 않을 수 있었습니다.
 
 **이슈가 자동으로 닫히지 않을 때**: PR 본문에 `Closes #이슈번호`가 있는지, PR이 `main`으로 merge되었는지 확인합니다.
 
@@ -357,7 +365,7 @@ conversation이 해결됐는지, 충돌이나 CI 실패가 있는지 확인합�
 
 ## 참고 링크
 
-- Repository: https://github.com/SKYAHO/Autoresearch
-- Project Board: https://github.com/orgs/SKYAHO/projects/3/views/2
+- Repository: https://github.com/bbungjun/Autoresearch
+- Project Board (**현재 비활성인 옛 조직 보드**): https://github.com/orgs/SKYAHO/projects/3/views/2
 - Issue Forms: `.github/ISSUE_TEMPLATE/*.yml`
 - PR template: `.github/PULL_REQUEST_TEMPLATE.md`

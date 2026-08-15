@@ -11,12 +11,12 @@ Merge. 모든 기능 작업의 운영 표준입니다. 사람용 요약은
 - 새 기능이나 버그 수정을 시작하며 전체 워크플로우가 필요할 때
 - 커밋 메시지나 PR 본문을 작성할 때
 - PR이 워크플로우를 따르는지 검증할 때
-- 브랜치 이름, 머지 방식, Project 운영이 헷갈릴 때
+- 브랜치 이름, 머지 방식, 옛 조직 Project 운영 기록이 필요할 때
 
 ## Workflow Overview
 
 ```
-Issue 생성 (Project Todo 자동 추가)
+Issue 생성
     ↓
 Branch 생성 (이슈의 Create a branch, feat/이슈번호-설명)
     ↓
@@ -26,8 +26,13 @@ PR 생성 (Draft 또는 Ready)
     ↓
 독립 리뷰 worker 동료 리뷰 → 사람이 최종 판정 → Squash Merge
     ↓
-Issue 자동 close → Project Done
+Issue 자동 close
 ```
+
+> **현재 비활성 — 옛 조직 GitHub Projects 자동 전환**: 개인 저장소에는
+> Project가 없습니다. 옛 조직에서는 이슈 생성 시 `Todo`로 자동 추가하고,
+> PR merge·이슈 close 시 `Done`으로 자동 전환했으며, 복구 근거로
+> 과거 절차를 보존합니다.
 
 ## Issue Creation
 
@@ -49,9 +54,9 @@ Issue 자동 close → Project Done
 | `experiment.yml` | `[EXP]` | `experiment` | 가설, 데이터셋, 모델, 피처, 평가지표, Champion 대비 결과, 결론 |
 | `auto_research.yml` | `[AR]` | `auto-experiment` | 입력 필드 21개 중 18개를 `tools/auto_research_issue_branch.py`가 fail-closed로 파싱 (`선행 연구 참조`와 `보조 관측 지표`는 선택, `결과`는 에이전트가 사후 기입) |
 
-GitHub는 `form 선택 → label 자동 적용` 방식으로 동작합니다. Project의
-`Add item`으로 제목만 추가하면 form을 우회하므로, 새 작업은 Issues
-화면에서 생성합니다.
+GitHub는 `form 선택 → label 자동 적용` 방식으로 동작합니다. 옛 조직
+Project의 `Add item`으로 제목만 추가하면 form을 우회했으며,
+새 작업은 현재도 Issues 화면에서 생성합니다.
 
 `[AR]` 이슈의 `auto-experiment` label은 Auto Research 분류와 promotion guard에
 사용하며 **label 자체는 브랜치를 만들지 않습니다.** Form을 우회해 API로 발행하면
@@ -88,9 +93,8 @@ gh issue create \
 
 **코드가 변경되는 작업은 반드시 이슈를 먼저 발행하고, 그 이슈에서 브랜치를
 생성합니다.** GitHub 이슈 우측 `Development > Create a branch`를 사용하면
-브랜치가 이슈에 자동 연결(`main` 기준 분기)되어, PR을 `main`으로 머지할 때
-이슈 자동 close와 Project `Done` 전환이 확실해집니다. 로컬에서 임의로 분기하는
-대신 이슈에서 만든 브랜치를 체크아웃해 작업합니다.
+브랜치가 이슈에 자동 연결(`main` 기준 분기)됩니다. 로컬에서 임의로
+분기하는 대신 이슈에서 만든 브랜치를 체크아웃해 작업합니다.
 
 **형식:** `<type>/<이슈번호>-<간략한-설명>`
 
@@ -376,7 +380,11 @@ rebase merge는 비활성화되어 있습니다.
 
 ## GitHub Projects
 
-Project는 현재 상태를 보여주는 보드로 사용합니다.
+> **현재 비활성**: 아래는 `SKYAHO / Autoresearch` 조직 Project 운영
+> 기록입니다. 개인 저장소에는 Project가 없어 자동 추가·상태 전환·
+> 이슈 close 자동화가 동작하지 않습니다. 복구 근거로 과거 절차를 보존합니다.
+
+옛 조직 Project는 작업 상태를 보여주는 보드로 사용했습니다.
 
 | 상태 | 의미 | 전환 |
 |---|---|---|
@@ -384,7 +392,7 @@ Project는 현재 상태를 보여주는 보드로 사용합니다.
 | `In Progress` | 작업 중 | 작업 시작 시 직접 이동 |
 | `Done` | 완료 | merge/close 시 자동 전환 |
 
-**켜져 있는 자동화:**
+**당시 켜져 있던 자동화:**
 - Auto-add to project: open 이슈/PR 자동 추가 (`is:issue,pr is:open`)
 - Item added → `Todo` 설정
 - Item closed / PR merged → `Done` 설정
@@ -461,9 +469,9 @@ git push --force-with-lease origin feat/45-...
 - **PR이 merge되지 않을 때:** Draft 상태, 독립 리뷰 worker의 발견 사항과
   conversation 해결 여부, 충돌, CI 실패를 확인합니다. 최종 머지 여부는 사람이
   판정합니다.
-- **Project에 항목이 안 보일 때:** `Done` 컬럼과 view filter를
-  확인합니다. 이미 closed/merged된 항목은 자동 추가 필터에 걸리지
-  않을 수 있습니다.
+- **현재 비활성 — 옛 조직 Project에 항목이 안 보일 때:** `Done`
+  컬럼과 view filter를 확인했습니다. 이미 closed/merged된 항목은
+  자동 추가 필터에 걸리지 않을 수 있었습니다.
 - **이슈가 자동으로 닫히지 않을 때:** PR 본문의 `Closes #이슈번호`,
   `main`으로의 merge 여부, 이슈 번호가 같은 저장소의 번호인지
   확인합니다.
