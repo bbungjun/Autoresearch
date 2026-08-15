@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
 WORKFLOW = (
@@ -7,6 +8,10 @@ WORKFLOW = (
     / ".github"
     / "workflows"
     / "pr-report-archive.yml"
+)
+pytestmark = pytest.mark.skipif(
+    not WORKFLOW.is_file(),
+    reason="조직 자원 부재로 비활성화된 pr-report-archive.yml 워크플로우 계약 테스트",
 )
 
 

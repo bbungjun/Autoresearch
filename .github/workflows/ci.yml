@@ -10,6 +10,10 @@ on:
 
 permissions:
   contents: read
+  # dorny/paths-filter 가 pull_request 이벤트에서 변경 파일 목록을 GitHub API
+  # (listFiles) 로 조회한다. permissions 블록을 명시하면 그 목록이 곧 전체 권한이
+  # 되므로 contents 만 두면 `Resource not accessible by integration` 으로 실패한다 (#5).
+  pull-requests: read
 
 jobs:
   changes:
