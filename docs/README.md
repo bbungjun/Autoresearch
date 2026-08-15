@@ -93,6 +93,8 @@
 - [Spec — Agent Orchestration `/chat` API 계약](specs/2026-08-01-agent-orchestration-chat-api-contract.md) — 내부 호출 서비스의 요청·응답·오류·저장 의미 정본
 - [Spec — 가설 수신부터 `[AR]` 이슈 발행까지](specs/2026-08-04-hypothesis-to-auto-research-issue.md) — 필드 소유권 3분할, 시드 고정, `gh` 발행 경계, 멱등성 (#516)
 - [Plan — 가설 수신부터 `[AR]` 이슈 발행까지 구현](plans/2026-08-04-hypothesis-to-auto-research-issue.md) (#516)
+- [Spec — 자율 ML 연구 Harness 기반 MVP와 논문 로드맵](specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md) — 저장소 전체 수정·외부 Sealed Judge·σ 기반 판정·local-first 반복 연구 계약 (#769)
+- [Plan — 로컬 Research Harness MVP](plans/2026-08-15-local-research-harness-mvp.md) — 현행 executor와 분리된 로컬 경로에서 사람이 준 가설·ExperimentCard부터 Sealed Judge·반복 실행·ledger·REPORT까지의 구현 순서 (#769)
 - `applications/experiment_platform/` (FastAPI + Codex CLI/OpenAI + PostgreSQL 실험 API)
 - [Spec — Agent Orchestration GKE 내부 배포](specs/2026-07-30-agent-orchestration-gke-internal-deployment.md)
 - [Plan — Agent Orchestration GKE 내부 배포](plans/2026-07-30-agent-orchestration-gke-internal-deployment.md)
@@ -158,6 +160,11 @@
   기준 SHA 봉인, GitHub App token, 독립 launcher·executor digest, infra companion 변경의 fail-first 구현 순서
 - [가설 수신부터 `[AR]` 이슈 발행까지](specs/2026-08-04-hypothesis-to-auto-research-issue.md) —
   Issue Form 18필드의 LLM/사용자/서버 소유권 분할, `POLICY_SEEDS` 고정, `gh` 발행 경계와 멱등성 3중 방어
+- [자율 ML 연구 Harness 기반 MVP와 논문 로드맵](specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md) —
+  저장소 전체 수정, 예측 점수 artifact 기반 Sealed Judge, baseline seed 노이즈 상대 판정,
+  local-first 반복 연구 계약 (#769)
+- [로컬 Research Harness MVP 구현 계획](plans/2026-08-15-local-research-harness-mvp.md) —
+  사람이 준 가설·ExperimentCard부터 봉인 평가·반복 실행·ledger·REPORT까지의 구현 순서 (#769)
 
 ## 가이드
 
