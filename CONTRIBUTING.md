@@ -3,8 +3,8 @@
 AutoResearch 프로젝트에 기여해 주셔서 감사합니다.
 원활한 협업을 위해 아래 규칙을 따라 주세요.
 
-- 기준 저장소: `SKYAHO/Autoresearch`
-- 기준 Project: `SKYAHO / Autoresearch`
+- 기준 저장소: `bbungjun/Autoresearch`
+- 기준 Project: 현재 없음
 
 ---
 
@@ -19,13 +19,19 @@ AutoResearch 프로젝트에 기여해 주셔서 감사합니다.
 
 2. **브랜치 생성**: 브랜치는 **해당 이슈에서 생성**합니다. 이슈 우측 `Development > Create a branch`를 사용하면 브랜치가 이슈에 자동 연결되고, `main` 기준으로 분기됩니다. 브랜치 네이밍 규칙은 아래를 따릅니다.
 
+   > **현재 비활성**: 아래 Auto Research 자동 브랜치 절차는 옛 조직 GitHub App과
+   > GCP executor를 전제로 하며 개인 저장소에서는 동작하지 않습니다. 복구 근거를
+   > 위해 삭제하지 않고 과거 절차로 보존합니다.
+   >
    > **예외 — Auto Research 실험 브랜치**: `[AR]` 이슈의 `exp/<이슈번호>` 브랜치는 사람이 만들지 않습니다. API가 이슈 발행 전에 **`dev` tip을 DB의 `base_dev_sha`로 봉인**하고, launcher가 만든 executor Pod가 나중에 그 SHA에서만 브랜치를 생성합니다. 자세한 내용은 [브랜치 보호 규칙](#브랜치-보호-규칙)을 참조하세요.
 
 3. **작업 및 커밋**: 커밋 컨벤션에 따라 커밋 메시지를 작성합니다.
 
 4. **PR 생성**: PR 템플릿을 채우고, 본문에 `Closes #이슈번호`를 포함합니다.
 
-5. **코드 리뷰**: 팀원 **최소 1명**의 Approve를 받아야 머지할 수 있습니다.
+5. **코드 리뷰**: 코디네이터 에이전트가 계획하고 Codex worker가 구현한 뒤,
+   구현에 참여하지 않은 독립 리뷰 worker가 동료 리뷰를 수행합니다. 사람이 리뷰
+   결과와 검증 근거를 확인하고 최종 머지 여부를 판정합니다.
 
 6. **Squash Merge**: 머지는 항상 **Squash and merge** 방식으로 합니다.
    머지 커밋 제목은 `<type>: <설명> (#PR번호)` 형식으로 작성합니다.
@@ -82,7 +88,14 @@ git switch feat/42-add-feature-store-schema
 - 영어 소문자, 숫자, 하이픈(`-`)만 사용합니다.
 - 이슈 번호를 반드시 포함합니다.
 - 한 브랜치에는 하나의 주요 목적만 담습니다.
-- `exp/`는 사람이 만드는 실험 브랜치와 Auto Research executor가 생성하는 실험 브랜치가 **같은 prefix를 공유**합니다. 자동 생성 브랜치는 이슈 번호만으로 이름이 정해져 설명 slug가 붙지 않습니다(`exp/589`). 자동 생성 브랜치는 DB에 봉인된 `base_dev_sha`에서 만들어지므로 **삭제하거나 force-push하지 마십시오** — ruleset이 막아 주지 않으며 삭제하면 launcher가 자동 복구하지 않고, 다른 tip으로 바꾸면 executor 재시도와 승격 계보 검증이 fail-closed됩니다. [브랜치 보호 규칙](#브랜치-보호-규칙) 참조.
+- 다음 `exp/*` 자동 생성 설명은 **현재 비활성인 옛 조직 절차**입니다. `exp/`는
+  사람이 만드는 실험 브랜치와 Auto Research executor가 생성하는 실험 브랜치가
+  **같은 prefix를 공유**합니다. 자동 생성 브랜치는 이슈 번호만으로 이름이 정해져
+  설명 slug가 붙지 않습니다(`exp/589`). 자동 생성 브랜치는 DB에 봉인된
+  `base_dev_sha`에서 만들어지므로 **삭제하거나 force-push하지 마십시오** — 옛
+  ruleset이 막아 주지 않았으며 삭제하면 launcher가 자동 복구하지 않고, 다른 tip으로
+  바꾸면 executor 재시도와 승격 계보 검증이 fail-closed됩니다. [브랜치 보호
+  규칙](#브랜치-보호-규칙) 참조.
 
 ---
 
@@ -144,6 +157,17 @@ PR은 작게 유지합니다. 무관한 리팩터링과 기능 변경을 섞지 
 
 ## 리뷰와 머지
 
+현재 저장소의 동료 리뷰와 최종 판정 흐름은 다음과 같습니다.
+
+```
+코디네이터 에이전트 계획 → Codex worker 구현 → 독립 리뷰 worker 동료 리뷰
+→ 발견 사항 반영·검증 → 사람이 최종 머지 판정
+```
+
+독립 리뷰 worker는 구현 worker와 분리합니다. 팀원 GitHub Approve는 현재 개인
+저장소의 머지 조건이 아니며, 사람이 독립 리뷰 결과와 CI·로컬 검증 근거를 확인한
+뒤 최종 판정합니다.
+
 **리뷰어 확인 사항**:
 
 - 이슈의 목적과 PR 변경이 일치하는가
@@ -152,21 +176,35 @@ PR은 작게 유지합니다. 무관한 리팩터링과 기능 변경을 섞지 
 - `Closes #이슈번호`가 있는가
 - 불필요한 파일, 캐시, 시크릿이 포함되지 않았는가
 
-**Claude 자동 리뷰**: PR이 처음 열리거나 Ready for review로 전환되면 Claude 리뷰가 자동 실행됩니다. 피드백 반영 후 최신 diff를 다시 리뷰받으려면 PR conversation에 `/claude-review` 댓글을 작성합니다 (PR에서만 동작). 변경 파일이 전부 문서(`**.md`, `docs/**`)인 PR은 자동 리뷰와 PR 이해 리포트를 실행하지 않으며, 필요하면 `/claude-review`, `/claude-report` 댓글로 수동 실행합니다.
+**현재 비활성 — Claude 자동 리뷰·PR 이해 리포트**: 옛 조직 저장소에서는 PR이
+처음 열리거나 Ready for review로 전환되면 Claude 리뷰가 자동 실행됐습니다. 현재는
+`claude.yml`, `pr-report.yml`, `pr-report-archive.yml`을
+`.github/workflows-disabled/`로 옮겼으므로 `/claude-review`와
+`/claude-report`도 동작하지 않습니다. Claude 리뷰는 개인 계정의
+`CLAUDE_CODE_OAUTH_TOKEN`을 등록하면 되살릴 수 있으며, 복구 조건 전체는
+`.github/workflows-disabled/README.md`에 보존합니다.
 
 **머지 후 자동 흐름**:
 
 ```
-PR merge → PR Status: Done → Closes #issue로 이슈 close → Issue Status: Done
+PR merge → Closes #issue로 이슈 close
 ```
 
-머지 직후 Project에서 항목이 사라진 것처럼 보이면 `Done` 컬럼을 먼저 확인합니다.
+> **현재 비활성 — 옛 조직 GitHub Projects 자동 전환**: 개인 저장소에는
+> Project가 없어 아래 전환은 동작하지 않습니다. 복구 근거로 과거 흐름을
+> 보존합니다: `PR merge → PR Status: Done → Closes #issue로 이슈 close
+> → Issue Status: Done`. 당시에는 항목이 사라진 것처럼 보이면 `Done`
+> 컬럼을 확인했습니다.
 
 ---
 
 ## GitHub Projects 운영
 
-Project는 현재 상태를 보여주는 보드로 사용합니다.
+> **현재 비활성**: 아래는 `SKYAHO / Autoresearch` 조직 Project 운영
+> 기록입니다. 개인 저장소에는 Project가 없어 자동 추가·상태 전환·
+> 이슈 close 자동화가 동작하지 않습니다. 복구 근거로 과거 절차를 보존합니다.
+
+옛 조직 Project는 작업 상태를 보여주는 보드로 사용했습니다.
 
 | 상태 | 의미 | 전환 |
 |------|------|------|
@@ -174,9 +212,9 @@ Project는 현재 상태를 보여주는 보드로 사용합니다.
 | `In Progress` | 작업 중 | 브랜치를 따고 작업을 시작하면 직접 이동 |
 | `Done` | 완료 | merge/close 시 자동 전환 |
 
-켜져 있는 자동화: open 이슈/PR 자동 추가(`is:issue,pr is:open`), 추가 시 `Todo` 설정, close/merge 시 `Done` 설정, Project에서 `Done`으로 옮기면 이슈 자동 close.
+당시 켜져 있던 자동화: open 이슈/PR 자동 추가(`is:issue,pr is:open`), 추가 시 `Todo` 설정, close/merge 시 `Done` 설정, Project에서 `Done`으로 옮기면 이슈 자동 close.
 
-Project의 `Add item`으로 제목만 추가하면 Issue Form을 우회하게 되므로, 새 작업은 Issues 화면에서 생성합니다.
+옛 조직 Project의 `Add item`으로 제목만 추가하면 Issue Form을 우회했으며, 새 작업은 현재도 Issues 화면에서 생성합니다.
 
 ---
 
@@ -188,12 +226,14 @@ Issue Form과 자동화를 단순하게 유지하기 위해 `feature`, `bug`, `e
 
 | label | 역할 |
 |---|---|
-| `auto-experiment` | `[AR]` 이슈 분류와 `auto-research-promotion.yml`의 입력 guard |
+| `auto-experiment` | `[AR]` 이슈 분류와 현재 비활성인 `auto-research-promotion.yml`의 입력 guard |
 
 이 label은 Issue Form과 API 발행 경로가 붙이며, executor Pod의 branch 생성 트리거는
-아닙니다. `.github/workflows/auto-research-promotion.yml`은 같은 label을 요구하므로
-분류 목적의 label 정리 중에 제거하면 승격 단계가 실패합니다. 이 일치 조건은
-`tests/applications/experiment_platform/test_auto_experiment_trigger_label.py`가 계약으로 고정합니다.
+아닙니다. 비활성 보관된
+`.github/workflows-disabled/auto-research-promotion.yml`은 같은 label을 요구하므로,
+나중에 옛 승격 절차를 복구할 가능성을 위해 label을 유지합니다. 이 일치 조건의
+워크플로우 단언은 비활성 기간에 skip되고 파일을 활성 경로로 되돌리면 자동으로
+다시 실행됩니다.
 
 `auto-research`는 트리거가 **아닙니다.** Auto Research 주제를 가리키는 분류 label이며, `[AR]` 이슈에는 붙지 않습니다.
 
@@ -205,16 +245,34 @@ Issue Form과 자동화를 단순하게 유지하기 위해 `feature`, `bug`, `e
 
 - `ci.yml`: Python 3.11 / 3.12에서 `python -m pytest`, feast·postgres 그룹 테스트, `uv lock & proxy export drift`, 이미지 빌드와 import smoke check
 - `lint.yml`: `Ruff`
+- `release-drafter.yml`: GitHub가 자동 제공하는 `GITHUB_TOKEN`만 사용하는 release note 초안 갱신
+
+이 세 파일만 `.github/workflows/`에 남아 있습니다. 조직 secrets, GCP 자원,
+`gh-pages`, 조직 GitHub App 또는 옛 executor를 요구하는 나머지 워크플로우는
+`.github/workflows-disabled/`로 옮겼으며 복구 조건은 그 디렉터리의 `README.md`를
+따릅니다.
 
 두 파일 모두 `pull_request:` 트리거에 `branches:` 필터가 없어 base 브랜치를 가리지 않지만, `push:`는 `main` 전용입니다.
 
-`main`의 required status check 6개는 `ci.yml` 5개(`pytest (Python 3.11)`, `pytest (Python 3.12)`, `pytest (feast group)`, `uv lock & proxy export drift`, `Docker build`)와 `lint.yml` 1개(`Ruff`)입니다. `pytest (postgres group)`과 이미지별 `Docker build (...)` 서브잡은 실행되지만 required 컨텍스트가 아닙니다.
+옛 조직 저장소의 `main-protection`이 요구하던 status check 6개는 `ci.yml`
+5개(`pytest (Python 3.11)`, `pytest (Python 3.12)`, `pytest (feast group)`,
+`uv lock & proxy export drift`, `Docker build`)와 `lint.yml` 1개(`Ruff`)였습니다.
+개인 저장소에는 해당 ruleset이 없으므로 현재 required check는 아니지만, CI job 이름은
+복구 근거로 유지합니다. `pytest (postgres group)`과 이미지별 `Docker build (...)`
+서브잡은 실행되지만 옛 required 컨텍스트에는 포함되지 않았습니다.
 
 ---
 
 ## 브랜치 보호 규칙
 
-보호는 저장소 파일이 아니라 **GitHub ruleset**으로 적용되어 있습니다. 문서와 실제 설정이 어긋나는 것을 막기 위해 각 항목에 rule type 원문 식별자를 병기합니다. 아래 명령으로 읽어 대조할 수 있습니다.
+> **현재 유효하지 않은 옛 조직 설정**: 아래 ruleset과 ID는
+> `SKYAHO/Autoresearch`의 `main-protection`(`18360502`)과
+> `dev-protection`(`20261204`) 기록입니다. 개인 저장소에는 이 ruleset이 존재하지
+> 않으므로 현재 머지 조건이나 브랜치 보호 상태를 설명하지 않습니다. 나중에 보호
+> 규칙을 재설계할 때 근거로 쓰기 위해 삭제하지 않습니다.
+
+옛 조직 저장소의 보호는 저장소 파일이 아니라 **GitHub ruleset**으로 적용됐습니다.
+당시 설정을 대조할 때는 아래 명령을 사용했습니다.
 
 ```bash
 gh api repos/SKYAHO/Autoresearch/rulesets
@@ -257,13 +315,13 @@ executor는 Job 시작 시 최신 `dev`나 `main`을 다시 읽지 않고, execu
 |---|---|---|
 | 신규 이슈의 기준 SHA 봉인 | Agent Orchestration API가 `heads/dev`를 읽어 `base_dev_sha`를 DB에 먼저 저장합니다 | 이슈 발행 시 |
 | exp 브랜치 생성 | executor Pod가 DB에서 전달받은 `base_dev_sha`에 ref를 만듭니다 | Job 실행 시 |
-| dev 병합 | `auto-research-dev-promotion.yml:367-372`가 `base: 'dev'`로 머지합니다 | 즉시 |
-| main Draft PR의 lineage 검사 | `auto-research-promotion.yml:158-163`이 `head: 'dev'`로 비교합니다 | 즉시 |
-| 진행 중 이슈의 후보 검증 | `auto-research-dev-promotion.yml:224-242`가 `base_dev_sha`를 base로 `compareCommits`를 호출합니다 | 후보 제출 시 |
+| dev 병합 | `.github/workflows-disabled/auto-research-dev-promotion.yml:367-372`가 `base: 'dev'`로 머지합니다 | 즉시 |
+| main Draft PR의 lineage 검사 | `.github/workflows-disabled/auto-research-promotion.yml:188-193`이 `head: 'dev'`로 비교합니다 | 즉시 |
+| 진행 중 이슈의 후보 검증 | `.github/workflows-disabled/auto-research-dev-promotion.yml:224-242`가 `base_dev_sha`를 base로 `compareCommits`를 호출합니다 | 후보 제출 시 |
 
 #### `dev`에서 PR 필수·required status check를 의도적으로 제외한 이유
 
-`.github/workflows/auto-research-dev-promotion.yml:367-372`의 `github.rest.repos.merge({ base: 'dev', head: selectedCandidateSha })`는 **PR을 거치지 않고 `dev` ref를 직접 갱신**합니다.
+`.github/workflows-disabled/auto-research-dev-promotion.yml:367-372`의 `github.rest.repos.merge({ base: 'dev', head: selectedCandidateSha })`는 **PR을 거치지 않고 `dev` ref를 직접 갱신**합니다.
 
 - `pull_request` rule을 걸면 이 호출 자체가 거부되어 실험 자동 병합이 즉시 멈춥니다.
 - `required_status_checks`를 걸어도 마찬가지입니다. `ci.yml:6-8`과 `lint.yml:6-8`의 `push` 트리거가 `main` 전용이고, 게다가 `GITHUB_TOKEN`으로 만든 커밋은 workflow를 재귀 트리거하지 않습니다. 두 이유 각각으로 **`repos.merge`가 만든 dev 커밋에는 check run이 하나도 생성되지 않아** 영구히 통과할 수 없습니다. 후자는 `docs/archive/specs/2026-08-01-auto-research-dev-issue-branch.md:112`에 이미 기록돼 있습니다.
@@ -282,12 +340,12 @@ fail-closed 검사만 있으며, **생성 이후의 force-push·삭제 자체는
   사라져도 자동 재생성하지 않습니다. branch를 지우면 Phase 1이 자동 복구하지 않으며
   후속 승격 입력도 잃습니다.
 - `exp/*` force-push: executor 재시도는 다른 tip을 거부하고,
-  `auto-research-dev-promotion.yml`의 후보 계보 검사도 거부합니다. 안전하게 실패하지만
-  작업 결과는 소실됩니다.
+  `.github/workflows-disabled/auto-research-dev-promotion.yml`의 후보 계보 검사도
+  거부합니다. 안전하게 실패하지만 작업 결과는 소실됩니다.
 - **marker 경계:** Phase 1 executor는 기존 GitHub Actions bot marker를 새로 쓰지
   않습니다. 따라서 새 marker 없는 branch는 현재 promotion workflow의 입력이 아니며,
   marker 작성 주체·서명·`base_dev_sha` 검증 재설계가 실제 실험 실행 전 다음 gate입니다.
-- `promote/*`: `auto-research-promotion.yml:215-227`이 이미 존재하는 promote 브랜치를 **다른 SHA로 재사용**하는 것만 거부합니다.
+- `promote/*`: `.github/workflows-disabled/auto-research-promotion.yml:275-288`이 이미 존재하는 promote 브랜치를 **다른 SHA로 재사용**하는 것만 거부합니다.
 
 **`exp/*`에 보호를 걸지 않은 이유**: `exp/`는 자동화 전용 네임스페이스가 아닙니다. 위 [브랜치 네이밍 규칙](#브랜치-네이밍-규칙)이 `exp/`를 사람이 쓰는 브랜치 type으로 규정하고 있고, 사람이 만든 `exp/116-openrouter-provider-ab`와 `exp/396-views-per-day`가 실제로 원격에 존재합니다. 사람 브랜치와 자동화 브랜치가 `exp/<이슈번호>-<설명>`이라는 **같은 형식**을 쓰므로 ruleset의 ref 패턴으로 구분할 수 없고, `non_fast_forward`를 걸면 사람의 rebase·force-push가, `deletion`을 걸면 작업 후 브랜치 정리가 함께 막힙니다. 보호를 걸려면 **자동화 전용 네임스페이스 분리가 선행**되어야 하며, 이는 브랜치명 생성 규칙과 marker 신뢰 계약을 바꾸는 동작 변경이라 별도 이슈에서 다룹니다.
 
@@ -295,9 +353,11 @@ fail-closed 검사만 있으며, **생성 이후의 force-push·삭제 자체는
 
 ## 문제 해결
 
-**PR이 merge되지 않을 때**: Draft 상태인지, approve 1명이 있는지, 충돌이 있는지, required check가 실패했는지 확인합니다. Draft PR은 approve를 받아도 merge할 수 없습니다.
+**PR이 merge되지 않을 때**: Draft 상태인지, 독립 리뷰 worker의 발견 사항과
+conversation이 해결됐는지, 충돌이나 CI 실패가 있는지 확인합니다. 최종 머지 여부는
+사람이 판정합니다.
 
-**Project에 항목이 안 보일 때**: `Done` 컬럼과 view filter를 확인합니다. 이미 closed/merged된 항목은 자동 추가 필터(`is:issue,pr is:open`)에 걸리지 않을 수 있습니다.
+**현재 비활성 — 옛 조직 Project에 항목이 안 보일 때**: `Done` 컬럼과 view filter를 확인했습니다. 이미 closed/merged된 항목은 자동 추가 필터(`is:issue,pr is:open`)에 걸리지 않을 수 있었습니다.
 
 **이슈가 자동으로 닫히지 않을 때**: PR 본문에 `Closes #이슈번호`가 있는지, PR이 `main`으로 merge되었는지 확인합니다.
 
@@ -305,7 +365,7 @@ fail-closed 검사만 있으며, **생성 이후의 force-push·삭제 자체는
 
 ## 참고 링크
 
-- Repository: https://github.com/SKYAHO/Autoresearch
-- Project Board: https://github.com/orgs/SKYAHO/projects/3/views/2
+- Repository: https://github.com/bbungjun/Autoresearch
+- Project Board (**현재 비활성인 옛 조직 보드**): https://github.com/orgs/SKYAHO/projects/3/views/2
 - Issue Forms: `.github/ISSUE_TEMPLATE/*.yml`
 - PR template: `.github/PULL_REQUEST_TEMPLATE.md`

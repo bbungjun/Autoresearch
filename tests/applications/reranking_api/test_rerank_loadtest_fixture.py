@@ -20,6 +20,15 @@ from applications.reranking_api.loadtest.rerank_fixture import (
     targeted_insert_sql,
 )
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+RERANK_LOADTEST_WORKFLOW = (
+    REPOSITORY_ROOT / ".github" / "workflows" / "rerank-loadtest.yml"
+)
+_requires_active_rerank_loadtest_workflow = pytest.mark.skipif(
+    not RERANK_LOADTEST_WORKFLOW.is_file(),
+    reason="조직 GKE 자원 부재로 비활성화된 rerank-loadtest.yml 워크플로우 계약 테스트",
+)
+
 
 class _FakeQueryJob:
     def __init__(self, sql: str) -> None:
@@ -232,6 +241,7 @@ def test_k6_job_is_immutable_hardened_and_configmap_only() -> None:
         assert forbidden not in text
 
 
+@_requires_active_rerank_loadtest_workflow
 def test_manual_workflow_keeps_load_and_snapshot_identities_separate() -> None:
     """수동 workflow는 VU gate와 Prometheus 조회를 서로 다른 identity로 실행한다."""
     text = Path(".github/workflows/rerank-loadtest.yml").read_text()
@@ -296,6 +306,7 @@ def test_runbook_requires_materialize_and_raw_artifacts() -> None:
     assert "CPU-seconds/request" in text
 
 
+@_requires_active_rerank_loadtest_workflow
 def test_manual_workflow_serializes_shared_configmaps_and_waits_for_padding() -> None:
     """공유 ConfigMap 실행은 직렬화하고 Prometheus 종료 패딩은 미래를 조회하지 않는다."""
     text = Path(".github/workflows/rerank-loadtest.yml").read_text()
@@ -306,6 +317,7 @@ def test_manual_workflow_serializes_shared_configmaps_and_waits_for_padding() ->
     assert 'sleep "$((padded_end - current_time))"' in text
 
 
+@_requires_active_rerank_loadtest_workflow
 def test_manual_workflow_preserves_runner_artifact_layout_for_reader() -> None:
     """runner upload, reader download·glob, 최종 upload는 같은 raw 경로를 사용한다."""
     text = Path(".github/workflows/rerank-loadtest.yml").read_text()
@@ -315,6 +327,7 @@ def test_manual_workflow_preserves_runner_artifact_layout_for_reader() -> None:
     assert 'response_path="runner/raw/prometheus-' in text
 
 
+@_requires_active_rerank_loadtest_workflow
 def test_workflow_validates_fixture_and_avoids_sourced_settings() -> None:
     """자유 입력은 allowlist를 통과하고 settings 값은 shell source되지 않는다."""
     workflow = Path(".github/workflows/rerank-loadtest.yml").read_text()
@@ -338,6 +351,7 @@ def test_workflow_validates_fixture_and_avoids_sourced_settings() -> None:
     assert "envFrom:" in manifest and "configMapRef:" in manifest
 
 
+@_requires_active_rerank_loadtest_workflow
 def test_each_vu_binds_one_versioned_immutable_settings_configmap() -> None:
     """각 VU Job은 생성 시점의 고유 settings ConfigMap을 env와 volume에 함께 bind한다."""
     workflow = Path(".github/workflows/rerank-loadtest.yml").read_text()
@@ -355,6 +369,7 @@ def test_each_vu_binds_one_versioned_immutable_settings_configmap() -> None:
     assert ".metadata.vus == $expected_vus" in workflow
 
 
+@_requires_active_rerank_loadtest_workflow
 def test_failure_metadata_precedes_summary_and_records_status() -> None:
     """Job 종료 metadata는 summary보다 먼저 남고 후속 실패 상태도 갱신된다."""
     text = Path(".github/workflows/rerank-loadtest.yml").read_text()
@@ -374,6 +389,7 @@ def test_failure_metadata_precedes_summary_and_records_status() -> None:
         assert f'write_metadata "{status}"' in text
 
 
+@_requires_active_rerank_loadtest_workflow
 def test_snapshot_reader_exports_partial_completed_jobs_after_runner_failure() -> None:
     """runner 실패 후에도 reader는 완료된 1~4개 Job의 raw range만 보존한다."""
     text = Path(".github/workflows/rerank-loadtest.yml").read_text()
@@ -391,6 +407,7 @@ def test_snapshot_reader_exports_partial_completed_jobs_after_runner_failure() -
     assert "path: runner/raw" in reader
 
 
+@_requires_active_rerank_loadtest_workflow
 def test_settings_configmap_is_owned_by_ttl_job() -> None:
     """VU별 settings ConfigMap은 Job UID ownerReference로 TTL GC에 연결된다."""
     workflow = Path(".github/workflows/rerank-loadtest.yml").read_text()

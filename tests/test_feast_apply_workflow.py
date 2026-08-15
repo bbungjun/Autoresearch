@@ -31,6 +31,14 @@ from feature_repo.env import ENV_DEV, ENV_PROD, online_full_scan_for_deletion
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 APPLY_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "feast-apply.yml"
 CODE_ARCHIVE_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "code-archive.yml"
+_requires_active_feast_apply_workflow = pytest.mark.skipif(
+    not APPLY_WORKFLOW.is_file(),
+    reason="조직 자원 부재로 비활성화된 feast-apply.yml 워크플로우 계약 테스트",
+)
+_requires_active_code_archive_workflow = pytest.mark.skipif(
+    not CODE_ARCHIVE_WORKFLOW.is_file(),
+    reason="조직 자원 부재로 비활성화된 code-archive.yml 워크플로우 계약 테스트",
+)
 
 _DERIVATION_START = 'if [[ "$AUTORESEARCH_ENV" == "dev" ]]'
 _APPLY_STEP = "Fetch Redis CA and run feast apply"
@@ -90,6 +98,7 @@ def _extract_derivation_snippet(workflow: str) -> str:
     return "\n".join(line.strip() for line in lines[start : end + 1])
 
 
+@_requires_active_feast_apply_workflow
 @pytest.mark.parametrize("environment", ["prod", "dev"])
 def test_workflow_full_scan_derivation_matches_env_module(environment: str) -> None:
     # Given: 워크플로우가 Job 에 주입할 full_scan 값을 계산하는 실제 bash 블록.
@@ -112,6 +121,7 @@ def test_workflow_full_scan_derivation_matches_env_module(environment: str) -> N
     assert completed.stdout == ("true" if expected else "false")
 
 
+@_requires_active_feast_apply_workflow
 def test_workflow_routes_each_push_branch_to_its_own_environment() -> None:
     # main/dev push는 수동 입력이 없으므로 ref 에서 대상 환경을 골라야 한다. 다만
     # 고를 것은 브랜치 이름이 아니라 **Environment 이름**이다 — main 이라는
@@ -123,6 +133,7 @@ def test_workflow_routes_each_push_branch_to_its_own_environment() -> None:
     assert "|| github.ref_name }}" not in workflow
 
 
+@_requires_active_feast_apply_workflow
 def test_environment_expression_only_yields_known_environment_names() -> None:
     # 표현식이 내놓을 수 있는 값은 수동 dispatch 입력과 ref 분기의 두 리터럴뿐이다.
     # 브랜치 이름이 그대로 새어 나가면 GitHub Environment 도, env.py 의
@@ -140,6 +151,7 @@ def test_environment_expression_only_yields_known_environment_names() -> None:
     assert _dispatch_environment_options() == {ENV_PROD, ENV_DEV}
 
 
+@_requires_active_feast_apply_workflow
 def test_job_environment_and_autoresearch_env_stay_in_sync() -> None:
     # `environment:` 는 env 컨텍스트를 읽지 못해 같은 식이 두 벌 존재한다. 한쪽만
     # 고치면 잡이 뜬 Environment 와 Job 에 주입되는 AUTORESEARCH_ENV 가 어긋난다.
@@ -149,6 +161,7 @@ def test_job_environment_and_autoresearch_env_stay_in_sync() -> None:
     assert job["env"]["AUTORESEARCH_ENV"] == ENVIRONMENT_EXPRESSION
 
 
+@_requires_active_feast_apply_workflow
 def test_runs_on_targets_the_scale_set_of_the_same_environment() -> None:
     # `runs-on` 은 env 컨텍스트를 읽지 못해 같은 식의 세 번째 사본이다. 여기만
     # 어긋나면 prod Environment 로 뜬 잡이 dev 스케일셋에서 돌거나, 매칭되는
@@ -156,6 +169,7 @@ def test_runs_on_targets_the_scale_set_of_the_same_environment() -> None:
     assert _apply_job()["runs-on"] == f"feast-apply-{ENVIRONMENT_EXPRESSION}"
 
 
+@_requires_active_code_archive_workflow
 def test_code_archive_uploads_dev_commit_for_dev_feast_apply() -> None:
     # feast-apply는 더 이상 이 아카이브를 기다리지 않지만(#561), GKE Job 롤백
     # 경로(deployment/feast/apply-job.yaml, deployment/Dockerfile.feast)는 여전히 이 아카이브를
@@ -165,6 +179,7 @@ def test_code_archive_uploads_dev_commit_for_dev_feast_apply() -> None:
     assert "branches: [main, dev]" in archive_workflow
 
 
+@_requires_active_feast_apply_workflow
 def test_workflow_selects_environment_scoped_coordinates() -> None:
     # GitHub Environment 를 선택해야 같은 이름의 repo-level vars 보다
     # prod/dev Environment 좌표가 우선하며, 임시 dev 차단 가드는 더 이상 필요 없다.
@@ -207,6 +222,7 @@ def _run_validate_configuration(
     )
 
 
+@_requires_active_feast_apply_workflow
 @pytest.mark.parametrize("environment", [ENV_PROD, ENV_DEV])
 def test_validate_configuration_accepts_the_matching_wif_provider(
     environment: str,
@@ -218,6 +234,7 @@ def test_validate_configuration_accepts_the_matching_wif_provider(
     assert completed.returncode == 0
 
 
+@_requires_active_feast_apply_workflow
 def test_validate_configuration_rejects_the_repository_level_fallback_provider() -> None:
     # #548 에서 실제로 온 값. 비어 있지 않으므로 존재 검사만으로는 통과해 버린다.
     completed = _run_validate_configuration(
@@ -228,6 +245,7 @@ def test_validate_configuration_rejects_the_repository_level_fallback_provider()
     assert "does not match the prod environment" in completed.stdout
 
 
+@_requires_active_feast_apply_workflow
 def test_credentials_are_verified_before_the_apply_step() -> None:
     # 자격 확인을 apply 뒤에 두면 #548 류의 오인 보고가 apply 가 끝난 뒤에야 드러난다.
     step_names = [step.get("name") for step in _apply_job()["steps"]]
@@ -237,6 +255,7 @@ def test_credentials_are_verified_before_the_apply_step() -> None:
     ) < step_names.index(_APPLY_STEP)
 
 
+@_requires_active_feast_apply_workflow
 def test_credential_check_never_prints_the_access_token(tmp_path: Path) -> None:
     # 토큰이 로그로 새면 이 스텝 자체가 사고가 된다.
     bash = shutil.which("bash")

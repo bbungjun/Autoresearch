@@ -25,6 +25,7 @@ label 문자열은 Issue Form·API 발행 경로·승격 워크플로·문서 2�
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -36,6 +37,10 @@ PROMOTION_WORKFLOW = (
 CONTRIBUTING = REPOSITORY_ROOT / "CONTRIBUTING.md"
 WORKFLOW_REFERENCE = (
     REPOSITORY_ROOT / ".claude" / "docs" / "agent-workflow-reference.md"
+)
+_requires_active_promotion_workflow = pytest.mark.skipif(
+    not PROMOTION_WORKFLOW.is_file(),
+    reason="조직 자동 실험 경로 부재로 비활성화된 auto-research-promotion.yml 계약 테스트",
 )
 
 DOCUMENTS_WITH_ISSUE_FORM_TABLE = (CONTRIBUTING, WORKFLOW_REFERENCE)
@@ -75,6 +80,7 @@ def test_issue_form_applies_exactly_one_classification_label() -> None:
     """
     assert _form_labels() == ["auto-experiment"]
 
+@_requires_active_promotion_workflow
 def test_promotion_workflow_guard_requires_the_form_label() -> None:
     """승격 워크플로의 이슈 가드가 같은 label을 요구함을 고정한다.
 
