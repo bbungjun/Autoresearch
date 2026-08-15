@@ -52,7 +52,7 @@ Airflow (외부 Autoresearch-airflow):
     → GLM API (glm_generator.py) → 가상 유저 데이터셋
 ```
 
-## Domain 1: Model Training (waieiches, hyochangsung)
+## Domain 1: Model Training
 
 **책임:** CTR(클릭률) 모델 정의, 학습 오케스트레이션, 평가 지표.
 
@@ -76,7 +76,7 @@ Airflow (외부 Autoresearch-airflow):
   - Interaction 피처는 학습과 서빙에서 동일하게 계산 (skew 금지)
   - Cold-start: 이력 없는 값은 "unknown" 처리 (대치 금지)
 
-## Domain 2: Feast Features (waieiches, hyochangsung)
+## Domain 2: Feast Features
 
 **책임:** 피처 정의, 피처 스토어 구축, 피처 엔지니어링 변환.
 
@@ -128,7 +128,7 @@ Airflow runtime source나 설정을 두지 않습니다.
 - application image는 `Autoresearch` checkout 하나로 발행하고 Airflow는
   immutable digest를 선택합니다.
 
-## Domain 4: GCP Infrastructure (hyeongyu-data)
+## Domain 4: GCP Infrastructure
 
 **책임:** 클라우드 배포, 환경 구성, 시크릿 관리.
 

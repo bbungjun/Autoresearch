@@ -227,15 +227,15 @@ guardrail 위반 → 하드 리밋 도달 여부와 무관하게 passed=False
 
 - **안 A(채택)**: 버전 `creation_timestamp`를 쓴다. 추가 구현 없음. 위 오차를 감수한다.
 - **안 B(보류)**: alias 부여 시각을 기록하는 경로를 만든다. `set_model_alias` 호출부
-  또는 registry 태그에 남긴다. **다른 사람 영역(`autoresearch/model_registry/`)을 건드린다.** → §8.4
+  또는 registry 태그에 남긴다. **`autoresearch/model_registry/` 계약까지 변경 범위가 확장된다.** → §8.4
 
 **채택 사유**: 안 A의 오차는 "여러 버전을 미리 등록해두고 나중에 alias만 옮기는" 운영
 관행이 있을 때 커진다. 그런데 Auto Research 승격 루프는 이제 막 동작하기 시작했고
 (`#448` 최근 close, `#461` 게이트도 최근 착지), **그런 관행이 쌓일 시간 자체가 없었다.**
 따라서 발표 시점까지 creation과 alias 부여의 시차가 며칠씩 벌어질 구조가 아니다.
 
-안 B를 지금 하면 `autoresearch/model_registry/registry.py`(다른 사람 영역)를 건드리는데, 그 비용을
-치를 만큼 지금 오차가 크지 않다.
+안 B를 지금 하면 `autoresearch/model_registry/registry.py`의 모델 레지스트리 계약까지
+변경하는데, 그 비용을 치를 만큼 지금 오차가 크지 않다.
 
 ### 6.1 근사라는 사실을 어디에 남기는가 — 게이트가 아니다
 
@@ -278,23 +278,23 @@ limit_days = 0,  reason = None
 
 ## 8. 미해결 항목
 
-### 8.1 `#461` 게이트 소유자 확인 — **plan 착수 전 필수**
+### 8.1 `#461` 게이트 변경 확인 — **2026-08-05 완료**
 
-`autoresearch/experiments/promotion_gate.py`는 `#461`(hyochangsung)이 착지시킨 코드다.
-`#472`의 assignee는 waieiches이지만, **assignee가 도메인 소유자라는 뜻은 아니다**
-(`#493`에서 같은 착각을 한 적이 있다).
+`autoresearch/experiments/promotion_gate.py`는 `#461`에서 도입된 코드다. `#472`의
+assignee 정보만으로 이 코드의 변경 승인 여부를 판단하지 않고, `#493`에서 발생했던
+같은 혼동을 피하기 위해 계약 변경을 별도로 확인했다.
 
-확인받을 것:
+확인한 항목:
 1. `evaluate()`에 OR 조건과 신규 인자 2개를 더하는 방향이 맞는지.
 2. `GateDecision`에 `policy_version`을 더해도 되는지 — 호출부 workflow가 그 필드를
-   읽지 않으므로 하위호환이지만, 계약 변경은 소유자 판단이다.
+   읽지 않으므로 하위호환이지만, 계약 변경은 별도 판단이 필요했다.
 3. §6의 안 A/안 B 중 어느 쪽인지 — 안 B는 `autoresearch/model_registry/registry.py`를 건드린다.
 
 **확인 결과(2026-08-05)**: 승인이 기록됐다 —
-`pull/461#issuecomment-5186975872` ("`#472` 효창님 승인 완료").
+`pull/461#issuecomment-5186975872`에 `#472` 관련 변경 승인이 남아 있다.
 
 1·2번은 예/아니오라 이 코멘트로 답이 된다. **3번은 이 spec이 §6에서 안 A로 확정했다** —
-소유자에게 다시 묻지 않는다. 근거는 §6에 적었고, 요지는 "안 A의 오차를 키우는 운영
+추가 확인하지 않는다. 근거는 §6에 적었고, 요지는 "안 A의 오차를 키우는 운영
 관행이 쌓일 시간 자체가 없었다"이다. 안 B는 §8.4로 백로그화했으므로 되돌아올 길이
 열려 있다.
 
@@ -311,8 +311,9 @@ limit_days = 0,  reason = None
 - `hard_retrain_limit_reached`가 **거의 항상** 발동해 지표 조건이 사실상 무력해질 때
 
 전환 내용: `set_model_alias`(`autoresearch/model_registry/registry.py:121`) 경로에서 alias 부여 시각을
-기록한다(registry 태그 또는 별도 레코드). **다른 사람 영역이므로 소유자 확인이
-선행돼야 한다.** 전환해도 게이트 코드는 바뀌지 않는다 — 값을 구하는 쪽만 바뀐다(§6.1).
+기록한다(registry 태그 또는 별도 레코드). **모델 레지스트리 계약이 함께 바뀌므로 별도
+이슈에서 영향 범위를 검증한다.** 전환해도 게이트 코드는 바뀌지 않는다 — 값을 구하는
+쪽만 바뀐다(§6.1).
 
 ### 8.2 호출부가 값을 어디서 구하는가 — plan에서 확정
 

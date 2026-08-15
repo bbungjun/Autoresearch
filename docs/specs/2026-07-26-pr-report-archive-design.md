@@ -133,7 +133,7 @@ v2 모두에 존재하는 `pr`과 `summary_ko`만 아카이브 계약으로 사�
     {
       "number": 345,
       "title": "docs: 배포 아티팩트 표를 실제 배포 상태로 갱신",
-      "author": "waieiches",
+      "author": "example-user",
       "merged_at": "2026-07-25T19:21:16Z",
       "summary_ko": ["요약 1", "요약 2", "요약 3"],
       "report_url": "pr/345/"

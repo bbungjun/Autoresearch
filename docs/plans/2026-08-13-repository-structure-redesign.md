@@ -34,8 +34,8 @@
 
 ## 착수 전제 (Task 0 이전에 확인)
 
-- [ ] Model Training / Feast Features 도메인 소유자(waieiches, hyochangsung) 합의 — 선행 plan(#149)이 규정한 조건이며 유일한 실질 전제다
-- [ ] `#535`(사람 PR, `degradation_eval.py`) 처리 방침 합의 — 먼저 머지하거나, 재배치 후 rebase하도록 담당자에게 알린다
+- [ ] Model Training / Feast Features 코드 경계와 기존 계약 재확인 — 선행 plan(#149)의 기술적 경계를 보존한다
+- [ ] `#535`(사람 PR, `degradation_eval.py`) 처리 순서 확정 — 먼저 머지하거나, 재배치 후 rebase한다
 
 **실험 발행은 중단하지 않는다.** spec 9-1절에서 실측한 대로, 열린 `[AR]` PR
 6건은 재배치를 막지 않는다:
@@ -1515,7 +1515,7 @@ EOF
 
 | 층 | 대상 | 처리 |
 | --- | --- | --- |
-| 정본 | `README.md`, `CLAUDE.md`/`AGENTS.md`, `.claude/docs/*`, `docs/README.md` | 구조 절·소유 표·폴더 책임을 다시 씀 |
+| 정본 | `README.md`, `CLAUDE.md`/`AGENTS.md`, `.claude/docs/*`, `docs/README.md` | 구조 절·코드 영역 표·폴더 책임을 다시 씀 |
 | 상시 갱신 | `docs/guides/`, `docs/runbooks/`, `docs/adr/` | 경로 전면 갱신 |
 | 살아있는 계약 | `docs/specs/` | 실행 가능한 참조와 계약 경로만 갱신 |
 | 역사 기록 | `docs/plans/`, `docs/archive/` | **손대지 않음** |
@@ -1559,9 +1559,9 @@ grep -rln "src/\|src\.\|agent_orchestration\|^deploy/" \
 
 26-52행의 구조 블록을 spec 4절의 최종 구조로 교체한다. 213행의 미해결 표기
 
-> `src/serving/`(리랭킹 API)과 정책 라운드·일일 추천 폐루프의 도메인 소유는 아직 미지정입니다 — 저장소 구조 논의(#149)에서 확정 예정.
+> `src/serving/`(리랭킹 API)과 정책 라운드·일일 추천 폐루프의 코드 경계는 저장소 구조 논의(#149)에서 정리 예정입니다.
 
-는 `applications/reranking_api/` 기준으로 다시 쓰거나, 도메인 소유가 정해졌으면 삭제한다.
+는 `applications/reranking_api/` 기준의 코드 책임으로 다시 쓴다.
 
 54-67행 배포 이미지 표의 `Dockerfile.*` 경로를 `deployment/` 기준으로 고친다.
 
@@ -1588,7 +1588,7 @@ diff CLAUDE.md AGENTS.md && echo "동일"
 
 - [x] **Step 4: `.claude/docs/` 갱신**
 
-`agent-project-reference.md`의 폴더 책임·소유 경계 표, `architecture-overview.md`의 경로를 새 구조로 고친다.
+`agent-project-reference.md`의 폴더 책임 경계 표, `architecture-overview.md`의 경로를 새 구조로 고친다.
 
 - [x] **Step 5: 선행 문서에 대체 표기 추가**
 

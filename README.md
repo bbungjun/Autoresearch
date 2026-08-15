@@ -209,19 +209,17 @@ action log 데이터 레이크는 **일일 슬라이스 파티션**(`dt=D` = KST
 프루닝으로 30일 히스토리를 조립합니다. 계약 상세:
 [`docs/specs/2026-07-24-action-log-slice-semantics.md`](docs/specs/2026-07-24-action-log-slice-semantics.md)
 
-## 팀 도메인
+## 코드 영역과 주요 경로
 
-| 도메인 | 팀원 | 주요 경로 |
-|---|---|---|
-| Model Training | waieiches, hyochangsung | `autoresearch/model_training/`, `autoresearch/model_evaluation/`, `autoresearch/model_registry/` |
-| Feast Features | waieiches, hyochangsung | `feature_repo/`, `autoresearch/feature_engineering/` |
-| YouTube Collection & Release | Noah-JuYong | `autoresearch/data_collection/`, `applications/youtube_api_proxy/`, `.github/workflows/` (release·배포 트리거) |
-| Airflow Orchestration | bbungjun | `Autoresearch-airflow` 저장소 |
-| GCP Infrastructure | hyeongyu-data | `Autoresearch-infra` 저장소 |
-
-> `applications/reranking_api/`(리랭킹 API)와 `autoresearch/recommendation/`(정책 라운드·
-> 일일 추천 폐루프)의 도메인 소유는 아직 미지정입니다. #149에서 확정 예정이었으나 그
-> 논의는 #754로 대체됐고, #754도 구조만 정하고 소유는 정하지 않았습니다.
+| 영역 | 주요 경로 |
+|---|---|
+| Model Training | `autoresearch/model_training/`, `autoresearch/model_evaluation/`, `autoresearch/model_registry/` |
+| Feast Features | `feature_repo/`, `autoresearch/feature_engineering/` |
+| YouTube Collection & Release | `autoresearch/data_collection/`, `applications/youtube_api_proxy/`, `.github/workflows/` (release·배포 트리거) |
+| Airflow Orchestration | `Autoresearch-airflow` 저장소 |
+| GCP Infrastructure | `Autoresearch-infra` 저장소 |
+| Reranking Serving | `applications/reranking_api/` |
+| Recommendation | `autoresearch/recommendation/` |
 
 ## 시작하기
 

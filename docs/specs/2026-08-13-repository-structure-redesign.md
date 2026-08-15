@@ -2,8 +2,8 @@
 
 - 작성일: 2026-08-13
 - 상태: 설계 승인 완료, 구현 계획 작성 대기
-- 관련: `README.md:213`("`src/serving/`과 정책 라운드·일일 추천 폐루프의 도메인
-  소유는 아직 미지정 — 저장소 구조 논의(#149)에서 확정 예정")
+- 관련: 당시 `README.md:213`의 서빙·추천 코드 경계 미정 기록(저장소 구조 논의
+  #149에서 정리 예정)
 
 ## 0. 선행 문서와의 관계
 
@@ -23,9 +23,9 @@
 | `proxy`·`agent_orchestration`·서빙 | 최상위 유지 (범위 제외) | `applications/` 층 신설 후 이동 |
 | 학습 CLI | `autoresearch/training/cli.py` | `autoresearch/cli.py` |
 
-선행 plan이 규정한 **실행 조건은 그대로 유효**합니다: Model Training / Feast
-Features 도메인 소유자(waieiches, hyochangsung)의 합의, 그리고 `src/`를 건드리는
-열린 PR·브랜치가 없는 시점 선택.
+선행 plan이 규정한 **기술적 실행 조건은 그대로 유효**합니다: Model Training / Feast
+Features의 코드 경계를 보존하고, `src/`를 건드리는 열린 PR·브랜치의 충돌 가능성을
+착수 전에 확인합니다.
 
 ## 1. 배경 — 왜 지금 구조에서 "어느 폴더에 뭐가 있는지" 예상이 안 되는가
 
@@ -468,13 +468,13 @@ feast 계열은 `uv sync --only-group feast` 환경에서 `.github/workflows/ci.
 | **`prod_model_contract` 게이트가 조용히 사라짐** | 6-3-1 참조. 권한이 넓어지는 방향이라 CI가 못 잡고, 계약 테스트도 tmp 저장소에 옛 경로를 스스로 만들어 통과한다. 단계 1의 **같은 커밋**에서 `verifier.py`와 테스트를 함께 고친다 |
 | 문자열 하드코딩 경로 누락 | 6-3에 전수 목록. 점 표기만 보면 executor의 슬래시 표기를 놓친다. 단계 1 완료 후 `grep -rn "src/\|agent_orchestration" --include=*.py --include=*.yml --include=Dockerfile*`로 잔여 확인 |
 | 에이전트 이미지 빌드가 조용히 스킵됨 | `ci.yml`의 `agent_orchestration` paths 필터가 새 경로를 못 맞추면 실패가 아니라 job이 안 돈다. 단계 4에서 필터를 `applications/**`로 갱신 |
-| 인접 저장소 Airflow 호출 중단 | 단계 5를 이 저장소 배포 **이후**에 수행하거나, 배포 순서를 사전 합의 |
+| 인접 저장소 Airflow 호출 중단 | 단계 5를 이 저장소 배포 **이후**에 수행하거나, 배포 순서를 사전에 확정 |
 | `tests/` 재배치 중 테스트 유실 | 단계 3에서 재배치 전후 `pytest --collect-only -q \| wc -l` 비교 |
 | 이슈 템플릿 경로 변경으로 진행 중 실험 실패 | 해당 없음 — 실험은 `base_dev_sha`로 봉인된 트리를 체크아웃하므로 이슈 본문의 명령과 트리가 항상 짝이 맞는다. 9-1 참조 |
 | 단계 1의 diff가 커서 리뷰 불가 | 파일 이동(`git mv`)과 임포트 치환을 **별도 커밋**으로 분리해 rename 감지를 살림 |
 | 열린 PR이 `src/`를 건드려 merge 충돌 | 9-1에서 실측 — rename 감지가 처리한다. 예외는 `#535`(사람 PR) 한 건의 일반 rebase뿐 |
 | exp 브랜치가 `src/` 아래 새 파일을 추가해 `src/`가 되살아남 | 단계 1 이후 CI 가드 추가 (9-1 참조) |
-| 도메인 소유자 합의 없이 착수 | 선행 plan의 실행 조건(waieiches, hyochangsung 승인)이 유효. 착수 전 확인 필요 |
+| 코드 경계 검증 없이 착수 | 선행 plan의 Model Training / Feast Features 경계 보존 조건이 유효. 착수 전 관련 계약과 영향 범위 확인 필요 |
 | 배치 이미지가 코드 경로를 굽고 있을 가능성 | 해당 없음 — #752 이후 `Dockerfile.app`은 소스를 COPY하지 않는다. `scripts/upload_code_archive.sh`가 **추적 파일 전체**를 `git archive`로 말아 `gcs_code_bootstrap.sh`가 `/app`에 풀고 `PYTHONPATH=/app`으로 실행하므로 경로에 무관하다. 두 스크립트 수정 불필요 |
 
 ### 9-1. 실험 에이전트와의 충돌 — 실측 결과 막지 않는다
@@ -543,7 +543,7 @@ merge:  Auto-merging autoresearch/model_training/train.py
 ## 10. 후속 문서
 
 - `README.md` 저장소 구조 절, 배포 이미지 표 갱신
-- `.claude/docs/agent-project-reference.md` 폴더 책임·소유 경계 갱신
+- `.claude/docs/agent-project-reference.md` 폴더 책임 경계 갱신
 - `.claude/docs/architecture-overview.md` 경로 갱신
 - `CLAUDE.md` 저장소 경계 절의 경로 표기 갱신
 - `docs/specs/2026-07-15-repo-restructure.md` 결정 3에 대체 표기 추가

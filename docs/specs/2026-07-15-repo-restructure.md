@@ -2,11 +2,11 @@
 
 - 날짜: 2026-07-15
 - 이슈: #149
-- 상태: 1단계(문서 통합·잔재 정리) 구현 완료, 2단계(`src/` 패키지 통합)는 팀 합의 대기
+- 상태: 1단계(문서 통합·잔재 정리) 구현 완료, 2단계(`src/` 패키지 통합)는 기술적 전제 확인 대기
 
 ## 배경
 
-팀 4명이 기능(도메인)별로 병렬 작업하면서 두 가지 구조 문제가 누적되었다.
+과거 팀 운영 시점에 기능(도메인)별로 병렬 작업하면서 두 가지 구조 문제가 누적되었다.
 
 1. **문서 분산** — 문서가 6곳에 흩어져 있었다: `docs/` 루트 평면 나열,
    과거 체계(`docs/superpowers/{specs,plans}`)와 현행 체계(`docs/{specs,plans}`)의
@@ -24,7 +24,7 @@
 |---|---|
 | **유형 기반 유지 + `archive/`·`guides/` 신설 (채택)** | `adr/`·`specs/`·`plans/` 체계가 이미 CLAUDE.md에 규정되어 있어 변경 최소 |
 | 도메인 기반 재편 (`docs/training/` 등) | spec/plan 규칙과 교차축 발생, CLAUDE.md 규칙 개정 필요, 이동량 과다 |
-| Diátaxis 4분류 | 4인 내부 프로젝트에 과함 |
+| Diátaxis 4분류 | 소규모 내부 프로젝트에 과함 |
 
 확정된 구조와 수명 규칙은 [`docs/README.md`](../README.md)가 단일 출처다.
 핵심 규칙:
@@ -42,10 +42,10 @@
 - `dags/` 로컬 잔재 삭제 — #142에서 레거시 DAG 표면 제거 후 `__pycache__`만
   남아 있었다.
 - `scratchpad/`를 `.gitignore`에 추가.
-- `README.md`를 실제 진입점(구조 지도, 팀 도메인, 시작 명령, 문서 인덱스
+- `README.md`를 실제 진입점(구조 지도, 코드 영역별 책임, 시작 명령, 문서 인덱스
   링크)으로 재작성.
 
-## 결정 3 — `src/`를 `autoresearch/` 패키지로 통합 (팀 합의 후 실행)
+## 결정 3 — `src/`를 `autoresearch/` 패키지로 통합 (기술적 전제 확인 후 실행)
 
 > **대체됨 (2026-08-13)** — 이 결정은
 > [`docs/specs/2026-08-13-repository-structure-redesign.md`](2026-08-13-repository-structure-redesign.md)로
@@ -84,8 +84,7 @@ autoresearch/
 
 ### 실행 조건
 
-- Model Training / Feast Features 도메인 소유자(waieiches, hyochangsung)의
-  합의가 선행되어야 한다.
+- Model Training / Feast Features의 코드 경계와 기존 계약을 보존한다.
 - 진행 중인 학습 파이프라인 브랜치가 머지된 직후 실행해 충돌을 최소화한다.
 - 상세 체크리스트: [`docs/plans/2026-07-15-src-package-merge.md`](../archive/plans/2026-07-15-src-package-merge.md)
 
