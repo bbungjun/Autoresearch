@@ -24,7 +24,7 @@ from applications.experiment_platform.executor.results_store import (  # noqa: E
 )
 
 
-ROOT = "gs://autoresearch-503903-autoresearch-dev-experiment-results"
+ROOT = "gs://autoresearch-505505-autoresearch-dev-experiment-results"
 
 
 class _AlreadyExists(Exception):

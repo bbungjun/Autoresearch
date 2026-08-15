@@ -179,7 +179,7 @@ def test_malformed_dataset_uri_is_rejected_at_the_launcher(uri: str) -> None:
         _settings(dataset_uri=uri)
 
 
-_RESULTS_ROOT = "gs://autoresearch-503903-autoresearch-dev-experiment-results"
+_RESULTS_ROOT = "gs://autoresearch-505505-autoresearch-dev-experiment-results"
 
 
 def test_results_root_reaches_only_the_publishing_container() -> None:
