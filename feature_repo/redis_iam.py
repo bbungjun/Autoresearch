@@ -1,4 +1,17 @@
-"""Memorystore Redis Cluster IAM 인증·TLS Feast online store 어댑터."""
+"""Memorystore Redis Cluster IAM 인증·TLS Feast online store 어댑터.
+
+[파이프라인] 피처 구간 — 학습·서빙이 Feast online store(Redis)를 읽고 쓰기
+직전, Memorystore Redis Cluster 접속에 필요한 IAM 토큰 인증과 TLS를 주입하는
+구간을 담당한다.
+
+[기능] 만료 여백을 두고 GCP IAM 액세스 토큰을 갱신하는 credential provider,
+redis-py 클라이언트(standalone·cluster) 생성 시의 인증·TLS kwargs 주입, 그리고
+상류 feast 0.64.0의 online read 필드 목록 누적 버그(#9) 우회를 담당한다.
+
+[비책임] FeatureStore 생성과 CA 번들 조달(feature_repo/bootstrap.py),
+Entity·FeatureView 정의(feature_repo/feature_definitions.py), 서빙의 온라인
+피처 조회·조립 계약(applications/reranking_api/online_features.py).
+"""
 
 from __future__ import annotations
 
@@ -9,6 +22,7 @@ from typing import Any, Callable, Literal, Optional, Tuple
 
 import google.auth
 import google.auth.transport.requests
+from feast import FeatureView
 from feast.infra.online_stores.redis import (
     RedisOnlineStore,
     RedisOnlineStoreConfig,
@@ -81,6 +95,31 @@ class IAMRedisOnlineStore(RedisOnlineStore):
     """IAM token 인증과 TLS를 주입하는 RedisOnlineStore 확장."""
 
     _credential_provider: Optional[GCPIAMCredentialProvider] = None
+
+    def _generate_hset_keys_for_features(
+        self,
+        feature_view: FeatureView,
+        requested_features: Optional[list[str]] = None,
+        fv_name_override: Optional[str] = None,
+    ) -> Tuple[list[str], list[str]]:
+        """호출자의 리스트를 변형하지 않도록 복사본을 상위 구현에 넘긴다.
+
+        feast 0.64.0의 ``RedisOnlineStore._generate_hset_keys_for_features``는
+        전달받은 ``requested_features``에 ``_ts:<fv_name>``을 append 한다. feast는
+        그 리스트를 online read 호출 간 재사용하므로 항목이 요청마다 하나씩 영구
+        누적되고, HMGET이 가져오는 필드 수가 조회 엔티티 수만큼 곱해져 online read
+        지연이 누적 요청 수에 선형 비례해 무제한 증가한다(#9). 프로세스를 재시작해야만
+        회복되므로 장수명 서빙에서 특히 문제가 된다.
+
+        상위 구현은 반환한 리스트를 호출부가 다시 바인딩해 쓰므로(``online_read``),
+        복사본을 넘겨도 조회 동작은 동일하다. 상류 feast가 이 in-place 변형을 없애면
+        이 오버라이드를 제거한다.
+        """
+        return super()._generate_hset_keys_for_features(
+            feature_view,
+            list(requested_features) if requested_features else None,
+            fv_name_override=fv_name_override,
+        )
 
     def _iam_kwargs(self, config: IAMRedisOnlineStoreConfig) -> dict[str, Any]:
         if self._credential_provider is None:
