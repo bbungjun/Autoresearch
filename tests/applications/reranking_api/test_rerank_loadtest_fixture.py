@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -287,7 +289,7 @@ def test_manual_workflow_keeps_load_and_snapshot_identities_separate() -> None:
         "max_in_flight",
         "cpu_seconds",
         "rss",
-        "cfs_throttling",
+        "cfs_throttling_ratio",
     ):
         assert query_name in text
     assert ".status == \"success\"" in text
@@ -315,6 +317,122 @@ def test_manual_workflow_serializes_shared_configmaps_and_waits_for_padding() ->
     assert "padded_end=" in text
     assert "current_time=" in text
     assert 'sleep "$((padded_end - current_time))"' in text
+
+
+@_requires_active_rerank_loadtest_workflow
+def test_snapshot_reader_rejects_empty_series_and_uses_gke_cfs_periods() -> None:
+    """필수 Prometheus series 누락과 GKE CFS metric 이름 불일치를 통과시키지 않는다."""
+    text = Path(".github/workflows/rerank-loadtest.yml").read_text()
+    cfs_line = next(
+        line for line in text.splitlines() if "[cfs_throttling_ratio]=" in line
+    )
+
+    assert "data.result | length" in text
+    assert "Prometheus query returned no series" in text
+    assert "container_cpu_cfs_throttled_periods_total" in cfs_line
+    assert "container_cpu_cfs_periods_total" in cfs_line
+    assert cfs_line.count("sum by (pod, container)") == 2
+    assert "container_cpu_cfs_throttled_seconds_total" not in cfs_line
+    assert "clamp_min(" not in cfs_line
+    assert "all(.data.result[].values[];" in text
+    assert "(.value | type)" not in text
+    assert "expected_sample_count=" in text
+    assert "minimum_cfs_samples=" in text
+    assert '(.values | length) >= $minimum_samples' in text
+    assert 'queries(${#queries[@]})' in text
+    assert 'jq -e \'type == "object"\'' in text
+    assert "Prometheus response is not valid JSON" in text
+    assert 'validate_prometheus_result "$query_name" "$response_path"' in text
+    assert "snapshot_failed=0" in text
+    assert "prometheus-validation-failures.txt" in text
+    assert ".request-status" in text
+    assert ".request-stderr" in text
+    assert "if (( snapshot_failed )); then" in text
+
+
+@_requires_active_rerank_loadtest_workflow
+def test_snapshot_reader_cfs_validation_accepts_query_range_matrix() -> None:
+    """CFS 검증식은 query_range matrix의 values를 실제 jq로 판정한다."""
+    if shutil.which("jq") is None:
+        pytest.skip("jq is required to execute the workflow validation expression")
+
+    text = Path(".github/workflows/rerank-loadtest.yml").read_text()
+    workflow = yaml.safe_load(text)
+    query_step = next(
+        step
+        for job in workflow["jobs"].values()
+        for step in job["steps"]
+        if step.get("name") == "Query padded Prometheus ranges"
+    )
+    script = query_step["run"]
+    match = re.search(
+        r'''if \[\[ "\$query_name" == "cfs_throttling_ratio" \]\] && ! jq -e --argjson minimum_samples "\$minimum_cfs_samples" '\n(?P<program>.*?)\n\s*' "\$response_path"''',
+        script,
+        re.DOTALL,
+    )
+    assert match is not None, "workflow CFS jq validation block format changed; update this test"
+    jq_program = match.group("program")
+    generic_match = re.search(
+        r'''if ! jq -e '(?P<program>\s*\.status == "success".*?)\s*'\s+"\$response_path"''',
+        script,
+        re.DOTALL,
+    )
+    assert generic_match is not None, "workflow generic Prometheus jq validation block not found"
+    generic_jq_program = generic_match.group("program")
+
+    def run_jq(response: dict[str, object]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["jq", "-e", "--argjson", "minimum_samples", "2", jq_program],
+            input=json.dumps(response),
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
+    def run_generic_jq(response: dict[str, object]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["jq", "-e", generic_jq_program],
+            input=json.dumps(response),
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
+    valid = run_jq(
+        {
+            "data": {
+                "result": [
+                    {"metric": {}, "values": [[1, "0"], [2, "0.25"]]},
+                ]
+            }
+        }
+    )
+    out_of_range = run_jq(
+        {
+            "data": {
+                "result": [
+                    {"metric": {}, "values": [[1, "1.01"]]},
+                ]
+            }
+        }
+    )
+    empty_samples = run_jq(
+        {"data": {"result": [{"metric": {}, "values": []}]}}
+    )
+    non_finite = [
+        run_jq({"data": {"result": [{"metric": {}, "values": [[1, value]]}]}})
+        for value in ("NaN", "+Inf", "-Inf")
+    ]
+    empty_series = run_generic_jq(
+        {"status": "success", "data": {"result": []}}
+    )
+
+    assert valid.returncode == 0, valid.stderr
+    assert out_of_range.returncode != 0
+    assert empty_samples.returncode != 0
+    assert empty_series.returncode != 0
+    for result in non_finite:
+        assert result.returncode != 0
 
 
 @_requires_active_rerank_loadtest_workflow

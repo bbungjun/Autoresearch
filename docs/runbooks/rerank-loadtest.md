@@ -88,8 +88,32 @@ GitHub Actions artifact `rerank-loadtest-${benchmark_label}-c${candidate_count}-
   benchmark label, serving image digest, Git SHA를 확인합니다.
 - Prometheus range artifacts: 실제 파일명은
   `prometheus-${query_name}-vu-${vus}.json`입니다. `phase_p50`, `phase_p95`,
-  `outcome_rate`, `max_in_flight`, `cpu_seconds`, `rss`, `cfs_throttling` query와
-  query time range를 함께 보관합니다.
+  `outcome_rate`, `max_in_flight`, `cpu_seconds`, `rss`, `cfs_throttling_ratio`
+  query와 query time range를 함께 보관합니다.
+- Prometheus 응답은 HTTP/API `status=success`만으로 유효하다고 보지 않습니다.
+  필수 query의 `data.result`가 비어 있으면 workflow를 실패시키며, 빈 series를
+  0이나 정상 측정값으로 보고하지 않습니다.
+- `cfs_throttling_ratio`는 GKE cAdvisor의
+  `container_cpu_cfs_throttled_periods_total / container_cpu_cfs_periods_total`
+  5분 rate 비율입니다. 분자·분모를 `pod,container`별로 먼저 집계해 동일한
+  container label끼리 나눈 뒤 결과를 검증합니다. 분모를 `1`로 보정하지 않으므로
+  분모 series가 없으면 빈 결과로, 분모 rate가 0이면 `NaN`으로 남고 둘 다 snapshot
+  단계에서 실패합니다. range/step으로 계산한 예상 sample 수의 80% 이상(최소 2개)이
+  각 CFS series에 있어야 하며, 유효한 결과만 0~1 비율로 기록합니다.
+  2026-08-03 dev GKE에서 확인한 예시는
+  throttled rate `0`, period rate `3.650252529797797`, ratio `0`이었으며,
+  이는 해당 시점의 관측값이지 고정된 정상 범위의 추정값이 아닙니다.
+- PR #499 이전 run의 `prometheus-cfs_throttling-vu-*.json`은 존재하지 않는
+  `container_cpu_cfs_throttled_seconds_total` query가 `status=success`와 빈
+  `data.result`로 저장된 진단용 artifact입니다. 해당 CFS 값은 `0` 또는
+  `N/A`로 성능 비교에 사용하지 않고 `invalid; rerun required`로 기록합니다.
+- query response가 JSON이 아니면 `invalid JSON`, JSON이지만 series가 없거나
+  값이 유효 범위를 벗어나면 각각 원인을 기록합니다. 모든 VU·query를 끝까지
+  수집한 뒤 실패 목록을 `prometheus-validation-failures.txt`에 저장하고,
+  `SHA256SUMS`를 만든 다음 workflow를 실패시켜 사후 분석용 증거를 보존합니다.
+- 각 요청에는 `<response>.request-status`와 `<response>.request-stderr` sidecar가
+  함께 남습니다. 따라서 빈 JSON 파일이 정상적인 빈 series 응답인지, `kubectl
+  get --raw` 요청 자체가 실패해 생긴 파일인지 구분할 수 있습니다.
 - `SHA256SUMS`와 Job/Pod describe·log 및 Prometheus reader diagnostic이 있으면 함께
   보관합니다. artifact URL과 각 파일 또는 archive의 SHA-256을 보고서에 기록합니다.
 
@@ -109,9 +133,11 @@ range-query 원시 응답의 범주를 뜻합니다. Task 5 workflow는
 | 식별·재현 | benchmark phase, candidate count, VU, Job, UTC range, fixture/model/image digest/Git SHA/resources, artifact URL/hash, Prometheus query/time range |
 | k6 측정 | custom measurement 중앙값(`med`, p50)/p95/p99, request count, status count, error count, `RPS = custom request count / 300` |
 | Prometheus phase·outcome | phase p95, outcome rate, in-flight max |
-| 리소스 | CPU, RSS, CFS throttling, `CPU-seconds/request = CPU seconds rate / RPS` |
+| 리소스 | CPU, RSS, CFS throttling ratio (0~1), `CPU-seconds/request = CPU seconds rate / RPS` |
 
 각 행의 caption에는 Job, UTC range, fixture/model/image/SHA/resources, artifact URL/hash,
-Prometheus query/time range를 모두 적습니다. 원시 query가 없거나 성공 status가 아니면
-query 이름과 함께 `N/A`로 표시합니다. `N/A`는 개선 근거가 아니며, 측정되지 않은
-개선 수치·감소율·비용 절감 수치를 채우거나 추정해서는 안 됩니다.
+Prometheus query/time range를 모두 적습니다. 수정된 workflow에서는 원시 query가
+없거나 빈 series이면 run 자체가 실패하므로 성능 결과로 보고하지 않습니다. PR #499
+이전 artifact처럼 이미 성공으로 저장된 빈 query는 `invalid; rerun required`로
+표시합니다. `N/A` 또는 invalid는 개선 근거가 아니며, 측정되지 않은 개선
+수치·감소율·비용 절감 수치를 채우거나 추정해서는 안 됩니다.

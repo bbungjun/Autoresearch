@@ -396,8 +396,78 @@ jobs:
             [max_in_flight]='max_over_time(rerank_in_flight{namespace="autoresearch"}[5m])'
             [cpu_seconds]='sum(rate(container_cpu_usage_seconds_total{namespace="autoresearch",pod=~"autoresearch-serving-.*",container!="",container!="POD"}[5m]))'
             [rss]='sum(container_memory_rss{namespace="autoresearch",pod=~"autoresearch-serving-.*",container!="",container!="POD"})'
-            [cfs_throttling]='sum(rate(container_cpu_cfs_throttled_seconds_total{namespace="autoresearch",pod=~"autoresearch-serving-.*",container!="",container!="POD"}[5m]))'
+            [cfs_throttling_ratio]='sum by (pod, container) (rate(container_cpu_cfs_throttled_periods_total{namespace="autoresearch",pod=~"autoresearch-serving-.*",container!="",container!="POD"}[5m])) / sum by (pod, container) (rate(container_cpu_cfs_periods_total{namespace="autoresearch",pod=~"autoresearch-serving-.*",container!="",container!="POD"}[5m]))'
           )
+
+          query_names=(
+            phase_p50
+            phase_p95
+            outcome_rate
+            max_in_flight
+            cpu_seconds
+            rss
+            cfs_throttling_ratio
+          )
+          if (( ${#query_names[@]} != ${#queries[@]} )); then
+            echo "::error::query_names(${#query_names[@]}) and queries(${#queries[@]}) are out of sync"
+            exit 1
+          fi
+          declare -A query_name_set=()
+          for query_name in "${query_names[@]}"; do
+            if [[ -n ${query_name_set[$query_name]+x} ]]; then
+              echo "::error::query_names contains a duplicate: $query_name"
+              exit 1
+            fi
+            query_name_set[$query_name]=1
+            if [[ -z ${queries[$query_name]+x} ]]; then
+              echo "::error::query_names contains an unknown query: $query_name"
+              exit 1
+            fi
+          done
+          for query_name in "${!queries[@]}"; do
+            if [[ -z ${query_name_set[$query_name]+x} ]]; then
+              echo "::error::queries contains a query missing from query_names: $query_name"
+              exit 1
+            fi
+          done
+          snapshot_failed=0
+          validation_failures=()
+
+          validate_prometheus_result() {
+            local query_name="$1"
+            local response_path="$2"
+
+            if ! jq -e 'type == "object"' "$response_path" >/dev/null; then
+              echo "::error::Prometheus response is not valid JSON: $query_name ($response_path)"
+              return 1
+            fi
+            if ! jq -e '
+              .status == "success"
+              and (.data.result | type == "array")
+              and ((.data.result | length) > 0)
+            ' "$response_path" >/dev/null; then
+              echo "::error::Prometheus query returned no series: $query_name"
+              return 1
+            fi
+            if [[ "$query_name" == "cfs_throttling_ratio" ]] && ! jq -e --argjson minimum_samples "$minimum_cfs_samples" '
+              (.data.result
+                | all(.[]; ((.values | type) == "array" and (.values | length) >= $minimum_samples)))
+              and all(.data.result[].values[];
+                if type != "array"
+                  or length < 2
+                  or (.[1] | type) != "string" then
+                  false
+                else
+                  (.[1] | test("^(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?$"))
+                  and ((.[1] | tonumber) >= 0)
+                  and ((.[1] | tonumber) <= 1)
+                end
+              )
+            ' "$response_path" >/dev/null; then
+              echo "::error::CFS throttling ratio is not a finite value in [0,1]: $response_path"
+              return 1
+            fi
+          }
 
           for metadata_path in "${metadata_files[@]}"; do
             vus="$(jq -r '.vus' "$metadata_path")"
@@ -410,18 +480,48 @@ jobs:
               sleep "$((padded_end - current_time))"
             fi
             end="$padded_end"
+            expected_sample_count=$(( (end - start) / 30 + 1 ))
+            minimum_cfs_samples=$(( (expected_sample_count * 80 + 99) / 100 ))
+            if (( minimum_cfs_samples < 2 )); then
+              minimum_cfs_samples=2
+            fi
 
-            for query_name in "${!queries[@]}"; do
+            for query_name in "${query_names[@]}"; do
               query="${queries[$query_name]}"
               encoded_query="$(jq -rn --arg query "$query" '$query | @uri')"
               response_path="runner/raw/prometheus-${query_name}-vu-${vus}.json"
+              request_status_path="${response_path}.request-status"
+              request_stderr_path="${response_path}.request-stderr"
               request_path="${PROMETHEUS_SERVICE_PROXY}/api/v1/query_range?query=${encoded_query}&start=${start}&end=${end}&step=30"
-              kubectl get --raw "$request_path" > "$response_path"
-              jq -e '.status == "success"' "$response_path" >/dev/null
+              if ! kubectl get --raw "$request_path" > "$response_path" 2> "$request_stderr_path"; then
+                printf 'request=failed\n' > "$request_status_path"
+                echo "::error::Prometheus request failed: $query_name (VU $vus)"
+                validation_failures+=("VU $vus: $query_name request failed")
+                snapshot_failed=1
+                continue
+              fi
+              printf 'request=success\n' > "$request_status_path"
+              if ! validate_prometheus_result "$query_name" "$response_path"; then
+                validation_failures+=("VU $vus: $query_name validation failed")
+                snapshot_failed=1
+              fi
             done
           done
 
-          sha256sum runner/raw/*.json > runner/raw/SHA256SUMS
+          if (( snapshot_failed )); then
+            printf '%s\n' "${validation_failures[@]}" \
+              > runner/raw/prometheus-validation-failures.txt
+          fi
+          raw_files=(runner/raw/*.json)
+          raw_files+=(runner/raw/*.request-status runner/raw/*.request-stderr)
+          if [[ -f runner/raw/prometheus-validation-failures.txt ]]; then
+            raw_files+=(runner/raw/prometheus-validation-failures.txt)
+          fi
+          sha256sum "${raw_files[@]}" > runner/raw/SHA256SUMS
+          if (( snapshot_failed )); then
+            echo "::error::Prometheus snapshot validation failed; see runner/raw/prometheus-validation-failures.txt"
+            exit 1
+          fi
 
       - name: Upload raw benchmark evidence
         if: always()
