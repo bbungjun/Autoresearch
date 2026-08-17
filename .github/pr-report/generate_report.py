@@ -9,7 +9,7 @@ pr-report.yml의 analyze job에서 실행되며, PR 메타데이터·diff·파�
 
 필요 환경 변수:
   OPENROUTER_API_KEY  OpenRouter API 키
-  PR_REPORT_MODEL     모델 슬러그 (예: google/gemini-3.6-flash)
+  PR_REPORT_MODEL     모델 슬러그 (예: google/gemini-3.7-flash)
   PR_NUMBER           대상 PR 번호
   GH_TOKEN            gh CLI 인증 (Actions 기본 제공)
 

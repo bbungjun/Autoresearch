@@ -17,7 +17,7 @@ name: PR Comprehension Report
 # OPENROUTER_API_KEY 시크릿이 필요합니다.
 
 env:
-  PR_REPORT_MODEL: "google/gemini-3.6-flash"
+  PR_REPORT_MODEL: "google/gemini-3.7-flash"
 
 on:
   pull_request:
