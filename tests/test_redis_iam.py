@@ -150,3 +150,58 @@ def test_get_client_async_not_supported():
 
     with pytest.raises(NotImplementedError):
         asyncio.run(store._get_client_async(_config()))
+
+
+def test_generate_hset_keys_does_not_mutate_caller_list():
+    """반복 호출해도 호출자 리스트와 조회 필드 수가 늘지 않는다 (#9).
+
+    feast는 이 리스트를 online read 호출 간 재사용하므로, 상류처럼 in-place로
+    append하면 HMGET이 가져오는 필드가 요청마다 하나씩 영구 누적되어 서빙 지연이
+    누적 요청 수에 선형 비례해 증가한다.
+    """
+    store = redis_iam.IAMRedisOnlineStore()
+    feature_view = SimpleNamespace(name="VideoFeatureView", features=[])
+    requested = ["category_id", "view_count"]
+
+    for _ in range(5):
+        returned, hset_keys = store._generate_hset_keys_for_features(
+            feature_view, requested, fv_name_override="VideoFeatureView"
+        )
+        # 요청 피처 2개 + 타임스탬프 키 1개로 매 호출 동일해야 한다.
+        assert returned[-1] == "_ts:VideoFeatureView"
+        assert len(returned) == 3
+        assert len(hset_keys) == 3
+
+    assert requested == ["category_id", "view_count"]
+
+
+def test_generate_hset_keys_defaults_to_feature_view_features():
+    """requested_features가 없으면 FeatureView 정의에서 채우는 상위 동작을 보존한다."""
+    store = redis_iam.IAMRedisOnlineStore()
+    feature_view = SimpleNamespace(
+        name="UserStaticView",
+        features=[SimpleNamespace(name="age_group"), SimpleNamespace(name="occupation")],
+    )
+
+    returned, hset_keys = store._generate_hset_keys_for_features(feature_view)
+
+    assert returned == ["age_group", "occupation", "_ts:UserStaticView"]
+    assert len(hset_keys) == 3
+
+
+def test_upstream_still_mutates_requested_features():
+    """상류 feast가 아직 호출자 리스트를 변형하는지 확인하는 tripwire (#9).
+
+    이 테스트가 실패하면 상류가 버그를 고친 것이므로,
+    IAMRedisOnlineStore._generate_hset_keys_for_features 오버라이드를 제거한다.
+    """
+    from feast.infra.online_stores.redis import RedisOnlineStore
+
+    feature_view = SimpleNamespace(name="VideoFeatureView", features=[])
+    requested = ["category_id"]
+
+    RedisOnlineStore._generate_hset_keys_for_features(
+        RedisOnlineStore(), feature_view, requested, fv_name_override="VideoFeatureView"
+    )
+
+    assert requested == ["category_id", "_ts:VideoFeatureView"]
