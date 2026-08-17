@@ -499,3 +499,57 @@ def test_openrouter_success_detail_logs_are_suppressed_for_large_runs(
             generator.generate(_user(), _videos())
 
     assert caplog.records == []
+
+
+def _empty_choices(code=502, provider="TestProvider", message="upstream detail"):
+    """choices 없이 error 본문만 담아 200으로 돌아온 OpenRouter 응답."""
+
+    return SimpleNamespace(
+        choices=None,
+        model_extra={
+            "error": {
+                "code": code,
+                "message": message,
+                "metadata": {"provider_name": provider},
+            }
+        },
+    )
+
+
+def test_response_without_choices_raises_error_carrying_provider_code(monkeypatch):
+    client = _FakeClient([_empty_choices(code=502, provider="TestProvider")])
+    monkeypatch.setattr("openai.OpenAI", lambda **kwargs: client)
+    generator = OpenRouterActionLogGenerator(api_key="test-api-key")
+
+    with pytest.raises(OpenRouterRequestError) as excinfo:
+        generator.generate(_user(), _videos())
+
+    error = excinfo.value
+    assert error.status == 502
+    assert error.error_type == "empty_choices"
+    assert error.provider == "TestProvider"
+
+
+def test_empty_choices_error_does_not_leak_upstream_message(monkeypatch):
+    client = _FakeClient([_empty_choices(message="unsafe upstream detail")])
+    monkeypatch.setattr("openai.OpenAI", lambda **kwargs: client)
+    generator = OpenRouterActionLogGenerator(api_key="test-api-key")
+
+    with pytest.raises(OpenRouterRequestError) as excinfo:
+        generator.generate(_user(), _videos())
+
+    assert "unsafe upstream detail" not in str(excinfo.value)
+
+
+def test_empty_choices_list_without_error_payload_still_raises(monkeypatch):
+    client = _FakeClient([SimpleNamespace(choices=[], provider="FallbackProvider")])
+    monkeypatch.setattr("openai.OpenAI", lambda **kwargs: client)
+    generator = OpenRouterActionLogGenerator(api_key="test-api-key")
+
+    with pytest.raises(OpenRouterRequestError) as excinfo:
+        generator.generate(_user(), _videos())
+
+    error = excinfo.value
+    assert error.status is None
+    assert error.error_type == "empty_choices"
+    assert error.provider == "FallbackProvider"

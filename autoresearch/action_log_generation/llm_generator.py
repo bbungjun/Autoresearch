@@ -2,6 +2,10 @@
 
 역할 분담: LLM은 실제 title/description을 읽고 후보별 click_propensity/watch_fraction만
 판단한다. would_like 파생·per-slate 클릭 선정(click_threshold)·timestamp·제약 강제는 pipeline(코드).
+
+실패 계약: 재시도 소진과 choices 없는 200 응답(provider가 본문에 error를 실어 보낸 경우)을
+모두 `OpenRouterRequestError`로 승격한다. status·error_type·provider·attempts만 보존하고
+upstream message와 요청/응답 본문은 남기지 않는다.
 """
 import hashlib
 import json
@@ -394,6 +398,44 @@ class OpenRouterActionLogGenerator:
         return "unknown"
 
     @staticmethod
+    def _response_error_payload(response: object) -> dict:
+        """200 응답 본문에 실려 오는 OpenRouter error 객체를 꺼낸다."""
+
+        error = getattr(response, "error", None)
+        if not isinstance(error, dict):
+            model_extra = getattr(response, "model_extra", None)
+            if isinstance(model_extra, dict):
+                error = model_extra.get("error")
+        return error if isinstance(error, dict) else {}
+
+    @classmethod
+    def _empty_choices_error(
+        cls,
+        response: object,
+        *,
+        attempts: int,
+    ) -> "OpenRouterRequestError":
+        """choices 없는 응답을 구조화 필드만 남긴 예외로 승격한다.
+
+        provider가 200 본문에 error를 실어 보내면 code와 provider 이름만 취하고
+        upstream message는 보존하지 않는다(기존 sanitize 규칙과 동일).
+        """
+
+        payload = cls._response_error_payload(response)
+        raw_code = payload.get("code")
+        status = raw_code if isinstance(raw_code, int) else None
+        metadata = payload.get("metadata")
+        provider = None
+        if isinstance(metadata, dict):
+            provider = metadata.get("provider_name")
+        return OpenRouterRequestError(
+            status=status,
+            error_type="empty_choices",
+            provider=str(provider) if provider else cls._response_provider(response),
+            attempts=attempts,
+        )
+
+    @staticmethod
     def _usage_fields(response: object) -> dict[str, int | float]:
         """응답 본문 없이 token/reasoning/cost 메타데이터만 반환한다."""
 
@@ -622,6 +664,8 @@ class OpenRouterActionLogGenerator:
                 )
 
         assert response is not None
+        if not getattr(response, "choices", None):
+            raise self._empty_choices_error(response, attempts=attempts)
         emit_action_log_event(
             logger,
             logging.INFO,
