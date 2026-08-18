@@ -17,6 +17,24 @@ on:
         options:
           - baseline
           - optimized
+      load_mode:
+        description: "closed=동시 VU 고정(개선 전후 A/B), open=도착률 고정(한계·안정성 검증)"
+        type: choice
+        required: true
+        default: closed
+        options:
+          - closed
+          - open
+      arrival_rates:
+        description: "open 모드에서 순서대로 인가할 초당 도착률 목록 (공백 구분, 예: 20 40 80 160)"
+        type: string
+        required: false
+        default: ""
+      max_vus:
+        description: "open 모드 부하 생성기 VU 상한 (미지정 시 도착률의 4배)"
+        type: string
+        required: false
+        default: ""
       fixture_version:
         description: "materialize 완료를 확인한 fixture 버전"
         type: string
@@ -51,6 +69,9 @@ jobs:
       LOADTEST_NAMESPACE: loadtest
       CANDIDATE_COUNT: ${{ inputs.candidate_count }}
       BENCHMARK_LABEL: ${{ inputs.benchmark_label }}
+      LOAD_MODE: ${{ inputs.load_mode }}
+      ARRIVAL_RATES: ${{ inputs.arrival_rates }}
+      MAX_VUS: ${{ inputs.max_vus }}
       FIXTURE_VERSION: ${{ inputs.fixture_version }}
       SERVING_IMAGE_REF: ${{ inputs.serving_image_ref }}
       SERVING_GIT_SHA: ${{ inputs.serving_git_sha }}
@@ -79,6 +100,29 @@ jobs:
             echo "::error::fixture_version contains unsupported characters."
             exit 1
           fi
+          # 두 모드의 입력은 서로 배타적이다. 잘못 조합하면 실제로 인가된 부하가
+          # 무엇이었는지 사후에 알 수 없으므로 실행 전에 막는다.
+          if [[ "$LOAD_MODE" == "open" ]]; then
+            if [[ -z "${ARRIVAL_RATES// }" ]]; then
+              echo "::error::arrival_rates is required when load_mode is open."
+              exit 1
+            fi
+            for rate in $ARRIVAL_RATES; do
+              if [[ ! "$rate" =~ ^[1-9][0-9]{0,3}$ ]] || (( rate > 2000 )); then
+                echo "::error::arrival_rates must be integers between 1 and 2000; got '$rate'."
+                exit 1
+              fi
+            done
+            if [[ -n "${MAX_VUS// }" && ! "$MAX_VUS" =~ ^[1-9][0-9]{0,4}$ ]]; then
+              echo "::error::max_vus must be a positive integer."
+              exit 1
+            fi
+          else
+            if [[ -n "${ARRIVAL_RATES// }" || -n "${MAX_VUS// }" ]]; then
+              echo "::error::arrival_rates and max_vus apply only when load_mode is open."
+              exit 1
+            fi
+          fi
 
       - name: Authenticate load-test runner with Workload Identity Federation
         uses: google-github-actions/auth@v2
@@ -105,18 +149,18 @@ jobs:
 
           capture_diagnostics() {
             local job_name="$1"
-            local vus="$2"
+            local step="$2"
             local pod_name
             kubectl describe job "$job_name" -n "$LOADTEST_NAMESPACE" \
-              > "runner/raw/job-describe-vu-${vus}.txt" 2>&1 || true
+              > "runner/raw/job-describe-step-${step}.txt" 2>&1 || true
             pod_name="$(kubectl get pods -n "$LOADTEST_NAMESPACE" \
               -l "job-name=${job_name}" -o jsonpath='{.items[0].metadata.name}' \
               2>/dev/null || true)"
             if [[ -n "$pod_name" ]]; then
               kubectl describe pod "$pod_name" -n "$LOADTEST_NAMESPACE" \
-                > "runner/raw/pod-describe-vu-${vus}.txt" 2>&1 || true
+                > "runner/raw/pod-describe-step-${step}.txt" 2>&1 || true
               kubectl logs "$pod_name" -n "$LOADTEST_NAMESPACE" \
-                > "runner/raw/pod-log-vu-${vus}.txt" 2>&1 || true
+                > "runner/raw/pod-log-step-${step}.txt" 2>&1 || true
             fi
           }
 
@@ -126,7 +170,7 @@ jobs:
             local creation_timestamp="$3"
             local completion_timestamp="$4"
             local job_name="$5"
-            local vus="$6"
+            local step="$6"
             local settings_config_map="$7"
             jq -n \
               --arg status "$status" \
@@ -134,7 +178,10 @@ jobs:
               --arg creation_timestamp "$creation_timestamp" \
               --arg completion_timestamp "$completion_timestamp" \
               --argjson candidate_count "$CANDIDATE_COUNT" \
-              --argjson vus "$vus" \
+              --argjson step "$step" \
+              --arg load_mode "$LOAD_MODE" \
+              --argjson vus "$([[ "$LOAD_MODE" == open ]] && echo null || echo "$step")" \
+              --argjson arrival_rate "$([[ "$LOAD_MODE" == open ]] && echo "$step" || echo null)" \
               --arg fixture_version "$FIXTURE_VERSION" \
               --arg benchmark_label "$BENCHMARK_LABEL" \
               --arg serving_image_ref "$SERVING_IMAGE_REF" \
@@ -147,14 +194,17 @@ jobs:
                 creation_timestamp: $creation_timestamp,
                 completion_timestamp: $completion_timestamp,
                 candidate_count: $candidate_count,
+                step: $step,
+                load_mode: $load_mode,
                 vus: $vus,
+                arrival_rate: $arrival_rate,
                 fixture_version: $fixture_version,
                 benchmark_label: $benchmark_label,
                 serving_image_ref: $serving_image_ref,
                 serving_git_sha: $serving_git_sha,
                 job_name: $job_name,
                 settings_config_map: $settings_config_map
-              }' > "runner/raw/metadata-vu-${vus}.json"
+              }' > "runner/raw/metadata-step-${step}.json"
           }
 
           kubectl create configmap rerank-loadtest-script \
@@ -165,13 +215,37 @@ jobs:
                 app.kubernetes.io/part-of=rerank-loadtest -o yaml \
             | kubectl apply -f -
 
-          for vus in 1 2 4 8; do
-            settings_config_map="rerank-loadtest-settings-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${vus}"
+          # 폐루프는 동시 VU를, 개루프는 초당 도착률을 훑는다. 어느 쪽이든 훑는 값
+          # 하나가 한 step이고, 그 값이 이 실행의 모든 raw 파일 키가 된다.
+          if [[ "$LOAD_MODE" == "open" ]]; then
+            read -r -a sweep_steps <<< "$ARRIVAL_RATES"
+          else
+            sweep_steps=(1 2 4 8)
+          fi
+
+          for step in "${sweep_steps[@]}"; do
+            if [[ "$LOAD_MODE" == "open" ]]; then
+              step_label="rate ${step}/s"
+              mode_settings=(
+                --from-literal=LOAD_MODE=open
+                --from-literal=ARRIVAL_RATE="$step"
+              )
+              if [[ -n "${MAX_VUS// }" ]]; then
+                mode_settings+=(--from-literal=MAX_VUS="$MAX_VUS")
+              fi
+            else
+              step_label="VU ${step}"
+              mode_settings=(
+                --from-literal=LOAD_MODE=closed
+                --from-literal=VUS="$step"
+              )
+            fi
+            settings_config_map="rerank-loadtest-settings-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${step}"
             kubectl create configmap "$settings_config_map" \
               -n "$LOADTEST_NAMESPACE" \
               --from-literal=BASE_URL=http://autoresearch-serving.autoresearch.svc.cluster.local:8000 \
               --from-literal=CANDIDATE_COUNT="$CANDIDATE_COUNT" \
-              --from-literal=VUS="$vus" \
+              "${mode_settings[@]}" \
               --from-literal=WARMUP_SECONDS=60 \
               --from-literal=MEASURE_SECONDS=300 \
               --from-literal=FIXTURE_VERSION="$FIXTURE_VERSION" \
@@ -183,7 +257,7 @@ jobs:
                     | .immutable = true' \
               | kubectl create -f -
 
-            job_manifest="runner/job-vu-${vus}.yaml"
+            job_manifest="runner/job-step-${step}.yaml"
             sed "s/rerank-loadtest-settings-placeholder/${settings_config_map}/g" \
               deployment/loadtest/rerank-k6-job.yaml > "$job_manifest"
             if grep -q "rerank-loadtest-settings-placeholder" "$job_manifest"; then
@@ -243,10 +317,10 @@ jobs:
               completion_timestamp="$(date --utc +'%Y-%m-%dT%H:%M:%SZ')"
             fi
             write_metadata "$result" "$result" "$creation_timestamp" \
-              "$completion_timestamp" "$job_name" "$vus" "$settings_config_map"
+              "$completion_timestamp" "$job_name" "$step" "$settings_config_map"
 
             if [[ "$result" != "complete" ]]; then
-              capture_diagnostics "$job_name" "$vus"
+              capture_diagnostics "$job_name" "$step"
               echo "::error::Job $job_name ended with state $result."
               exit 1
             fi
@@ -256,25 +330,32 @@ jobs:
               2>/dev/null || true)"
             if [[ -z "$pod_name" ]]; then
               write_metadata "pod_not_found" "complete" "$creation_timestamp" \
-                "$completion_timestamp" "$job_name" "$vus" "$settings_config_map"
-              capture_diagnostics "$job_name" "$vus"
+                "$completion_timestamp" "$job_name" "$step" "$settings_config_map"
+              capture_diagnostics "$job_name" "$step"
               echo "::error::Pod for Job $job_name was not found."
               exit 1
             fi
             summary_path="runner/raw/k6-summary-${job_name}.json"
             if ! kubectl logs "$pod_name" -n "$LOADTEST_NAMESPACE" > "$summary_path"; then
               write_metadata "summary_retrieval_failed" "complete" "$creation_timestamp" \
-                "$completion_timestamp" "$job_name" "$vus" "$settings_config_map"
-              capture_diagnostics "$job_name" "$vus"
+                "$completion_timestamp" "$job_name" "$step" "$settings_config_map"
+              capture_diagnostics "$job_name" "$step"
               echo "::error::Could not retrieve summary for Job $job_name."
               exit 1
             fi
 
             if ! jq -e \
-              --argjson expected_vus "$vus" \
+              --argjson expected_step "$step" \
+              --arg expected_load_mode "$LOAD_MODE" \
               --argjson expected_candidate_count "$CANDIDATE_COUNT" \
               --arg expected_fixture_version "$FIXTURE_VERSION" '
-              .metadata.vus == $expected_vus
+              .metadata.load_mode == $expected_load_mode
+              and (
+                if $expected_load_mode == "open"
+                then .metadata.arrival_rate == $expected_step
+                else .metadata.vus == $expected_step
+                end
+              )
               and .metadata.candidate_count == $expected_candidate_count
               and .metadata.fixture_version == $expected_fixture_version
               and (
@@ -283,14 +364,40 @@ jobs:
               )
             ' "$summary_path" >/dev/null; then
               write_metadata "measurement_gate_failed" "complete" "$creation_timestamp" \
-                "$completion_timestamp" "$job_name" "$vus" "$settings_config_map"
-              capture_diagnostics "$job_name" "$vus"
+                "$completion_timestamp" "$job_name" "$step" "$settings_config_map"
+              capture_diagnostics "$job_name" "$step"
               echo "::error::Summary provenance is invalid or failure rate is at least 1%."
               exit 1
             fi
 
+            # 개루프에서 부하 생성기가 목표 도착률을 못 지키면, 그 측정은 서버가
+            # 아니라 생성기의 한계를 잰 것이다. 서버 결과로 보고되면 용량을 실제보다
+            # 낮게 단정하게 되므로 실패가 아니라 무효로 분류하고, 더 높은 도착률로
+            # 진행하지 않는다. 대응은 max_vus를 올려 재실행하는 것이다.
+            if [[ "$LOAD_MODE" == "open" ]]; then
+              dropped="$(jq -r '
+                .data.metrics["dropped_iterations{scenario:measure}"].values.count
+                // "missing"' "$summary_path")"
+              if [[ "$dropped" == "missing" ]]; then
+                write_metadata "dropped_iterations_missing" "complete" "$creation_timestamp" \
+                  "$completion_timestamp" "$job_name" "$step" "$settings_config_map"
+                capture_diagnostics "$job_name" "$step"
+                echo "::error::Measured dropped_iterations is absent from the summary ($step_label)."
+                exit 1
+              fi
+              if (( $(printf '%.0f' "$dropped") > 0 )); then
+                write_metadata "invalid_generator_limited" "complete" "$creation_timestamp" \
+                  "$completion_timestamp" "$job_name" "$step" "$settings_config_map"
+                capture_diagnostics "$job_name" "$step"
+                echo "::error::Generator could not sustain the arrival rate ($step_label);" \
+                  "dropped_iterations=$dropped. This measures the load generator, not the" \
+                  "server: record it as 'invalid; rerun required' and raise max_vus."
+                exit 1
+              fi
+            fi
+
             write_metadata "succeeded" "complete" "$creation_timestamp" \
-              "$completion_timestamp" "$job_name" "$vus" "$settings_config_map"
+              "$completion_timestamp" "$job_name" "$step" "$settings_config_map"
           done
 
       - name: Upload runner evidence
@@ -315,6 +422,8 @@ jobs:
       # infra의 kube-prometheus-stack releaseName에서 도출한 Service proxy다.
       # live Service/port 존재 검증은 별도 infra 배포 게이트가 담당한다.
       PROMETHEUS_SERVICE_PROXY: /api/v1/namespaces/monitoring/services/http:kube-prometheus-stack-prometheus:9090/proxy
+      LOAD_MODE: ${{ inputs.load_mode }}
+      ARRIVAL_RATES: ${{ inputs.arrival_rates }}
 
     steps:
       - name: Download runner evidence
@@ -331,10 +440,19 @@ jobs:
           set -euo pipefail
           mkdir -p runner/raw
           shopt -s nullglob
-          metadata_files=(runner/raw/metadata-vu-*.json)
+          metadata_files=(runner/raw/metadata-step-*.json)
           metadata_count=${#metadata_files[@]}
-          if (( metadata_count > 4 )); then
-            echo "::error::Expected at most four VU metadata files, found $metadata_count."
+          # 상한은 이 실행이 선언한 sweep 길이다. 폐루프는 VU 1/2/4/8로 고정이고,
+          # 개루프는 운영자가 준 도착률 개수다. 초과분은 이전 실행의 잔재이거나
+          # 예상 밖 산출물이므로, 조용히 섞어 보고하지 않고 실패시킨다.
+          if [[ "$LOAD_MODE" == "open" ]]; then
+            read -r -a expected_steps <<< "$ARRIVAL_RATES"
+            expected_step_count=${#expected_steps[@]}
+          else
+            expected_step_count=4
+          fi
+          if (( metadata_count > expected_step_count )); then
+            echo "::error::Expected at most $expected_step_count step metadata files, found $metadata_count."
             exit 1
           fi
 
@@ -382,7 +500,7 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           metadata_files=()
-          for metadata_path in runner/raw/metadata-vu-*.json; do
+          for metadata_path in runner/raw/metadata-step-*.json; do
             if jq -e 'select(.job_result == "complete")' \
               "$metadata_path" >/dev/null; then
               metadata_files+=("$metadata_path")
@@ -470,7 +588,14 @@ jobs:
           }
 
           for metadata_path in "${metadata_files[@]}"; do
-            vus="$(jq -r '.vus' "$metadata_path")"
+            step="$(jq -r '.step' "$metadata_path")"
+            # 진단 메시지가 어느 부하 조건의 것인지 모드까지 드러내야 사후에
+            # 개루프 결과를 폐루프 결과로 오독하지 않는다.
+            if [[ "$(jq -r '.load_mode' "$metadata_path")" == "open" ]]; then
+              step_label="rate ${step}/s"
+            else
+              step_label="VU ${step}"
+            fi
             creation_timestamp="$(jq -er '.creation_timestamp' "$metadata_path")"
             completion_timestamp="$(jq -er '.completion_timestamp' "$metadata_path")"
             start="$(date --utc --date="$creation_timestamp - 30 seconds" +%s)"
@@ -489,20 +614,20 @@ jobs:
             for query_name in "${query_names[@]}"; do
               query="${queries[$query_name]}"
               encoded_query="$(jq -rn --arg query "$query" '$query | @uri')"
-              response_path="runner/raw/prometheus-${query_name}-vu-${vus}.json"
+              response_path="runner/raw/prometheus-${query_name}-step-${step}.json"
               request_status_path="${response_path}.request-status"
               request_stderr_path="${response_path}.request-stderr"
               request_path="${PROMETHEUS_SERVICE_PROXY}/api/v1/query_range?query=${encoded_query}&start=${start}&end=${end}&step=30"
               if ! kubectl get --raw "$request_path" > "$response_path" 2> "$request_stderr_path"; then
                 printf 'request=failed\n' > "$request_status_path"
-                echo "::error::Prometheus request failed: $query_name (VU $vus)"
-                validation_failures+=("VU $vus: $query_name request failed")
+                echo "::error::Prometheus request failed: $query_name ($step_label)"
+                validation_failures+=("$step_label: $query_name request failed")
                 snapshot_failed=1
                 continue
               fi
               printf 'request=success\n' > "$request_status_path"
               if ! validate_prometheus_result "$query_name" "$response_path"; then
-                validation_failures+=("VU $vus: $query_name validation failed")
+                validation_failures+=("$step_label: $query_name validation failed")
                 snapshot_failed=1
               fi
             done

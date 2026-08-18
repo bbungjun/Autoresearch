@@ -201,6 +201,43 @@ def test_k6_summary_includes_p99_for_exact_latency_reporting() -> None:
     assert "p(99)" in trend_stats
 
 
+def test_k6_script_offers_open_loop_mode_for_saturation_measurement() -> None:
+    """개루프 모드가 있어야 도착률이 처리 용량을 넘는 상태를 만들 수 있다.
+
+    폐루프(`constant-vus`)는 VU가 응답을 받아야 다음 요청을 보내므로 동시 요청 수가
+    VU 수를 넘지 못한다. 그래서 대기열 무한 증가·부하 차단 부재처럼 과부하에서만
+    드러나는 결함을 관측할 수 없고, 측정이 "정상"이라는 잘못된 합격을 낸다.
+    """
+    script = Path("applications/reranking_api/loadtest/rerank.js").read_text()
+
+    assert 'executor: "constant-arrival-rate"' in script
+    assert "ARRIVAL_RATE" in script
+    assert "preAllocatedVUs" in script and "maxVUs" in script
+    # 폐루프 경로는 개선 전후 A/B 비교용으로 계속 유효하므로 제거하지 않는다.
+    assert 'executor: "constant-vus"' in script
+
+
+def test_k6_script_exposes_measure_scoped_dropped_iterations() -> None:
+    """생성기 한계는 측정 구간에서만, 서버 실패와 구분되어 드러나야 한다.
+
+    warmup까지 합산하면 측정 구간의 drop 여부를 읽을 수 없다. 또 drop을 k6 threshold
+    실패로 만들면 서버가 무너진 것과 구분되지 않으므로, 노출만 하고 판정은 workflow가
+    한다.
+    """
+    script = Path("applications/reranking_api/loadtest/rerank.js").read_text()
+
+    assert '"dropped_iterations{scenario:measure}"' in script
+    assert 'thresholds["dropped_iterations{scenario:measure}"] = ["count>=0"]' in script
+
+
+def test_k6_summary_metadata_identifies_the_load_mode() -> None:
+    """개루프와 폐루프 결과를 사후에 혼동하지 않도록 모드와 도착률을 남긴다."""
+    script = Path("applications/reranking_api/loadtest/rerank.js").read_text()
+
+    for key in ("load_mode", "arrival_rate", "pre_allocated_vus", "max_vus"):
+        assert f"{key}:" in script
+
+
 def test_k6_job_has_no_identity_or_token_mount() -> None:
     """k6 Job은 전용 KSA만 쓰고 토큰·Secret·권한 상승을 허용하지 않는다."""
     text = Path("deployment/loadtest/rerank-k6-job.yaml").read_text()
@@ -255,7 +292,8 @@ def test_manual_workflow_keeps_load_and_snapshot_identities_separate() -> None:
     assert "- baseline" in text and "- optimized" in text
     assert "fixture_version:" in text and "default: rerank-v1" in text
     assert "serving_image_ref:" in text and "serving_git_sha:" in text
-    assert "for vus in 1 2 4 8" in text
+    assert "sweep_steps=(1 2 4 8)" in text
+    assert 'read -r -a sweep_steps <<< "$ARRIVAL_RATES"' in text
     assert ".data.metrics.rerank_measure_failure.values.rate" in text
     assert "< 0.01" in text
     assert "RERANK_LOADTEST_RUNNER_SA" in text
@@ -436,12 +474,29 @@ def test_snapshot_reader_cfs_validation_accepts_query_range_matrix() -> None:
 
 
 @_requires_active_rerank_loadtest_workflow
+def test_workflow_classifies_generator_limited_open_loop_runs_as_invalid() -> None:
+    """개루프에서 생성기가 도착률을 못 지킨 측정은 서버 결과로 보고되면 안 된다.
+
+    dropped_iterations가 있으면 그 구간은 서버가 아니라 부하 생성기의 한계를 잰
+    것이다. 이를 서버 결과로 받아들이면 용량을 실제보다 낮게 단정하게 되므로,
+    무효로 표시하고 더 높은 도착률로 진행하지 않는다.
+    """
+    workflow = Path(".github/workflows/rerank-loadtest.yml").read_text()
+
+    assert '.data.metrics["dropped_iterations{scenario:measure}"].values.count' in workflow
+    assert "invalid_generator_limited" in workflow
+    # 값이 아예 없으면 0으로 읽어 통과시키지 않는다.
+    assert "dropped_iterations_missing" in workflow
+    assert "invalid; rerun required" in workflow
+
+
+@_requires_active_rerank_loadtest_workflow
 def test_manual_workflow_preserves_runner_artifact_layout_for_reader() -> None:
     """runner upload, reader download·glob, 최종 upload는 같은 raw 경로를 사용한다."""
     text = Path(".github/workflows/rerank-loadtest.yml").read_text()
 
     assert text.count("path: runner/raw") == 3
-    assert "metadata_files=(runner/raw/metadata-vu-*.json)" in text
+    assert "metadata_files=(runner/raw/metadata-step-*.json)" in text
     assert 'response_path="runner/raw/prometheus-' in text
 
 
@@ -477,14 +532,16 @@ def test_each_vu_binds_one_versioned_immutable_settings_configmap() -> None:
 
     assert (
         'settings_config_map="rerank-loadtest-settings-'
-        '${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${vus}"' in workflow
+        '${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${step}"' in workflow
     )
     assert "immutable = true" in workflow
     assert "job_manifest=" in workflow
     assert "rerank-loadtest-settings-placeholder" in workflow
     assert manifest.count("name: rerank-loadtest-settings-placeholder") == 2
     assert 'settings_config_map: $settings_config_map' in workflow
-    assert ".metadata.vus == $expected_vus" in workflow
+    assert ".metadata.load_mode == $expected_load_mode" in workflow
+    assert ".metadata.arrival_rate == $expected_step" in workflow
+    assert ".metadata.vus == $expected_step" in workflow
 
 
 @_requires_active_rerank_loadtest_workflow
@@ -517,7 +574,11 @@ def test_snapshot_reader_exports_partial_completed_jobs_after_runner_failure() -
     assert "needs: loadtest-runner" in reader
     assert "if: ${{ always() }}" in reader
     assert "continue-on-error: true" in reader
-    assert "metadata_count" in reader and "metadata_count > 4" in reader
+    assert "metadata_count" in reader
+    # 상한은 고정 4가 아니라 이 실행이 선언한 sweep 길이여야 한다. 개루프는
+    # 도착률 개수가 실행마다 다르므로 4로 고정하면 정상 증거를 실패로 만든다.
+    assert "metadata_count > expected_step_count" in reader
+    assert "expected_step_count=4" in reader
     assert "metadata_count -ne 4" not in reader
     assert 'select(.job_result == "complete")' in reader
     assert "No completed Job metadata" in reader

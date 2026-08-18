@@ -17,7 +17,10 @@ HTTP 200, 후보 수·입력 순서, 단일 비어 있지 않은 model ID, 유�
 | --- | --- | --- |
 | `BASE_URL` | ClusterIP serving URL | `/rerank` 대상 |
 | `CANDIDATE_COUNT` | `24` | `24` 또는 `200` |
-| `VUS` | `1` | `1`, `2`, `4`, `8` 중 하나 |
+| `LOAD_MODE` | `closed` | `closed`(동시 VU 고정) 또는 `open`(도착률 고정) |
+| `VUS` | `1` | `closed`에서 `1`, `2`, `4`, `8` 중 하나 |
+| `ARRIVAL_RATE` | 없음 | `open`에서 필수. 초당 도착률, 1~2000 |
+| `MAX_VUS` | 도착률의 4배 | `open`의 생성기 VU 상한 |
 | `WARMUP_SECONDS` | `60` | 양의 정수, 결과 제외 |
 | `MEASURE_SECONDS` | `300` | 양의 정수, 측정 구간 |
 | `FIXTURE_VERSION` | `rerank-v1` | summary 메타데이터 |
@@ -36,6 +39,23 @@ summary에서 상태별 request count와 seconds 단위 중앙값(`med`, p50)/p9
 `rerank_measure_duration_seconds`뿐 아니라 `http_req_duration` 같은 내장 Trend에도
 동일한 통계 키가 보존됩니다. 이는 raw artifact의 진단 범위를 넓히기 위한 의도된
 동작이며, 오류율 threshold는 `rerank_measure_failure < 0.01`입니다.
+
+## 폐루프와 개루프
+
+기본 `closed`는 `constant-vus`로 동시 VU를 고정합니다. VU가 응답을 받아야 다음 요청을
+보내므로 서버 안의 동시 요청 수가 VU 수를 넘지 못하고, 도착률이 곧 처리량이 됩니다.
+따라서 **과부하 상태를 만들 수 없어** 대기열 무한 증가·부하 차단 부재 같은 결함을
+관측하지 못합니다. 같은 동시성에서의 개선 전후 A/B 비교에만 씁니다.
+
+`open`은 `constant-arrival-rate`로 초당 도착률을 고정합니다. 서버가 느려져도 부하가
+줄지 않으므로 처리 용량을 넘기는 상태를 실제로 만들 수 있습니다. 한계점과 과부하
+거동을 재려면 이 모드를 씁니다.
+
+`open`에서 부하 생성기가 목표 도착률을 못 지키면 k6가 `dropped_iterations`로 셉니다.
+그 측정은 서버가 아니라 생성기의 한계를 잰 것이므로, warmup을 섞지 않도록
+`dropped_iterations{scenario:measure}` submetric으로 노출합니다. 이 값에 대한 threshold는
+항상 참이며 **판정은 workflow가 합니다** — 생성기 한계를 k6 실패로 만들면 서버가
+무너진 것과 구분되지 않기 때문입니다.
 
 ## 정적·구문 검증
 

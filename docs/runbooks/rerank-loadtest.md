@@ -1,9 +1,27 @@
 # 리랭킹 서빙 부하측정 운영 절차
 
-이 문서는 GKE에서 리랭킹 API의 기준선과 단일 개선안을 비교할 때 사용하는
-운영 절차입니다. 대상은 실제 Feast online store와 `autoresearch-serving`입니다.
-fixture 준비는 이 저장소가, materialize는 Autoresearch-airflow가, GKE 권한과
-네트워크는 Autoresearch-infra가 담당합니다.
+이 문서는 GKE에서 리랭킹 API를 측정할 때 사용하는 운영 절차입니다. 대상은 실제
+Feast online store와 `autoresearch-serving`입니다. fixture 준비는 이 저장소가,
+materialize는 Autoresearch-airflow가, GKE 권한과 네트워크는 Autoresearch-infra가
+담당합니다.
+
+## 0. 두 모드 중 무엇을 쓸지 먼저 정합니다
+
+`load_mode` 입력이 측정이 답할 수 있는 질문을 결정합니다. **잘못 고르면 측정은
+성공하지만 결론이 틀립니다.**
+
+| 모드 | 부하 방식 | 답할 수 있는 질문 | 답할 수 없는 질문 |
+| --- | --- | --- | --- |
+| `closed` | 동시 VU 고정 (`constant-vus`) | 같은 동시성에서 개선 전후가 나아졌는가 | 용량 한계, 과부하 거동 |
+| `open` | 초당 도착률 고정 (`constant-arrival-rate`) | 한계점은 어디인가, 넘으면 어떻게 실패하는가 | — |
+
+폐루프는 VU가 응답을 받아야 다음 요청을 보내므로 **동시 요청 수가 VU 수를 넘지
+못합니다.** 도착률이 곧 처리량이 되어 과부하 상태를 만들 수 없고, 대기열 무한 증가나
+부하 차단 부재처럼 **과부하에서만 드러나는 결함을 관측하지 못합니다.** 폐루프로
+한계·안정성을 판정하면 "오류율 0%, p95 양호"라는 잘못된 합격이 나옵니다.
+
+실제 유저는 서로 기다려 주지 않으므로 온라인 서빙의 도착 과정은 개루프입니다.
+**트래픽이 걸렸을 때 안정적으로 운영되는지 검증하려면 `open`을 씁니다.**
 
 ## 실행 전 확인
 
@@ -64,30 +82,64 @@ workflow **Rerank serving load test**를 `main`에서 수동 실행합니다. �
 ConfigMap 때문에 직렬화됩니다. 각 실행에는 후보 수 하나와 benchmark label 하나만
 입력합니다.
 
-1. baseline에서 candidate count `24`를 실행하고, 이어서 `200`을 실행합니다.
-   각 실행은 VU `1 → 2 → 4 → 8`을 순서대로 실행합니다.
-2. 각 VU Job은 warmup 60초를 결과에서 제외하고, 측정 300초만 집계합니다.
+1. `closed` 모드에서는 baseline의 candidate count `24`를 실행하고, 이어서 `200`을
+   실행합니다. 각 실행은 VU `1 → 2 → 4 → 8`을 순서대로 실행합니다.
+   `open` 모드에서는 `arrival_rates`에 초당 도착률을 낮은 값부터 공백으로 구분해
+   줍니다(예: `20 40 80 160`). 한계를 넘는 값을 반드시 포함해야 과부하 거동을
+   관측할 수 있습니다.
+2. 각 Job은 warmup 60초를 결과에서 제외하고, 측정 300초만 집계합니다.
    측정 오류율 gate는 엄격히 `< 1%`입니다. 1% 이상이거나 Job/summary 검증이 실패하면
-   다음 VU와 비교 실행으로 진행하지 않고 해당 실행을 실패로 기록합니다.
+   다음 단계와 비교 실행으로 진행하지 않고 해당 실행을 실패로 기록합니다.
+   `open` 모드에는 게이트가 하나 더 있습니다 — 아래 "생성기 한계와 서버 한계의 구분"을
+   참조합니다.
 3. optimized 비교 직전에는 1절을 다시 수행해 `UserDynamicView` timestamp를 refresh하고
    materialize 성공을 다시 확인합니다. 이후 baseline과 같은 순서로 `24`, `200`을
    실행하고 각 후보 수에서 VU `1/2/4/8`을 반복합니다.
-4. baseline과 optimized는 candidate/VU/fixture/model/image resources/warmup/measurement가
-   같은 행끼리만 짝지어 비교합니다. candidate `24`와 `200`을 평균내거나 합쳐서
-   개선이라고 주장하지 않습니다.
+4. baseline과 optimized는 candidate/부하 조건/fixture/model/image resources/warmup/
+   measurement가 같은 행끼리만 짝지어 비교합니다. candidate `24`와 `200`을 평균내거나
+   합쳐서 개선이라고 주장하지 않습니다. **`closed` 결과와 `open` 결과도 서로 비교하지
+   않습니다** — 부하를 인가하는 방식이 달라 같은 양을 재고 있지 않습니다.
+
+### 생성기 한계와 서버 한계의 구분 (`open` 전용)
+
+개루프에서는 부하 생성기의 VU가 모자라 목표 도착률을 못 지키는 경우가 생깁니다. k6는
+이를 `dropped_iterations`로 셉니다. **이 값이 0이 아니면 그 측정은 서버가 아니라 부하
+생성기의 한계를 잰 것입니다.**
+
+- 워크플로우는 측정 구간(`dropped_iterations{scenario:measure}`)만 봅니다. warmup에서
+  생긴 drop은 판정에 섞이지 않습니다.
+- 0이 아니면 해당 단계를 `invalid_generator_limited`로 기록하고 실행을 멈춥니다.
+  **이는 서버 실패가 아닙니다.** 보고서에는 성능 결과가 아니라
+  `invalid; rerun required`로 적고, `max_vus`를 올려 다시 측정합니다.
+- **`max_vus`를 올려도 drop이 거의 그대로면 생성기 한계가 아닙니다.** 서버가 이미
+  포화되어 지연이 계속 늘어나는 상태라, 어떤 `max_vus`로도 도착률을 따라잡을 수
+  없습니다. 이때는 재측정을 반복하지 말고 **그 도착률이 이미 용량을 넘었다**고
+  읽습니다. 무릎과 실패 방식은 `drop = 0`인 마지막 측정점에서 판정하고, drop이 난
+  구간은 "이 지점 이후로는 측정 불가"로만 기록합니다. 두 경우를 구분하려면
+  `max_vus`를 4배 이상 올린 재측정과 원래 측정의 RPS·p50을 나란히 비교합니다 —
+  거의 같으면 서버 포화, 뚜렷이 개선되면 생성기 한계였습니다.
+- summary에 이 submetric이 아예 없으면 0으로 해석하지 않고 별도로 실패시킵니다.
+  없는 값을 정상으로 읽으면 생성기 한계를 서버 용량으로 오인하게 됩니다.
+
+`max_vus` 기본값은 도착률의 4배입니다. 도착률 R을 지연 L초에서 유지하려면 대략 R×L개의
+VU가 필요하므로, 기본값은 지연 4초까지 버팁니다. 서버가 그보다 느려지는 구간을 재려면
+`max_vus`를 명시적으로 올립니다.
 
 ## 3. 원시 증거 보관과 해시
 
 GitHub Actions artifact `rerank-loadtest-${benchmark_label}-c${candidate_count}-${run_id}`의
-`runner/raw/`를 보관합니다. 각 VU마다 다음을 확보합니다.
+`runner/raw/`를 보관합니다. sweep의 각 step(폐루프는 VU, 개루프는 도착률)마다 다음을
+확보합니다.
 
 - `k6-summary-${job_name}.json`: custom measurement 중앙값(`med`, p50)/p95/p99,
   request 수, status별 count, 오류율을 읽는 원본입니다. k6 summary의 `med` 키가
   p50(중앙값)에 해당합니다.
-- `metadata-vu-${vus}.json`: Job 이름, 생성·완료 UTC, candidate/VU, fixture version,
-  benchmark label, serving image digest, Git SHA를 확인합니다.
+- `metadata-step-${step}.json`: Job 이름, 생성·완료 UTC, candidate, `load_mode`,
+  `vus`/`arrival_rate`, fixture version, benchmark label, serving image digest,
+  Git SHA를 확인합니다. `load_mode`가 없거나 기대와 다르면 그 증거는 쓰지 않습니다 —
+  어느 방식으로 인가한 부하인지 모르면 수치를 해석할 수 없습니다.
 - Prometheus range artifacts: 실제 파일명은
-  `prometheus-${query_name}-vu-${vus}.json`입니다. `phase_p50`, `phase_p95`,
+  `prometheus-${query_name}-step-${step}.json`입니다. `phase_p50`, `phase_p95`,
   `outcome_rate`, `max_in_flight`, `cpu_seconds`, `rss`, `cfs_throttling_ratio`
   query와 query time range를 함께 보관합니다.
 - Prometheus 응답은 HTTP/API `status=success`만으로 유효하다고 보지 않습니다.
@@ -119,18 +171,18 @@ GitHub Actions artifact `rerank-loadtest-${benchmark_label}-c${candidate_count}-
 
 스키마 호환 메모: 이 문서에서 요구하는 literal `prometheus-range-`는 Prometheus
 range-query 원시 응답의 범주를 뜻합니다. Task 5 workflow는
-`prometheus-range-${query_name}-vu-${vus}.json`이라는 파일을 만들지 않으며, 실제
-경로는 위의 `prometheus-${query_name}-vu-${vus}.json`입니다.
+`prometheus-range-${query_name}-step-${step}.json`이라는 파일을 만들지 않으며, 실제
+경로는 위의 `prometheus-${query_name}-step-${step}.json`입니다.
 
 ## 4. Task 8 보고서 작성 스키마
 
 원시 증거가 확보된 Task 8에서만 baseline 및 optimization HTML 보고서를 작성합니다.
-한 행은 정확히 하나의 `candidate_count`와 하나의 VU 조합이며, 보고서 표는 최소 다음
-열을 갖습니다.
+한 행은 정확히 하나의 `candidate_count`와 하나의 부하 조건(폐루프 VU 또는 개루프
+도착률) 조합이며, 보고서 표는 최소 다음 열을 갖습니다.
 
 | 구분 | 기록값 |
 | --- | --- |
-| 식별·재현 | benchmark phase, candidate count, VU, Job, UTC range, fixture/model/image digest/Git SHA/resources, artifact URL/hash, Prometheus query/time range |
+| 식별·재현 | benchmark phase, candidate count, `load_mode`, VU 또는 도착률, Job, UTC range, fixture/model/image digest/Git SHA/resources, artifact URL/hash, Prometheus query/time range |
 | k6 측정 | custom measurement 중앙값(`med`, p50)/p95/p99, request count, status count, error count, `RPS = custom request count / 300` |
 | Prometheus phase·outcome | phase p95, outcome rate, in-flight max |
 | 리소스 | CPU, RSS, CFS throttling ratio (0~1), `CPU-seconds/request = CPU seconds rate / RPS` |
@@ -141,3 +193,30 @@ Prometheus query/time range를 모두 적습니다. 수정된 workflow에서는 
 이전 artifact처럼 이미 성공으로 저장된 빈 query는 `invalid; rerun required`로
 표시합니다. `N/A` 또는 invalid는 개선 근거가 아니며, 측정되지 않은 개선
 수치·감소율·비용 절감 수치를 채우거나 추정해서는 안 됩니다.
+
+## 5. 개루프 결과로 안정성을 판정하는 방법
+
+`open` 실행의 목적은 "빠른가"가 아니라 **"한계를 넘겼을 때 예측 가능하게 실패하는가"**
+입니다. 도착률 순으로 행을 늘어놓고 다음을 읽습니다.
+
+**한계점(무릎).** 도착률을 올려도 `RPS`가 더 이상 따라 오르지 않는 첫 지점입니다.
+그 아래까지가 인스턴스당 안정 용량입니다. `RPS`는 인가한 도착률이 아니라 측정된
+request count에서 계산해야 합니다 — 둘이 벌어지는 것 자체가 포화 신호입니다.
+
+**실패 방식.** 한계를 넘긴 행에서 다음 두 갈래 중 어느 쪽인지 판정합니다.
+
+| 관측 | 해석 |
+| --- | --- |
+| 초과분이 `503`으로 거절되고 나머지 요청의 p95가 유지됨 | 부하 차단이 동작함 — 예측 가능한 실패 |
+| 오류율은 0%인데 p95·p99만 폭증하고 in-flight가 계속 증가 | 부하 차단 없음 — 대기열이 무한히 쌓이는 상태 |
+
+**p95/p50 비율.** 한계 직전에는 지연이 이중 분포가 되어 p50은 정상인데 p95만 튑니다.
+**p50·평균만 보는 대시보드는 이 상태를 정상으로 읽습니다.** 비율이 급등하는 지점을
+기록하고, p50 절대값이 무너지는 지점과 함께 남깁니다. 둘은 서로를 대체하지 않습니다.
+
+**회복.** 한계를 넘긴 실행 다음에 낮은 도착률로 한 번 더 재서, 지연이 이전 수준으로
+돌아오는지 확인합니다. 돌아오지 않으면 과부하가 영구적 열화를 남긴 것이므로 별도
+결함으로 기록합니다.
+
+측정된 행이 없으면 이 판정을 쓰지 않습니다. `invalid; rerun required`인 행은 서버
+거동의 근거가 아닙니다.
