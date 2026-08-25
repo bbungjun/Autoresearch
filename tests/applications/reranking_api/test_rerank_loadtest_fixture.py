@@ -171,7 +171,7 @@ def test_dml_accepts_bigquery_dataset_identifier_starting_with_number() -> None:
 
 def test_k6_script_has_warmup_and_measurement_contract() -> None:
     """k6는 warmup을 분리하고 측정 전용 오류율을 노출해야 한다."""
-    script = Path("applications/reranking_api/loadtest/rerank.js").read_text()
+    script = Path("applications/reranking_api/loadtest/rerank.js").read_text(encoding="utf-8")
 
     assert 'exec: "warmup"' in script
     assert 'exec: "measure"' in script
@@ -189,7 +189,7 @@ def test_k6_script_has_warmup_and_measurement_contract() -> None:
 
 def test_k6_summary_includes_p99_for_exact_latency_reporting() -> None:
     """k6 summary 설정은 측정 latency의 p99를 포함해야 한다."""
-    script = Path("applications/reranking_api/loadtest/rerank.js").read_text()
+    script = Path("applications/reranking_api/loadtest/rerank.js").read_text(encoding="utf-8")
 
     trend_stats_match = re.search(
         r"summaryTrendStats\s*:\s*(\[[^\]]*\])",
@@ -208,7 +208,7 @@ def test_k6_script_offers_open_loop_mode_for_saturation_measurement() -> None:
     VU 수를 넘지 못한다. 그래서 대기열 무한 증가·부하 차단 부재처럼 과부하에서만
     드러나는 결함을 관측할 수 없고, 측정이 "정상"이라는 잘못된 합격을 낸다.
     """
-    script = Path("applications/reranking_api/loadtest/rerank.js").read_text()
+    script = Path("applications/reranking_api/loadtest/rerank.js").read_text(encoding="utf-8")
 
     assert 'executor: "constant-arrival-rate"' in script
     assert "ARRIVAL_RATE" in script
@@ -224,7 +224,7 @@ def test_k6_script_exposes_measure_scoped_dropped_iterations() -> None:
     실패로 만들면 서버가 무너진 것과 구분되지 않으므로, 노출만 하고 판정은 workflow가
     한다.
     """
-    script = Path("applications/reranking_api/loadtest/rerank.js").read_text()
+    script = Path("applications/reranking_api/loadtest/rerank.js").read_text(encoding="utf-8")
 
     assert '"dropped_iterations{scenario:measure}"' in script
     assert 'thresholds["dropped_iterations{scenario:measure}"] = ["count>=0"]' in script
@@ -232,7 +232,7 @@ def test_k6_script_exposes_measure_scoped_dropped_iterations() -> None:
 
 def test_k6_summary_metadata_identifies_the_load_mode() -> None:
     """개루프와 폐루프 결과를 사후에 혼동하지 않도록 모드와 도착률을 남긴다."""
-    script = Path("applications/reranking_api/loadtest/rerank.js").read_text()
+    script = Path("applications/reranking_api/loadtest/rerank.js").read_text(encoding="utf-8")
 
     for key in ("load_mode", "arrival_rate", "pre_allocated_vus", "max_vus"):
         assert f"{key}:" in script
@@ -240,7 +240,7 @@ def test_k6_summary_metadata_identifies_the_load_mode() -> None:
 
 def test_k6_job_has_no_identity_or_token_mount() -> None:
     """k6 Job은 전용 KSA만 쓰고 토큰·Secret·권한 상승을 허용하지 않는다."""
-    text = Path("deployment/loadtest/rerank-k6-job.yaml").read_text()
+    text = Path("deployment/loadtest/rerank-k6-job.yaml").read_text(encoding="utf-8")
 
     assert "serviceAccountName: rerank-loadtest" in text
     assert "automountServiceAccountToken: false" in text
@@ -252,7 +252,7 @@ def test_k6_job_has_no_identity_or_token_mount() -> None:
 
 def test_k6_job_is_immutable_hardened_and_configmap_only() -> None:
     """k6 Job은 고정 digest와 one-shot 제한을 쓰며 두 ConfigMap만 mount한다."""
-    text = Path("deployment/loadtest/rerank-k6-job.yaml").read_text()
+    text = Path("deployment/loadtest/rerank-k6-job.yaml").read_text(encoding="utf-8")
 
     assert "generateName: rerank-k6-" in text
     assert "namespace: loadtest" in text
@@ -283,7 +283,7 @@ def test_k6_job_is_immutable_hardened_and_configmap_only() -> None:
 @_requires_active_rerank_loadtest_workflow
 def test_manual_workflow_keeps_load_and_snapshot_identities_separate() -> None:
     """수동 workflow는 VU gate와 Prometheus 조회를 서로 다른 identity로 실행한다."""
-    text = Path(".github/workflows/rerank-loadtest.yml").read_text()
+    text = Path(".github/workflows/rerank-loadtest.yml").read_text(encoding="utf-8")
     workflow = yaml.load(text, Loader=yaml.BaseLoader)
 
     assert "workflow_dispatch:" in text
@@ -336,7 +336,7 @@ def test_manual_workflow_keeps_load_and_snapshot_identities_separate() -> None:
 
 def test_runbook_requires_materialize_and_raw_artifacts() -> None:
     """운영 절차에는 materialize 완료와 원시 증거 보존이 필수다."""
-    text = Path("docs/runbooks/rerank-loadtest.md").read_text()
+    text = Path("docs/runbooks/rerank-loadtest.md").read_text(encoding="utf-8")
 
     assert "feast_online_store_materialize" in text
     assert "job_summary.status=succeeded" in text
@@ -349,7 +349,7 @@ def test_runbook_requires_materialize_and_raw_artifacts() -> None:
 @_requires_active_rerank_loadtest_workflow
 def test_manual_workflow_serializes_shared_configmaps_and_waits_for_padding() -> None:
     """공유 ConfigMap 실행은 직렬화하고 Prometheus 종료 패딩은 미래를 조회하지 않는다."""
-    text = Path(".github/workflows/rerank-loadtest.yml").read_text()
+    text = Path(".github/workflows/rerank-loadtest.yml").read_text(encoding="utf-8")
 
     assert "group: rerank-loadtest\n" in text
     assert "padded_end=" in text
@@ -360,7 +360,7 @@ def test_manual_workflow_serializes_shared_configmaps_and_waits_for_padding() ->
 @_requires_active_rerank_loadtest_workflow
 def test_snapshot_reader_rejects_empty_series_and_uses_gke_cfs_periods() -> None:
     """필수 Prometheus series 누락과 GKE CFS metric 이름 불일치를 통과시키지 않는다."""
-    text = Path(".github/workflows/rerank-loadtest.yml").read_text()
+    text = Path(".github/workflows/rerank-loadtest.yml").read_text(encoding="utf-8")
     cfs_line = next(
         line for line in text.splitlines() if "[cfs_throttling_ratio]=" in line
     )
@@ -394,7 +394,7 @@ def test_snapshot_reader_cfs_validation_accepts_query_range_matrix() -> None:
     if shutil.which("jq") is None:
         pytest.skip("jq is required to execute the workflow validation expression")
 
-    text = Path(".github/workflows/rerank-loadtest.yml").read_text()
+    text = Path(".github/workflows/rerank-loadtest.yml").read_text(encoding="utf-8")
     workflow = yaml.safe_load(text)
     query_step = next(
         step
@@ -481,7 +481,7 @@ def test_workflow_classifies_generator_limited_open_loop_runs_as_invalid() -> No
     것이다. 이를 서버 결과로 받아들이면 용량을 실제보다 낮게 단정하게 되므로,
     무효로 표시하고 더 높은 도착률로 진행하지 않는다.
     """
-    workflow = Path(".github/workflows/rerank-loadtest.yml").read_text()
+    workflow = Path(".github/workflows/rerank-loadtest.yml").read_text(encoding="utf-8")
 
     assert '.data.metrics["dropped_iterations{scenario:measure}"].values.count' in workflow
     assert "invalid_generator_limited" in workflow
@@ -493,7 +493,7 @@ def test_workflow_classifies_generator_limited_open_loop_runs_as_invalid() -> No
 @_requires_active_rerank_loadtest_workflow
 def test_manual_workflow_preserves_runner_artifact_layout_for_reader() -> None:
     """runner upload, reader download·glob, 최종 upload는 같은 raw 경로를 사용한다."""
-    text = Path(".github/workflows/rerank-loadtest.yml").read_text()
+    text = Path(".github/workflows/rerank-loadtest.yml").read_text(encoding="utf-8")
 
     assert text.count("path: runner/raw") == 3
     assert "metadata_files=(runner/raw/metadata-step-*.json)" in text
@@ -503,8 +503,8 @@ def test_manual_workflow_preserves_runner_artifact_layout_for_reader() -> None:
 @_requires_active_rerank_loadtest_workflow
 def test_workflow_validates_fixture_and_avoids_sourced_settings() -> None:
     """자유 입력은 allowlist를 통과하고 settings 값은 shell source되지 않는다."""
-    workflow = Path(".github/workflows/rerank-loadtest.yml").read_text()
-    manifest = Path("deployment/loadtest/rerank-k6-job.yaml").read_text()
+    workflow = Path(".github/workflows/rerank-loadtest.yml").read_text(encoding="utf-8")
+    manifest = Path("deployment/loadtest/rerank-k6-job.yaml").read_text(encoding="utf-8")
 
     assert "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" in workflow
     assert "--from-literal=rerank.env" not in workflow
@@ -527,8 +527,8 @@ def test_workflow_validates_fixture_and_avoids_sourced_settings() -> None:
 @_requires_active_rerank_loadtest_workflow
 def test_each_vu_binds_one_versioned_immutable_settings_configmap() -> None:
     """각 VU Job은 생성 시점의 고유 settings ConfigMap을 env와 volume에 함께 bind한다."""
-    workflow = Path(".github/workflows/rerank-loadtest.yml").read_text()
-    manifest = Path("deployment/loadtest/rerank-k6-job.yaml").read_text()
+    workflow = Path(".github/workflows/rerank-loadtest.yml").read_text(encoding="utf-8")
+    manifest = Path("deployment/loadtest/rerank-k6-job.yaml").read_text(encoding="utf-8")
 
     assert (
         'settings_config_map="rerank-loadtest-settings-'
@@ -547,7 +547,7 @@ def test_each_vu_binds_one_versioned_immutable_settings_configmap() -> None:
 @_requires_active_rerank_loadtest_workflow
 def test_failure_metadata_precedes_summary_and_records_status() -> None:
     """Job 종료 metadata는 summary보다 먼저 남고 후속 실패 상태도 갱신된다."""
-    text = Path(".github/workflows/rerank-loadtest.yml").read_text()
+    text = Path(".github/workflows/rerank-loadtest.yml").read_text(encoding="utf-8")
 
     first_metadata_write = text.index('write_metadata "$result"')
     summary_retrieval = text.index('summary_path="runner/raw/k6-summary-')
@@ -567,7 +567,7 @@ def test_failure_metadata_precedes_summary_and_records_status() -> None:
 @_requires_active_rerank_loadtest_workflow
 def test_snapshot_reader_exports_partial_completed_jobs_after_runner_failure() -> None:
     """runner 실패 후에도 reader는 완료된 1~4개 Job의 raw range만 보존한다."""
-    text = Path(".github/workflows/rerank-loadtest.yml").read_text()
+    text = Path(".github/workflows/rerank-loadtest.yml").read_text(encoding="utf-8")
 
     reader_start = text.index("  prometheus-snapshot-reader:")
     reader = text[reader_start:]
@@ -589,8 +589,8 @@ def test_snapshot_reader_exports_partial_completed_jobs_after_runner_failure() -
 @_requires_active_rerank_loadtest_workflow
 def test_settings_configmap_is_owned_by_ttl_job() -> None:
     """VU별 settings ConfigMap은 Job UID ownerReference로 TTL GC에 연결된다."""
-    workflow = Path(".github/workflows/rerank-loadtest.yml").read_text()
-    manifest = Path("deployment/loadtest/rerank-k6-job.yaml").read_text()
+    workflow = Path(".github/workflows/rerank-loadtest.yml").read_text(encoding="utf-8")
+    manifest = Path("deployment/loadtest/rerank-k6-job.yaml").read_text(encoding="utf-8")
 
     assert 'job_uid="$(kubectl get job "$job_name"' in workflow
     assert 'kubectl patch configmap "$settings_config_map"' in workflow
