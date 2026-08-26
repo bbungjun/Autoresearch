@@ -103,7 +103,9 @@
 
 - [Spec — Autoresearch-airflow 경계 컷오버](specs/2026-07-13-autoresearch-airflow-boundary-cutover.md) (Phase 1~5 완료, Phase 6 대기)
 - [Spec — 공개 batch 실행 계약 batch-contract-v1](specs/2026-07-13-public-batch-execution-contract.md)
-- 본 저장소 `dags/`는 비어있으며 DAG는 [`Autoresearch-airflow`](https://github.com/SKYAHO/Autoresearch-airflow) 소유
+- 본 저장소 `dags/`는 비어있습니다. DAG는 이전 조직 환경에서
+  [`Autoresearch-airflow`](https://github.com/SKYAHO/Autoresearch-airflow)가
+  담당했으며, 현재 개인 저장소에서는 해당 연동을 전제하지 않습니다.
 
 ### ☁️ 인프라 (Infrastructure)
 
@@ -117,7 +119,6 @@
 - [ADR 0002 — 저장소 책임 경계](adr/0002-repository-responsibility-boundaries.md)
 - [Spec — 저장소 구조 재정리](specs/2026-07-15-repo-restructure.md)
 - [Spec — 머지된 PR 리포트 아카이브](specs/2026-07-26-pr-report-archive-design.md)
-- [발표 덱 — Autoresearch 0.0.3](reports/2026-08-11-autoresearch-0.0.3-deck.html) — 프로젝트 전체 소개 26장 (←/→ 이동, 브라우저에서 바로 열림)
 
 ## ADR
 
@@ -176,7 +177,7 @@
 - [학습 실험 provenance 애플리케이션 설계](guides/training-experiment-provenance.md)
 - [Agent Simulator 명세 (action log SSOT)](guides/agent-simulator-spec.md)
 - [action log 모듈 사용법](guides/action-log.md)
-- [Release & 배포 파이프라인](guides/release-pipeline.md) — CI/CD·GAR push·digest 승격·GKE 배포 자동화
+- [Release & 배포 파이프라인](guides/release-pipeline.md) — 이전 조직 환경의 CI/CD·GAR push·digest 승격·GKE 배포 설계(현재 비활성)
 - [CTR 학습 이미지](guides/training-image.md) — `Dockerfile.train`, MLflow tracking URI 연동
 - [YouTube 트렌딩 수집 파이프라인](guides/youtube-collection.md) — API 수집·정규화·GCS parquet 적재
 
