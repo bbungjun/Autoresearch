@@ -103,7 +103,9 @@
 
 - [Spec — Autoresearch-airflow 경계 컷오버](specs/2026-07-13-autoresearch-airflow-boundary-cutover.md) (Phase 1~5 완료, Phase 6 대기)
 - [Spec — 공개 batch 실행 계약 batch-contract-v1](specs/2026-07-13-public-batch-execution-contract.md)
-- 본 저장소 `dags/`는 비어있으며 DAG는 [`Autoresearch-airflow`](https://github.com/SKYAHO/Autoresearch-airflow) 소유
+- 본 저장소 `dags/`는 비어있습니다. DAG는 이전 조직 환경에서
+  [`Autoresearch-airflow`](https://github.com/SKYAHO/Autoresearch-airflow)가
+  담당했으며, 현재 개인 저장소에서는 해당 연동을 전제하지 않습니다.
 
 ### ☁️ 인프라 (Infrastructure)
 
