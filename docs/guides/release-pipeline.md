@@ -1,7 +1,12 @@
 # Release & 배포 파이프라인
 
-PR merge부터 GKE 배포·Airflow 실행까지의 자동화 흐름을 설명합니다. 3개 저장소
-(코드·배포·인프라)가 협업하는 구조와 각 워크플로우의 역할을 다룹니다.
+> **현재 상태:** 이 문서는 이전 `SKYAHO/*` 조직 환경의 배포 설계를 보존한
+> 참고 자료입니다. 개인 저장소에서는 조직 Secret·GitHub App·GCP·인접 저장소
+> 연동이 비활성이고, 코드 저장소의 release 워크플로우도
+> `.github/workflows-disabled/release.yml`에 보관되어 실행되지 않습니다.
+
+PR merge부터 GKE 배포·Airflow 실행까지 이전에 설계된 자동화 흐름을 설명합니다.
+3개 저장소(코드·배포·인프라)가 협업하는 구조와 각 워크플로우의 역할을 다룹니다.
 
 ## 개요
 
@@ -81,14 +86,15 @@ PR에 붙은 라벨을 기반으로 semantic version을 자동 계산하여 draf
 2. 라벨 기반으로 다음 버전 계산 (예: `feature` 라벨 → minor 증가)
 3. draft release 갱신 (변경 이력 누적)
 4. 담당자가 "Publish release" 버튼 클릭 → git tag 생성 (예: `v0.0.2`)
-5. 코드 리포에서는 publish 시 `.github/workflows/release.yml` 트리거 (이미지 빌드 시작)
+5. 이전 코드 리포에서는 publish 시 `.github/workflows-disabled/release.yml`에 현재
+   보관된 워크플로우가 트리거되어 이미지 빌드를 시작하도록 설계됨
 
 버전 기준점은 v0.0.1입니다. 양쪽 저장소(코드·배포)에 각각 독립적으로
 존재하며, 배포 리포의 release는 배포 인프라 변경 이력 추적용입니다.
 
 ### 애플리케이션 이미지 빌드 및 GAR push (release.yml)
 
-코드 리포의 `release.yml`은 release가 게시되면 batch·serving·Agent Orchestration
+이전 코드 리포의 `release.yml`은 release가 게시되면 batch·serving·Agent Orchestration
 API·Runner·Streamlit UI 이미지를 각각 빌드하여 GAR에 push합니다. serving·API·Runner·UI
 job은 batch job이 검증한 동일한 `source_sha`를 checkout하므로 다섯 이미지의 소스 계보가
 일치합니다.
@@ -184,7 +190,7 @@ checkout 후 infra `main`이 바뀌면 overwrite하지 않고 실패하여 다�
 
 ### Digest 승격 PR 자동화
 
-release.yml의 두 번째 job은 빌드된 batch 이미지의 digest를 배포 리포
+비활성 `release.yml`의 두 번째 job은 빌드된 batch 이미지의 digest를 배포 리포
 `deploy/airflow/values.yaml`에 반영하는 PR을 자동 생성합니다.
 
 1. GitHub App(`Autoresearch CI Dispatcher`) 토큰 생성
@@ -244,21 +250,22 @@ Spot VM 회수에 대비해 `retries >= 1` 유지.
 자세한 책임 경계와 허용 의존 방향은 [ADR 0002](../adr/0002-repository-responsibility-boundaries.md)를
 참조하세요.
 
-## 운영
+## 이전 조직 환경의 운영 절차 (현재 비활성)
 
 ### 새 release 게시 (이미지 배포)
 
 1. PR에 적절한 라벨 부여 (`feature`/`enhancement`/`bug`/`breaking`)
 2. PR을 main에 merge → Release Drafter가 draft release 갱신
 3. GitHub Releases에서 draft release 게시 (Publish release)
-4. release.yml이 자동 실행: batch·serving·Agent Orchestration API·Runner·UI·launcher·executor 이미지 빌드 → GAR push → batch digest 승격 PR 생성과 검증된 Agent Orchestration digest의 infra main 자동 승격
+4. release.yml 자동 실행: batch·serving·Agent Orchestration API·Runner·UI·launcher·executor 이미지 빌드 → GAR push → batch digest 승격 PR 생성과 검증된 Agent Orchestration digest의 infra main 자동 승격
 5. batch 승격 PR 리뷰 후 머지 → deploy-gke-dev.yml이 자동 실행: GKE 배포 + 검증
 6. infra serving 배포는 release summary의 serving `digest_ref`를 사용
 
 ### 수동으로 이미지 빌드 (긴급 수정)
 
-코드 리포 release.yml의 workflow_dispatch(`source_sha`)로 특정 커밋의 이미지를
-빌드할 수 있습니다. release 게시 없이 이미지만 push해야 할 때 사용합니다.
+이전 코드 리포 release.yml의 workflow_dispatch(`source_sha`)로 특정 커밋의
+이미지를 빌드하도록 설계되었습니다. 현재 개인 저장소에서는 워크플로우가
+비활성이므로 이 절차를 실행할 수 없습니다.
 
 ### 이미지 확인
 
@@ -290,7 +297,7 @@ gcloud artifacts docker images list \
 |------|------|
 | `.github/release-drafter.yml` | 라벨 → semver 매핑 규칙 |
 | `.github/workflows/release-drafter.yml` | push to main 트리거 |
-| `.github/workflows/release.yml` | release:published → batch·serving·Agent Orchestration API·Runner·UI·launcher·executor 빌드/GAR push, batch PR 승격 및 Agent Orchestration infra main 자동 승격 |
+| `.github/workflows-disabled/release.yml` | 현재 비활성. 이전 release:published → batch·serving·Agent Orchestration API·Runner·UI·launcher·executor 빌드/GAR push, batch PR 승격 및 Agent Orchestration infra main 자동 승격 |
 | `deployment/Dockerfile.app` | multi-stage batch 이미지 (uv lock-export → python:3.12-slim, non-root, 소스 미포함·GCS 부트스트랩) |
 | `deployment/serving/Dockerfile` | Feast 호환 serving 이미지 (FastAPI/Uvicorn, non-root) |
 | `deployment/experiment_platform/api.Dockerfile` | API 전용 FastAPI 이미지 (non-root, OAuth·Codex CLI 미포함) |

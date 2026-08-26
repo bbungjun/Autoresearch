@@ -176,7 +176,7 @@
 - [학습 실험 provenance 애플리케이션 설계](guides/training-experiment-provenance.md)
 - [Agent Simulator 명세 (action log SSOT)](guides/agent-simulator-spec.md)
 - [action log 모듈 사용법](guides/action-log.md)
-- [Release & 배포 파이프라인](guides/release-pipeline.md) — CI/CD·GAR push·digest 승격·GKE 배포 자동화
+- [Release & 배포 파이프라인](guides/release-pipeline.md) — 이전 조직 환경의 CI/CD·GAR push·digest 승격·GKE 배포 설계(현재 비활성)
 - [CTR 학습 이미지](guides/training-image.md) — `Dockerfile.train`, MLflow tracking URI 연동
 - [YouTube 트렌딩 수집 파이프라인](guides/youtube-collection.md) — API 수집·정규화·GCS parquet 적재
 
