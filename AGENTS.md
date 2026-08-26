@@ -66,7 +66,9 @@ Autoresearch는 YouTube 트렌딩 데이터 기반 CTR 모델링 프로젝트입
 - 아키텍처상 DAG·schedule·retry·timeout·Pool·KubernetesPodOperator·Airflow
   배포는 인접 저장소 `SKYAHO/Autoresearch-airflow`의 책임이었으며, 이
   저장소는 배포 이미지와 `autoresearch.jobs.*` 공개 CLI만 제공합니다.
-  현재 개인 저장소에서는 해당 조직 연동이 비활성입니다.
+  현재 개인 저장소에서는 해당 조직 연동이 비활성입니다. 연동을 복구하더라도
+  Airflow는 이 저장소의 내부 Python API를 직접 import하지 않고 공개 CLI만
+  소비합니다.
 - GCP 인프라(IAM, K8s 리소스, 시크릿 기반)는 인접 저장소
   `SKYAHO/Autoresearch-infra`의 책임이었으며, 현재 개인 저장소에서 접근이나
   배포 연동을 전제하지 않습니다.
