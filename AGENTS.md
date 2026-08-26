@@ -1,10 +1,10 @@
 # Coding Guidelines for AI Coding Agents
 
-> Version: 1.2.0 | Last Updated: 2026-07-24
+> Version: 1.3.0 | Last Updated: 2026-08-26
 
 이 문서는 Claude Code 등 AI 코딩 에이전트가 이 저장소에서 작업할 때의 기본
 진입점입니다. 여기에는 규칙·함정·근거만 남깁니다. 저장소 사실(디렉토리 구조,
-배포 이미지, 팀 도메인)은 정본 문서를 가리키고 여기에 복제하지 않습니다.
+배포 이미지, 저장소 책임 경계)는 정본 문서를 가리키고 여기에 복제하지 않습니다.
 
 ## Language Preference
 
@@ -28,7 +28,7 @@
 
 | 요청 유형 | 먼저 볼 문서 | 다음 문서 |
 | --- | --- | --- |
-| 프로젝트 구조·팀 도메인·배포 이미지 | `README.md` | `.claude/docs/agent-project-reference.md` |
+| 프로젝트 구조·저장소 경계·배포 이미지 | `README.md` | `.claude/docs/agent-project-reference.md` |
 | 폴더별 책임·소유 경계 | `.claude/docs/agent-project-reference.md` | `.claude/docs/architecture-overview.md` |
 | Python 스타일, 타이핑, 로깅 | `.claude/docs/agent-python-reference.md` | `.claude/docs/coding-conventions.md` |
 | 워크플로우, spec, plan, 커밋, PR | `.claude/docs/agent-workflow-reference.md` | `.claude/docs/agent-prohibitions.md` |
@@ -41,16 +41,35 @@
 Autoresearch는 YouTube 트렌딩 데이터 기반 CTR 모델링 프로젝트입니다.
 수집 → 가상 유저 → action log → 학습 데이터셋 → 학습/평가 → 리랭킹 서빙 →
 일일 추천·노출 시뮬레이션이 다시 action log로 돌아오는 **일일 폐루프**를
-운영합니다. 구조 지도와 팀 도메인은 `README.md`가 정본입니다.
+구성합니다. 구조 지도와 저장소 책임 경계는 `README.md`가 정본입니다.
+
+## Repository Operating Mode
+
+- 현재 기준 저장소와 `origin`은 개인 저장소
+  [`bbungjun/Autoresearch`](https://github.com/bbungjun/Autoresearch)입니다.
+- 팀원 GitHub Approve, 조직 Project, 조직 GitHub App, GCP 배포 자동화는 현재
+  개인 저장소의 운영 전제가 아닙니다. 사람이 독립 리뷰 결과와 검증 근거를
+  확인해 최종 반영 여부를 결정합니다.
+- 현재 활성 GitHub Actions는 `ci.yml`, `lint.yml`, `release-drafter.yml`입니다.
+  `.github/workflows-disabled/`의 파일과 문서에 남은 조직 자동화 설명은 복구
+  근거를 위한 역사적 기록이며, 활성 워크플로우로 간주하지 않습니다.
+- `SKYAHO/Autoresearch`, `SKYAHO/Autoresearch-airflow`,
+  `SKYAHO/Autoresearch-infra` 참조는 이전 조직 저장소 또는 인접 시스템의
+  아키텍처 계보를 나타냅니다. 접근 가능성이나 연동 상태를 가정하지 말고,
+  사용자의 명시적 요청 없이 해당 저장소나 외부 인프라를 변경하지 않습니다.
+- 현재 GitHub 작업 절차의 정본은 `CONTRIBUTING.md`와
+  `.claude/docs/agent-workflow-reference.md`입니다. 두 문서에서 "현재 비활성"으로
+  표시한 절차를 실행하지 않습니다.
 
 **저장소 경계 (여기서 자주 틀립니다):**
 
-- DAG·schedule·retry·timeout·Pool·KubernetesPodOperator·Airflow 배포는 인접
-  저장소 `SKYAHO/Autoresearch-airflow` 소유입니다. 이 저장소는 배포 이미지와
-  `autoresearch.jobs.*` 공개 CLI만 제공하며, Airflow는 내부 Python API를 직접
-  import하지 않습니다.
-- GCP 인프라(IAM, K8s 리소스, 시크릿 기반)는 `SKYAHO/Autoresearch-infra`
-  소유입니다.
+- 아키텍처상 DAG·schedule·retry·timeout·Pool·KubernetesPodOperator·Airflow
+  배포는 인접 저장소 `SKYAHO/Autoresearch-airflow`의 책임이었으며, 이
+  저장소는 배포 이미지와 `autoresearch.jobs.*` 공개 CLI만 제공합니다.
+  현재 개인 저장소에서는 해당 조직 연동이 비활성입니다.
+- GCP 인프라(IAM, K8s 리소스, 시크릿 기반)는 인접 저장소
+  `SKYAHO/Autoresearch-infra`의 책임이었으며, 현재 개인 저장소에서 접근이나
+  배포 연동을 전제하지 않습니다.
 - 공개 batch 명령·인자 계약은
   `docs/specs/2026-07-13-public-batch-execution-contract.md`를 따릅니다.
 - action log 데이터 레이크 파티션 계약(#295 A안): `dt=D`는 KST D일 하루치
@@ -76,13 +95,14 @@ Autoresearch의 최종 목표는 **ML 리서처·엔지니어를 위한 자율 �
 - 문서와 코드가 다르면 **코드가 사실**입니다. 문서를 근거로 코드를
   되돌리지 말고, 문서 갱신을 제안합니다.
 - 폐루프 완주를 앞당기는 구조 변경 제안을 주저하지 않습니다. 단, 실행은
-  기존 워크플로우(이슈·spec·팀 합의)를 따릅니다.
+  기존 워크플로우(이슈·spec·저장소 소유자의 결정)를 따릅니다.
 
 ## Core Rules
 
 - GitHub에서 이슈·브랜치·PR을 생성·수정·삭제하기 전에는 `CONTRIBUTING.md`와
   `.claude/docs/agent-workflow-reference.md`를 모두 읽고, 작업 유형과 Issue Form 또는
-  CLI 요구사항(제목 prefix, label, assignee)을 확인합니다.
+  CLI 요구사항(제목 prefix, label, assignee)을 확인합니다. 별도 지시가 없으면
+  대상 저장소는 `bbungjun/Autoresearch`입니다.
 - 코드가 변경되는 작업은 반드시 이슈를 먼저 발행하고, 그 이슈의 `Create a
   branch`로 브랜치를 생성합니다(이슈-브랜치 자동 연결). 상세는
   `.claude/docs/agent-workflow-reference.md` 참조.

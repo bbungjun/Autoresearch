@@ -3,7 +3,22 @@
 YouTube 트렌딩 데이터 기반 CTR(Click-Through Rate) 모델링 프로젝트입니다.
 YouTube 트렌딩 영상을 수집하고, LLM으로 가상 유저와 action log를 생성해
 CTR 모델을 학습·서빙하며, 모델 노출 결과가 다시 학습 데이터로 돌아오는
-일일 폐루프를 운영합니다.
+일일 폐루프를 구현합니다.
+
+## 현재 저장소 운영 상태
+
+- 기준 저장소는 개인 저장소
+  [`bbungjun/Autoresearch`](https://github.com/bbungjun/Autoresearch)입니다.
+- 이 저장소는 이전 조직 저장소 `SKYAHO/Autoresearch`에서 개인 저장소로
+  이전되었습니다. 문서와 코드에 남아 있는 `SKYAHO/*` 표기는 이전 조직 환경의
+  아키텍처 계보 또는 복구 참고 자료일 수 있습니다.
+- 현재 활성 GitHub Actions는 CI(`ci.yml`), Ruff(`lint.yml`), Release Drafter
+  (`release-drafter.yml`)입니다. 조직 Secret, GitHub App, GCP 자원과 인접
+  저장소 쓰기 권한을 요구하는 워크플로우는 `.github/workflows-disabled/`에
+  보관되어 있으며 현재 동작하지 않습니다.
+- 팀원 Approve와 조직 Project 자동화는 현재 머지 조건이 아닙니다. 독립적인
+  에이전트 리뷰와 로컬·CI 검증 결과를 사람이 확인해 최종 반영 여부를 결정합니다.
+- 현재 기여·브랜치·PR 절차는 [`CONTRIBUTING.md`](CONTRIBUTING.md)가 정본입니다.
 
 ## 비전
 
@@ -11,7 +26,7 @@ Autoresearch의 최종 목표는 ML 리서처·엔지니어를 위한 **자율 �
 서비스**입니다. 사용자가 가설 한 줄(예: 추천 알고리즘 논문)을 입력하면,
 에이전트가 raw 데이터로 피처를 재조립·가공하고, 모델·임베딩 방식을 선택해
 학습한 뒤, origin(champion) 모델과의 비교·A/B 테스트까지 스스로 판단해
-수행합니다. 현재 운영 중인 일일 폐루프는 이 에이전트가 실험을 돌리기 위한
+수행합니다. 구현된 일일 폐루프는 이 에이전트가 실험을 돌리기 위한
 기반 테스트베드이며, MVP(폐루프 완주) → 최적화 → 기술 고도화 → 에이전트
 자율 실험 순서로 나아갑니다.
 
@@ -20,8 +35,11 @@ Autoresearch의 최종 목표는 ML 리서처·엔지니어를 위한 **자율 �
 ```
 YouTube 수집 → 가상 유저 생성 → action log 생성 → CTR 학습 데이터셋 → 모델 학습/평가
                     ↑                                                        ↓
-            노출·클릭 시뮬레이션 ← 일일 추천 ← 리랭킹 서빙 API (GKE) ← 모델 배포
+            노출·클릭 시뮬레이션 ← 일일 추천 ← 리랭킹 서빙 API ← 모델 배포
 ```
+
+위 그림은 논리적 폐루프입니다. GKE·Airflow·GCP를 포함한 이전 조직 배포 배선은
+현재 개인 저장소에서 비활성입니다.
 
 ## 저장소 구조
 
@@ -75,18 +93,27 @@ docs/                # 문서 — docs/README.md 인덱스 참조
 | `deployment/experiment_platform/launcher.Dockerfile` | 봉인 좌표를 선점해 branch-bootstrap Kubernetes Job을 생성하는 1회 launcher runtime (CronJob용) |
 | `deployment/experiment_platform/executor.Dockerfile` | Phase 2 GitHub App token-minter, 봉인 issue/workspace, Codex, verifier, candidate finalizer를 같은 digest로 실행하는 executor runtime |
 
-`release.yml`은 launcher와 executor를 각각
+이전 조직 환경의 `release.yml`은 launcher와 executor를 각각
 `autoresearch-agent-orchestration-launcher`,
 `autoresearch-agent-orchestration-executor`로 build/push합니다. 배포 인프라는 tag가
-아니라 release가 검증한 `@sha256:<64자리 digest>`를 소비합니다.
+아니라 release가 검증한 `@sha256:<64자리 digest>`를 소비하도록 설계되었습니다.
+현재 이 워크플로우는 `.github/workflows-disabled/release.yml`에 보관되어 있으며
+개인 저장소에서는 비활성입니다.
 
-DAG·스케줄·Airflow 배포는 [`SKYAHO/Autoresearch-airflow`](https://github.com/SKYAHO/Autoresearch-airflow),
-GCP 인프라는 [`SKYAHO/Autoresearch-infra`](https://github.com/SKYAHO/Autoresearch-infra)가 소유합니다.
+아키텍처상 DAG·스케줄·Airflow 배포는
+[`SKYAHO/Autoresearch-airflow`](https://github.com/SKYAHO/Autoresearch-airflow),
+GCP 인프라는
+[`SKYAHO/Autoresearch-infra`](https://github.com/SKYAHO/Autoresearch-infra)가
+담당했습니다. 현재 개인 저장소에서는 두 조직 저장소의 접근 권한이나 자동 연동을
+전제하지 않으며, 관련 표기는 책임 경계와 과거 배포 계약을 이해하기 위한
+참조입니다.
 
-### Agent Orchestration 이슈 발행 환경 변수 (#516)
+### Agent Orchestration 이슈 발행 환경 변수 (#516, 현재 조직 연동 비활성)
 
 가설을 `[AR]` Auto Research 이슈로 발행하는 경로가 쓰는 필수 환경 변수입니다
 (전체 기본값·형식은 `.env.example`이 정본).
+아래 계약은 이전 조직 배포를 복구하거나 개인 저장소용 연동을 새로 구성할 때의
+참조이며, 현재 활성 GitHub Actions만으로는 실행되지 않습니다.
 
 | 변수 | 용도 |
 |---|---|
@@ -100,12 +127,15 @@ GCP 인프라는 [`SKYAHO/Autoresearch-infra`](https://github.com/SKYAHO/Autores
 | `ORCH_EXPERIMENT_DATASET_SOURCE` | 서버가 Issue Form에 채우는 학습 데이터 출처 좌표. 기간은 발행 시점에 서버가 계산해 붙임(`dt BETWEEN P-30 AND P-1`, 어제까지 30일) |
 | `ORCH_EXPERIMENT_TRAINING_CONFIG_REF` | 서버가 Issue Form에 채우는 학습 설정 참조 |
 
-### Agent Orchestration 실험 executor Job handoff (#557)
+### Agent Orchestration 실험 executor Job handoff (#557, 현재 조직 연동 비활성)
 
-release는 launcher/executor/API를 각각 `@sha256:<64자리 digest>`로 게시하고, Infra는
-그 digest만 배포 입력으로 사용합니다. launcher는 DB에서 `CREATED` Experiment를 선점해
+이전 release 계약은 launcher/executor/API를 각각 `@sha256:<64자리 digest>`로
+게시하고, Infra가 그 digest만 배포 입력으로 사용하도록 설계되었습니다. launcher는
+DB에서 `CREATED` Experiment를 선점해
 `RUNNING`으로 전이한 뒤, 아래 정확한 값과 volume 경로를 executor Job에 전달합니다.
 값·기본값의 단일 출처는 `.env.example`입니다.
+이 절은 이전 조직 환경의 배포 계약을 보존한 것으로, 개인 저장소의 현재 실행 상태를
+뜻하지 않습니다.
 
 | 역할 | 변수 | 용도 |
 |---|---|---|
@@ -215,9 +245,9 @@ action log 데이터 레이크는 **일일 슬라이스 파티션**(`dt=D` = KST
 |---|---|
 | Model Training | `autoresearch/model_training/`, `autoresearch/model_evaluation/`, `autoresearch/model_registry/` |
 | Feast Features | `feature_repo/`, `autoresearch/feature_engineering/` |
-| YouTube Collection & Release | `autoresearch/data_collection/`, `applications/youtube_api_proxy/`, `.github/workflows/` (release·배포 트리거) |
-| Airflow Orchestration | `Autoresearch-airflow` 저장소 |
-| GCP Infrastructure | `Autoresearch-infra` 저장소 |
+| YouTube Collection & Release | `autoresearch/data_collection/`, `applications/youtube_api_proxy/`; 과거 release·배포 트리거는 `.github/workflows-disabled/` |
+| Airflow Orchestration | 과거 인접 `Autoresearch-airflow` 저장소 계약(현재 연동 비활성) |
+| GCP Infrastructure | 과거 인접 `Autoresearch-infra` 저장소 계약(현재 연동 비활성) |
 | Reranking Serving | `applications/reranking_api/` |
 | Recommendation | `autoresearch/recommendation/` |
 
