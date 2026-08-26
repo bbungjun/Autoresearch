@@ -117,7 +117,6 @@
 - [ADR 0002 — 저장소 책임 경계](adr/0002-repository-responsibility-boundaries.md)
 - [Spec — 저장소 구조 재정리](specs/2026-07-15-repo-restructure.md)
 - [Spec — 머지된 PR 리포트 아카이브](specs/2026-07-26-pr-report-archive-design.md)
-- [발표 덱 — Autoresearch 0.0.3](reports/2026-08-11-autoresearch-0.0.3-deck.html) — 프로젝트 전체 소개 26장 (←/→ 이동, 브라우저에서 바로 열림)
 
 ## ADR
 
