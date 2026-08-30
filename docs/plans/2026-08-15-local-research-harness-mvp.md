@@ -364,15 +364,19 @@ REPORT evidence 위에 이어질 후속 구현이다.
 ## Task 1-0: action log 생성 단계에 `slate_id` 부여 (D6)
 
 Task 1의 선행 작업이다. **이 저장소의 데이터 계약을 바꾸는 유일한 작업**이므로 범위를
-좁게 유지한다.
+좁게 유지한다. 정확한 ID 생성식, producer namespace, cutover와 호환성 계약은
+`docs/specs/2026-08-31-research-harness-evaluation-snapshot.md` §5가 정본이다.
 
-- [ ] `autoresearch/action_log_generation/schema.py`에 `slate_id`를 **optional 컬럼**으로
+- [x] `autoresearch/action_log_generation/schema.py`에 `slate_id`를 **optional 컬럼**으로
       추가 (하위 호환 유지 — 기존 파티션은 null)
-- [ ] 유저별 후보 묶음을 만드는 지점에서 slate 단위로 ID를 부여한다. `daily.py`가
+- [x] 유저별 후보 묶음을 만드는 지점에서 slate 단위로 ID를 부여한다. `daily.py`가
       `history_days=1`, `max_events_per_user_per_day=candidates_per_user`로 하루치 묶음을
       만드는 경로가 시작점이다
-- [ ] ID 형식은 기존 `event_id` 규약(`{prefix}_{YYYYMMDD}_{seq:08d}`)과 충돌하지 않게 정한다
-- [ ] **`docs/specs/2026-07-24-action-log-slice-semantics.md`의 파티션 계약에 영향이 없는지
+- [x] ID는 `slt_<YYYYMMDD>_<24 lowercase hex>` 형식과
+      `action-log-slate-v1` canonical identity를 사용한다. 일일 producer, user와 정렬된
+      candidate member identity를 포함하고 worker·shard·event sequence는 제외한다.
+      현행 30일 policy simulation은 slate 의미가 다르므로 P0-1 평가 원천에서 제외한다
+- [x] **`docs/specs/2026-07-24-action-log-slice-semantics.md`의 파티션 계약에 영향이 없는지
       먼저 확인한다.** `dt=D`가 KST 하루치 서로소 슬라이스라는 계약과 slate 경계가
       충돌하면 spec 갱신을 먼저 제안한다
 - [ ] slate 빌더는 필수 인자 `slate_id_cutover_date`를 받아 **파티션 선택 단계에서**
@@ -381,16 +385,22 @@ Task 1의 선행 작업이다. **이 저장소의 데이터 계약을 바꾸는 
 - [ ] 선택된 `dt >= slate_id_cutover_date` 파티션에서 `slate_id` null이 한 행이라도 나오면
       오류로 거부한다. 과거 파티션 제외와 선택된 새 파티션 fail-closed를 같은 규칙으로
       섞지 않고, fallback 추론도 넣지 않는다
-- [ ] 테스트: 같은 노출 묶음의 행이 같은 `slate_id`를 갖고 다른 묶음과 겹치지 않음,
+- [x] 테스트: 같은 노출 묶음의 행이 같은 `slate_id`를 갖고 다른 묶음과 겹치지 않음,
       기존 파티션 읽기가 깨지지 않음
 
 **검증:** `uv run python -m pytest tests/action_log_generation/ -v`
+
+> Stage A 구현 기록(2026-08-31): direct·1-shard·2-shard merge와 legacy/policy null
+> 경계를 검증했다. Task 1의 snapshot builder와 아래 cutover/label 관련 미체크 항목은
+> Stage B 소유이며 P0-1 전체 완료를 뜻하지 않는다.
 
 ---
 
 ## Task 1: `EvaluationSlateSnapshot` 빌더
 
-action log parquet에서 평가 slate를 조립하고 정답을 분리 봉인한다.
+action log parquet에서 평가 slate를 조립하고 정답을 분리 봉인한다. 정확한 timestamp
+경계, parquet schema, `evaluation_id`·snapshot fingerprint, manifest와 write-once 계약은
+`docs/specs/2026-08-31-research-harness-evaluation-snapshot.md` §6~§12가 정본이다.
 
 - [ ] `slate.py` 작성. 입력은 action log parquet 경로(로컬/GCS), 평가 **출력일** 범위
       `[T, T_end]`, 필수 `slate_id_cutover_date`. `T`는 첫 출력일이고
@@ -422,12 +432,13 @@ action log parquet에서 평가 slate를 조립하고 정답을 분리 봉인한
       사용하지 못하게 manifest와 검증 계약에 기록한다
 - [ ] `[T, T_end]` 평가 출력 구간 안에서 고정 salt의 SHA-256 bucket으로 유저 단위 80/20
       분할한다.
-      validation/final 중 한쪽이
-      비거나 필수 지표 coverage가 없으면 snapshot 생성을 거부한다
+      validation/final 중 한쪽이 비거나 spec §8의 structural coverage가 없으면 snapshot
+      생성을 거부한다. 지표별 제품 coverage는 P0-2 Judge가 소유한다
 - [ ] 산출물을 content-addressed 디렉터리에 write-once 게시:
       - `validation/slate.parquet` — `evaluation_id`, `slate_id`, `user_id`, `video_id`,
         `event_timestamp`와 optional 메타데이터. **라벨 없음**
-      - `validation/labels.parquet` — `evaluation_id`, `slate_id`, `video_id`, `clicked`. **봉인**
+      - `validation/labels.parquet` — `evaluation_id`, `slate_id`, `user_id`, `video_id`,
+        `source_event_id`, `clicked`. **봉인**
       - `final_holdout/slate.parquet`과 `final_holdout/labels.parquet` — 같은 schema이되 반복
         loop가 끝날 때까지 slate도 candidate에게 주입하지 않음
       - `manifest.json` — split별 `evaluation_id`(content hash), 유저 분할 규칙, 행 수,
@@ -436,11 +447,12 @@ action log parquet에서 평가 slate를 조립하고 정답을 분리 봉인한
         click 보유 slate 비율
 - [ ] optional 컬럼의 실제 non-null 비율을 manifest에 기록 (갭 조사에서 미확인 항목)
 - [ ] 테스트: `clicked`는 labels에만 있고 slate에는 없음, 두 파일이 join key
-      (`evaluation_id`, `slate_id`, `video_id`)를 공유함, 같은 유저의 slate가 split을
-      넘지 않음, candidate history에 `dt >= T`가 한 건도 없음, 출력에 `[T, T_end]` 밖
-      impression이 없음, `T_end + 1` click과 impression이 귀속 후보에는 포함되지만 출력에는
-      없음, `T_end + 1` 파티션 누락 시 실패, 출력일 `T-1`을 candidate의 완전 라벨로
-      취급하지 않음, 동일 입력 → 동일 `evaluation_id`, write-once 위반 시 실패
+      (`evaluation_id`, `slate_id`, `user_id`, `video_id`)를 공유함, 같은 유저의 slate가
+      split을 넘지 않음, candidate history에 `dt >= T`가 한 건도 없음, 출력에
+      `[T, T_end]` 밖 impression이 없음, `T_end + 1` click과 impression이 귀속 후보에는
+      포함되지만 출력에는 없음, `T_end + 1` 파티션 누락 시 실패, 출력일 `T-1`을
+      candidate의 완전 라벨로 취급하지 않음, 동일 입력 → 동일 `evaluation_id`,
+      write-once 위반 시 실패
 
 **검증:** `uv run python -m pytest tests/research_harness/test_slate.py -v`
 
