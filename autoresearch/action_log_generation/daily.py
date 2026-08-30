@@ -3,9 +3,10 @@
 [파이프라인] 공개 action log batch CLI와 LLM 판정 pipeline 사이에서 일일 입력
 partition을 읽고 single 또는 shard 실행을 선택한 뒤 final partition을 publish한다.
 
-[기능] 단일 coordinator가 daily temporary directory에 completion-time Parquet/JSONL을
-최종 commit한 뒤 row-group staging 검증과 last-known-good publish를 수행하며, 기존
-shard/checkpoint/merge 실행도 제공한다. 객체 저장소 publish는 임시 객체를 파티션 밖
+[기능] 단일 coordinator가 daily slate context·fingerprint를 single/shard/merge에
+일관되게 전달하고, temporary directory에 completion-time Parquet/JSONL을 최종
+commit한 뒤 row-group staging 검증과 last-known-good publish를 수행한다. 객체
+저장소 publish는 임시 객체를 파티션 밖
 prefix에 만든 뒤 서버측 복사로 최종 경로를 바꾼다(#515) — 정리가 실패해도 적재가 읽는
 파티션은 오염되지 않는다.
 
@@ -62,6 +63,7 @@ from autoresearch.action_log_generation.schema import (
     ImpressionDraft,
     QuarantineErrorType,
     QuarantineRecord,
+    SlateGenerationContext,
 )
 from autoresearch.action_log_generation.video_source import load_video_records
 
@@ -583,6 +585,11 @@ def _fingerprint_payload(
         "history_days": request.history_days,
         "history_end": history_end.astimezone(UTC).isoformat(),
         "max_events_per_user_per_day": request.max_events_per_user_per_day,
+        "slate_context": (
+            request.slate_context.model_dump(mode="json")
+            if request.slate_context is not None
+            else None
+        ),
         "schema_version": ACTION_LOG_SCHEMA_VERSION,
         "prompt_version": PROMPT_VERSION,
     }
@@ -666,13 +673,20 @@ class _ActionLogCheckpointStore:
         filesystem=None,
     ) -> None:
         self._filesystem = filesystem
-        self._namespace_path = _dt_shard_path(
+        namespace_path = _dt_shard_path(
             checkpoint_base_path,
             partition_date,
             shard_index,
             f"fingerprint={config_fingerprint}",
             filesystem=filesystem,
         )
+        if (
+            filesystem is None
+            and not namespace_path.startswith("\\\\?\\")
+            and Path(namespace_path).drive
+        ):
+            namespace_path = f"\\\\?\\{Path(namespace_path).resolve()}"
+        self._namespace_path = namespace_path
         self._manifest_path = _child_path(
             self._namespace_path,
             _CHECKPOINT_MANIFEST_FILE,
@@ -868,6 +882,7 @@ def _build_request(
         popular_ratio=popular_ratio,
         exploration_ratio=exploration_ratio,
         history_days=1,
+        slate_context=SlateGenerationContext(partition_date=partition_date),
         history_end=history_end or _default_history_end(partition_date),
         max_events_per_user_per_day=candidates_per_user,
         seed=seed,
