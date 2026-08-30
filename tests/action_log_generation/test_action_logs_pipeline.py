@@ -5,7 +5,7 @@ import random
 import re
 import weakref
 from concurrent.futures import Future
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from threading import Event, Thread
 from types import MappingProxyType, TracebackType
@@ -43,6 +43,15 @@ from autoresearch.action_log_generation.schema import (
     EventLogBatch,
     ImpressionDraft,
     QuarantineRecord,
+    SlateGenerationContext,
+)
+from autoresearch.action_log_generation.slate_identity import (
+    SlateId,
+    SlateIdentity,
+    SlateIdentityError,
+    SlateIdentityErrorCode,
+    SlateIdentityRegistry,
+    canonical_slate_json,
 )
 from autoresearch.action_log_generation.video_source import (
     _parse_tags,
@@ -313,6 +322,90 @@ def test_streaming_spool_parquet_and_jsonl_preserve_explicit_slate_id(
         Path(request.warehouse_output_path).read_text(encoding="utf-8")
     )
     assert warehouse["slate_id"] == slate_id
+
+
+def test_context_free_expand_events_full_projection_is_characterized(tmp_path) -> None:
+    # Given
+    request = _request(
+        tmp_path,
+        candidates_per_user=2,
+        history_days=1,
+        max_events_per_user_per_day=2,
+    )
+    drafts = [
+        ImpressionDraft(
+            user_id="u1",
+            video_id="v1",
+            click_propensity=0.9,
+            watch_fraction=0.4,
+            would_like=True,
+            duration_sec=100,
+        ),
+        ImpressionDraft(
+            user_id="u1",
+            video_id="v2",
+            click_propensity=0.1,
+            watch_fraction=0.2,
+            would_like=False,
+            duration_sec=100,
+        ),
+    ]
+    common = {
+        "user_id": "u1",
+        "watch_time_sec": None,
+        "rank": None,
+        "source": "historical",
+        "policy": None,
+        "ctr_score": None,
+        "is_exploration": None,
+        "policy_version": None,
+        "exposure_source": None,
+    }
+    expected = [
+        {
+            **common,
+            "event_id": "evt_20260630_00000000",
+            "event_timestamp": datetime(2026, 6, 30, 14, 43, 23, tzinfo=UTC),
+            "event_type": "impression",
+            "video_id": "v2",
+        },
+        {
+            **common,
+            "event_id": "evt_20260701_00000001",
+            "event_timestamp": datetime(2026, 7, 1, 9, 53, 52, tzinfo=UTC),
+            "event_type": "impression",
+            "video_id": "v1",
+        },
+        {
+            **common,
+            "event_id": "evt_20260701_00000002",
+            "event_timestamp": datetime(2026, 7, 1, 9, 54, 1, tzinfo=UTC),
+            "event_type": "click",
+            "video_id": "v1",
+        },
+        {
+            **common,
+            "event_id": "evt_20260701_00000003",
+            "event_timestamp": datetime(2026, 7, 1, 9, 54, 5, tzinfo=UTC),
+            "event_type": "view",
+            "video_id": "v1",
+            "watch_time_sec": 40,
+        },
+        {
+            **common,
+            "event_id": "evt_20260701_00000004",
+            "event_timestamp": datetime(2026, 7, 1, 9, 54, 15, tzinfo=UTC),
+            "event_type": "like",
+            "video_id": "v1",
+        },
+    ]
+
+    # When
+    events = pipeline_module._expand_events(drafts, {0}, request)
+
+    # Then
+    assert [event.model_dump(exclude={"slate_id"}) for event in events] == expected
+    assert all(event.slate_id is None for event in events)
 
 
 def test_streaming_writer_finalizes_completion_time_and_bounded_row_groups(
@@ -3593,6 +3686,283 @@ def _tagged_draft(**overrides) -> ImpressionDraft:
     )
     base.update(overrides)
     return ImpressionDraft(**base)
+
+
+def _daily_slate_request(tmp_path, **overrides) -> EventGenerationRequest:
+    values = {
+        "candidates_per_user": 2,
+        "history_days": 1,
+        "max_events_per_user_per_day": 2,
+        "history_end": datetime(2026, 8, 31, 15, 0, tzinfo=UTC),
+        "slate_context": SlateGenerationContext(
+            partition_date=date(2026, 8, 31)
+        ),
+        **overrides,
+    }
+    return _request(tmp_path, **values)
+
+
+def test_context_aware_events_share_slate_id_without_changing_projection(
+    tmp_path,
+) -> None:
+    # Given
+    drafts = [
+        _tagged_draft(video_id="v1", exposure_rank=1, would_like=True),
+        _tagged_draft(
+            video_id="v2",
+            exposure_source="trending",
+            exposure_rank=2,
+            click_propensity=0.1,
+        ),
+    ]
+    aware_request = _daily_slate_request(tmp_path / "aware")
+    legacy_request = aware_request.model_copy(update={"slate_context": None})
+
+    # When
+    aware = pipeline_module._expand_events(drafts, {0}, aware_request)
+    legacy = pipeline_module._expand_events(drafts, {0}, legacy_request)
+
+    # Then
+    assert [event.model_dump(exclude={"slate_id"}) for event in aware] == [
+        event.model_dump(exclude={"slate_id"}) for event in legacy
+    ]
+    assert [event.event_id for event in aware] == [event.event_id for event in legacy]
+    assert len({event.slate_id for event in aware}) == 1
+    assert aware[0].slate_id is not None
+    assert all(
+        event.event_timestamp.astimezone(pipeline_module._KST).date()
+        == date(2026, 8, 31)
+        for event in aware
+    )
+    assert all(event.slate_id is None for event in legacy)
+
+
+def test_context_aware_ids_are_stable_and_differ_between_users(tmp_path) -> None:
+    # Given
+    drafts = [
+        _tagged_draft(user_id="u1", video_id="v1", exposure_rank=1),
+        _tagged_draft(user_id="u2", video_id="v1", exposure_rank=1),
+    ]
+    request = _daily_slate_request(tmp_path, candidates_per_user=1)
+
+    # When
+    first = pipeline_module._expand_events(drafts, set(), request)
+    repeated = pipeline_module._expand_events(drafts, set(), request)
+
+    # Then
+    first_ids = {event.user_id: event.slate_id for event in first}
+    repeated_ids = {event.user_id: event.slate_id for event in repeated}
+    assert first_ids == repeated_ids
+    assert first_ids["u1"] != first_ids["u2"]
+
+
+def test_context_aware_expansion_rejects_actual_user_draft_overflow(
+    tmp_path,
+) -> None:
+    # Given
+    drafts = [
+        _tagged_draft(video_id=f"v{index}", exposure_rank=index)
+        for index in range(1, 4)
+    ]
+    request = _daily_slate_request(tmp_path)
+
+    # When
+    with pytest.raises(pipeline_module.ActionLogSlateContractError) as exc_info:
+        pipeline_module._expand_events(drafts, set(), request)
+
+    # Then
+    assert exc_info.value.code == "slate_capacity_exceeded"
+
+
+def test_context_aware_expansion_rejects_partition_date_mismatch(tmp_path) -> None:
+    # Given
+    request = _daily_slate_request(
+        tmp_path,
+        slate_context=SlateGenerationContext(partition_date=date(2026, 8, 30)),
+    )
+
+    # When
+    with pytest.raises(pipeline_module.ActionLogSlateContractError) as exc_info:
+        pipeline_module._expand_events([_tagged_draft(exposure_rank=1)], set(), request)
+
+    # Then
+    assert exc_info.value.code == "slate_partition_date_mismatch"
+
+
+@pytest.mark.parametrize("rank", [None, 0, -1])
+def test_context_aware_expansion_rejects_invalid_source_rank(
+    tmp_path,
+    rank: int | None,
+) -> None:
+    # Given
+    draft = _tagged_draft().model_copy(update={"exposure_rank": rank})
+
+    # When
+    with pytest.raises(SlateIdentityError) as exc_info:
+        pipeline_module._expand_events(
+            [draft],
+            set(),
+            _daily_slate_request(tmp_path, candidates_per_user=1),
+        )
+
+    # Then
+    assert exc_info.value.code is SlateIdentityErrorCode.INVALID_SLATE_EXPOSURE_RANK
+
+
+def test_context_aware_expansion_rejects_duplicate_user_video(tmp_path) -> None:
+    # Given
+    drafts = [
+        _tagged_draft(video_id="duplicate", exposure_rank=1),
+        _tagged_draft(video_id="duplicate", exposure_rank=2),
+    ]
+
+    # When
+    with pytest.raises(SlateIdentityError) as exc_info:
+        pipeline_module._expand_events(
+            drafts,
+            set(),
+            _daily_slate_request(tmp_path),
+        )
+
+    # Then
+    assert exc_info.value.code is SlateIdentityErrorCode.DUPLICATE_SLATE_VIDEO
+
+
+def _forced_collision_id(
+    identity: SlateIdentity,
+    *,
+    registry: SlateIdentityRegistry | None = None,
+) -> SlateId:
+    assert registry is not None
+    forced = SlateId("slt_20260831_000000000000000000000000")
+    registry.register(forced, canonical_slate_json(identity))
+    return forced
+
+
+def test_batch_expansion_uses_one_collision_registry(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    monkeypatch.setattr(
+        pipeline_module,
+        "generate_slate_id",
+        _forced_collision_id,
+        raising=False,
+    )
+    drafts = [
+        _tagged_draft(user_id="u1", video_id="v1", exposure_rank=1),
+        _tagged_draft(user_id="u2", video_id="v1", exposure_rank=1),
+    ]
+
+    # When / Then
+    with pytest.raises(SlateIdentityError) as exc_info:
+        expand_action_log_drafts(
+            _daily_slate_request(tmp_path, candidates_per_user=1),
+            drafts,
+        )
+    assert exc_info.value.code is SlateIdentityErrorCode.SLATE_ID_COLLISION
+
+
+def test_streaming_collision_preserves_existing_final_outputs(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    monkeypatch.setattr(
+        pipeline_module,
+        "generate_slate_id",
+        _forced_collision_id,
+        raising=False,
+    )
+    request = _daily_slate_request(tmp_path)
+    sentinels = {
+        Path(request.output_path): b"existing-parquet",
+        Path(request.warehouse_output_path): b"existing-warehouse",
+        Path(request.quarantine_output_path): b"existing-quarantine",
+    }
+    for path, content in sentinels.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+    # When
+    with pytest.raises(SlateIdentityError) as exc_info:
+        pipeline_module.generate_action_log_single(
+            request,
+            _fixture_users(2),
+            build_fixture_video_records(4),
+            RuleBasedActionLogGenerator(),
+        )
+
+    # Then
+    assert exc_info.value.code is SlateIdentityErrorCode.SLATE_ID_COLLISION
+    assert {path: path.read_bytes() for path in sentinels} == sentinels
+    assert {path.name for path in tmp_path.iterdir()} == {
+        path.name for path in sentinels
+    }
+
+
+def test_context_aware_batch_and_streaming_publish_same_event_projection(
+    tmp_path,
+) -> None:
+    # Given
+    users = _fixture_users(2)
+    videos = build_fixture_video_records(4)
+    batch_request = _daily_slate_request(tmp_path / "batch")
+    streaming_request = _daily_slate_request(tmp_path / "streaming")
+
+    # When
+    generate_action_log_batch(
+        batch_request,
+        users,
+        videos,
+        RuleBasedActionLogGenerator(),
+    )
+    pipeline_module.generate_action_log_single(
+        streaming_request,
+        users,
+        videos,
+        RuleBasedActionLogGenerator(),
+    )
+    rows_by_mode = {
+        mode: [
+            json.loads(line)
+            for line in Path(request.warehouse_output_path)
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        for mode, request in (
+            ("batch", batch_request),
+            ("streaming", streaming_request),
+        )
+    }
+
+    # Then
+    for request in (batch_request, streaming_request):
+        parquet_rows = pq.read_table(request.output_path).to_pylist()
+        assert all(row["slate_id"] is not None for row in parquet_rows)
+    for rows in rows_by_mode.values():
+        assert all(row["slate_id"] is not None for row in rows)
+        assert all(
+            len({row["slate_id"] for row in rows if row["user_id"] == user["user_id"]})
+            == 1
+            for user in users
+        )
+    assert [
+        {
+            key: value
+            for key, value in row.items()
+            if key not in {"generated_at", "slate_id"}
+        }
+        for row in rows_by_mode["batch"]
+    ] == [
+        {
+            key: value
+            for key, value in row.items()
+            if key not in {"generated_at", "slate_id"}
+        }
+        for row in rows_by_mode["streaming"]
+    ]
 
 
 def test_draft_exposure_tags_roundtrip_parquet(tmp_path):
