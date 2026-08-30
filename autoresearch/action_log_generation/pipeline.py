@@ -237,6 +237,7 @@ EVENT_LOG_PARQUET_SCHEMA = pa.schema(
         pa.field("is_exploration", pa.bool_()),
         pa.field("policy_version", pa.string()),
         pa.field("exposure_source", pa.string()),
+        pa.field("slate_id", pa.string()),
         pa.field("schema_version", pa.string()),
         pa.field("prompt_version", pa.string()),
         pa.field("llm_model", pa.string()),
@@ -251,7 +252,7 @@ _PARQUET_TARGET_ROW_GROUP_ROWS = 50_000
 
 # additive 확장 컬럼 — 이 컬럼이 없는 legacy 파티션 스키마도 event log 계약에서
 # 관용한다 (#221). event log 스키마 계약의 단일 출처로 이곳에 둔다.
-OPTIONAL_ADDITIVE_COLUMNS = frozenset({"exposure_source"})
+OPTIONAL_ADDITIVE_COLUMNS = frozenset({"exposure_source", "slate_id"})
 
 ACTION_LOG_DRAFT_PARQUET_SCHEMA = pa.schema(
     [
@@ -971,6 +972,7 @@ def _event_rows(batch: EventLogBatch, model_name: str) -> list[dict]:
                 "is_exploration": event.is_exploration,
                 "policy_version": event.policy_version,
                 "exposure_source": event.exposure_source,
+                "slate_id": event.slate_id,
                 "schema_version": batch.schema_version,
                 "prompt_version": batch.prompt_version,
                 "llm_model": model_name,
@@ -1001,6 +1003,7 @@ def _event_spool_rows(
             "is_exploration": event.is_exploration,
             "policy_version": event.policy_version,
             "exposure_source": event.exposure_source,
+            "slate_id": event.slate_id,
             "schema_version": ACTION_LOG_SCHEMA_VERSION,
             "prompt_version": PROMPT_VERSION,
             "llm_model": model_name,
