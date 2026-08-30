@@ -1547,6 +1547,26 @@ def test_validate_existing_final_tolerates_schema_without_additive_columns(
             False,
         ),
         (
+            pipeline_module.EVENT_LOG_PARQUET_SCHEMA.set(
+                pipeline_module.EVENT_LOG_PARQUET_SCHEMA.get_field_index("event_id"),
+                pa.field("event_id", pa.string(), nullable=False),
+            ),
+            False,
+        ),
+        (
+            pa.schema(
+                [
+                    pipeline_module.EVENT_LOG_PARQUET_SCHEMA.field(1),
+                    pipeline_module.EVENT_LOG_PARQUET_SCHEMA.field(0),
+                    *[
+                        pipeline_module.EVENT_LOG_PARQUET_SCHEMA.field(index)
+                        for index in range(2, len(pipeline_module.EVENT_LOG_PARQUET_SCHEMA))
+                    ],
+                ]
+            ),
+            False,
+        ),
+        (
             pipeline_module.EVENT_LOG_PARQUET_SCHEMA.append(
                 pa.field("unexpected_column", pa.string())
             ),
@@ -1559,6 +1579,8 @@ def test_validate_existing_final_tolerates_schema_without_additive_columns(
         "without-additive-columns",
         "missing-required-field",
         "wrong-required-field-type",
+        "wrong-required-field-nullability",
+        "wrong-field-order",
         "unexpected-field",
     ),
 )
@@ -1573,6 +1595,22 @@ def test_schema_compatibility_allows_only_known_optional_column_subsets(
             pipeline_module.OPTIONAL_ADDITIVE_COLUMNS,
         )
         is is_compatible
+    )
+
+
+def test_schema_compatibility_rejects_reversed_legacy_generation():
+    reversed_legacy_schema = pa.schema(
+        [
+            field
+            for field in pipeline_module.EVENT_LOG_PARQUET_SCHEMA
+            if field.name != "exposure_source"
+        ]
+    )
+
+    assert not daily_module._schema_is_compatible(
+        reversed_legacy_schema,
+        pipeline_module.EVENT_LOG_PARQUET_SCHEMA,
+        pipeline_module.OPTIONAL_ADDITIVE_COLUMNS,
     )
 
 

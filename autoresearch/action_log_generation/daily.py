@@ -337,14 +337,19 @@ def _schema_is_compatible(
     expected_schema: pa.Schema,
     optional_columns: frozenset[str],
 ) -> bool:
-    actual_names = frozenset(schema.names)
-    missing_optional_columns = optional_columns - actual_names
-    expected_fields = tuple(
-        field
-        for field in expected_schema
-        if field.name not in missing_optional_columns
+    optional_names = tuple(
+        field.name for field in expected_schema if field.name in optional_columns
     )
-    return tuple(schema) == expected_fields
+    for optional_start in range(len(optional_names) + 1):
+        missing_optional_columns = frozenset(optional_names[optional_start:])
+        expected_fields = tuple(
+            field
+            for field in expected_schema
+            if field.name not in missing_optional_columns
+        )
+        if tuple(schema) == expected_fields:
+            return True
+    return False
 
 
 def _validate_existing_final(
