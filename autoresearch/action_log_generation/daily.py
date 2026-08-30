@@ -69,15 +69,6 @@ from autoresearch.action_log_generation.video_source import load_video_records
 
 
 _KST = ZoneInfo("Asia/Seoul")
-# 브랜치 이전에 기록된 legacy final은 OPTIONAL_ADDITIVE_COLUMNS가 없다 (#221).
-# 품질잡과 일관되게 재실행 skip 검증에서 이 legacy 스키마도 관용한다.
-_LEGACY_EVENT_LOG_PARQUET_SCHEMA = pa.schema(
-    [
-        field
-        for field in EVENT_LOG_PARQUET_SCHEMA
-        if field.name not in OPTIONAL_ADDITIVE_COLUMNS
-    ]
-)
 _PARTITION_FILE = "part-0.parquet"
 _QUARANTINE_FILE = "quarantine.jsonl"
 _MANIFEST_FILE = "manifest.json"
@@ -341,6 +332,21 @@ def _path_exists(path: str, *, filesystem=None) -> bool:
     return filesystem.get_file_info(path).type != FileType.NotFound
 
 
+def _schema_is_compatible(
+    schema: pa.Schema,
+    expected_schema: pa.Schema,
+    optional_columns: frozenset[str],
+) -> bool:
+    actual_names = frozenset(schema.names)
+    missing_optional_columns = optional_columns - actual_names
+    expected_fields = tuple(
+        field
+        for field in expected_schema
+        if field.name not in missing_optional_columns
+    )
+    return tuple(schema) == expected_fields
+
+
 def _validate_existing_final(
     path: str,
     partition_date: date,
@@ -359,9 +365,10 @@ def _validate_existing_final(
         )
     except Exception as exc:  # noqa: BLE001 - pyarrow/filesystem errors vary by backend
         raise ValueError("existing final parquet is unreadable") from exc
-    if not (
-        schema.equals(EVENT_LOG_PARQUET_SCHEMA)
-        or schema.equals(_LEGACY_EVENT_LOG_PARQUET_SCHEMA)
+    if not _schema_is_compatible(
+        schema,
+        EVENT_LOG_PARQUET_SCHEMA,
+        OPTIONAL_ADDITIVE_COLUMNS,
     ):
         raise ValueError("existing final parquet schema does not match action log contract")
     timestamps = timestamp_table.column("event_timestamp").to_pylist()

@@ -1505,6 +1505,77 @@ def test_validate_existing_final_tolerates_schema_without_additive_columns(
     daily_module._validate_existing_final(str(final_path), partition_date)
 
 
+@pytest.mark.parametrize(
+    ("schema", "is_compatible"),
+    (
+        (pipeline_module.EVENT_LOG_PARQUET_SCHEMA, True),
+        (
+            pa.schema(
+                [
+                    field
+                    for field in pipeline_module.EVENT_LOG_PARQUET_SCHEMA
+                    if field.name != "slate_id"
+                ]
+            ),
+            True,
+        ),
+        (
+            pa.schema(
+                [
+                    field
+                    for field in pipeline_module.EVENT_LOG_PARQUET_SCHEMA
+                    if field.name not in {"exposure_source", "slate_id"}
+                ]
+            ),
+            True,
+        ),
+        (
+            pa.schema(
+                [
+                    field
+                    for field in pipeline_module.EVENT_LOG_PARQUET_SCHEMA
+                    if field.name != "event_id"
+                ]
+            ),
+            False,
+        ),
+        (
+            pipeline_module.EVENT_LOG_PARQUET_SCHEMA.set(
+                pipeline_module.EVENT_LOG_PARQUET_SCHEMA.get_field_index("event_id"),
+                pa.field("event_id", pa.int64()),
+            ),
+            False,
+        ),
+        (
+            pipeline_module.EVENT_LOG_PARQUET_SCHEMA.append(
+                pa.field("unexpected_column", pa.string())
+            ),
+            False,
+        ),
+    ),
+    ids=(
+        "current",
+        "without-slate-id",
+        "without-additive-columns",
+        "missing-required-field",
+        "wrong-required-field-type",
+        "unexpected-field",
+    ),
+)
+def test_schema_compatibility_allows_only_known_optional_column_subsets(
+    schema,
+    is_compatible,
+):
+    assert (
+        daily_module._schema_is_compatible(
+            schema,
+            pipeline_module.EVENT_LOG_PARQUET_SCHEMA,
+            pipeline_module.OPTIONAL_ADDITIVE_COLUMNS,
+        )
+        is is_compatible
+    )
+
+
 def test_validate_existing_final_rejects_unrelated_schema(tmp_path):
     partition_date = date(2026, 7, 1)
     unrelated_schema = pa.schema(
