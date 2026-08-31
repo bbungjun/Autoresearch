@@ -113,9 +113,15 @@ def _write_virtual_users(path, count: int = 3):
 
 @pytest.fixture
 def short_checkpoint_path(request: pytest.FixtureRequest) -> Path:
-    directory = tempfile.TemporaryDirectory(prefix="t4-", dir=Path.cwd().anchor)
+    working_directory = Path.cwd()
+    uses_drive_root = bool(working_directory.drive)
+    directory = tempfile.TemporaryDirectory(
+        prefix="t4-", dir=working_directory.anchor if uses_drive_root else None
+    )
     request.addfinalizer(directory.cleanup)
-    return Path(f"\\\\?\\{directory.name}")
+    if uses_drive_root:
+        return Path(f"\\\\?\\{directory.name}")
+    return Path(directory.name)
 
 
 def _write_youtube_partition(base, partition_date: date, count: int = 12):
