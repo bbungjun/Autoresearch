@@ -411,6 +411,13 @@ manifest의 `snapshot_fingerprint`의 정본이다.
 동일 원천과 계약은 동일 `evaluation_id`·`snapshot_fingerprint`를 만들어야 한다.
 `created_at`은 관측 메타데이터이며 identity에 참여하지 않는다.
 
+`optional_non_null_ratio`는 JSON object shape를 유지하되, 정확히
+`candidate_source`와 `original_rank` 각각 `0..1` float만 받는 frozen/extra-forbid
+`OptionalNonNullRatio`다. `SplitSummary`는 입력 dict alias를 이 typed model로 즉시
+정규화하므로, 이후 외부 dict 또는 constructed ratio를 바꿔 manifest model dump를
+변경할 수 없다. Task 6의 canonical fingerprint helper는 이 immutable
+`EvaluationSnapshotManifest.model_dump()`를 입력으로 사용한다.
+
 ## 11. Manifest
 
 `manifest.json`은 추가 field를 허용하지 않는 typed `EvaluationSnapshotManifest`이며 다음
@@ -522,7 +529,7 @@ manifest의 `snapshot_fingerprint`의 정본이다.
 | `EvaluationSplit` / snapshot | `name: SplitName`, `rows: tuple[AttributedImpression, ...]`, `user_ids: tuple[str, ...]` |
 | `AttributionContract`, `SplitContract` / snapshot | attribution=`version: Literal['click-attribution-v1'], lookback_seconds: Literal[1800], tie_break: tuple[str, str]`; split=`version: Literal['user-hash-80-20-v1'], salt: Literal['research-harness-slate-v1:'], validation_buckets: tuple[int, ...], final_holdout_buckets: tuple[int, ...]` |
 | `WriterIdentity`, `WriterOptions` / snapshot | writer=`engine: Literal['pyarrow'], version: str, options: WriterOptions`; options는 §10.1의 literal 10 fields 전부다 |
-| `ArtifactReceipt`, `SplitArtifacts`, `SplitCounts`, `SplitSummary` / snapshot | artifact=`relative_path: str, rows: int, sha256: str`; artifacts=`slate: ArtifactReceipt, labels: ArtifactReceipt`; counts=`user_count: int, slate_count: int, row_count: int, clicked_row_count: int, click_positive_slate_count: int, click_positive_slate_ratio: float, mean_slate_size: float`; summary=`evaluation_id: EvaluationId, counts: SplitCounts, optional_non_null_ratio: dict[str, float], artifacts: SplitArtifacts` |
+| `ArtifactReceipt`, `SplitArtifacts`, `SplitCounts`, `OptionalNonNullRatio`, `SplitSummary` / snapshot | artifact=`relative_path: str, rows: int, sha256: str`; artifacts=`slate: ArtifactReceipt, labels: ArtifactReceipt`; counts=`user_count: int, slate_count: int, row_count: int, clicked_row_count: int, click_positive_slate_count: int, click_positive_slate_ratio: float, mean_slate_size: float`; ratio=frozen/extra-forbid `candidate_source: float[0,1], original_rank: float[0,1]`; summary=`evaluation_id: EvaluationId, counts: SplitCounts, optional_non_null_ratio: OptionalNonNullRatio, artifacts: SplitArtifacts` |
 | `EvaluationSnapshotManifest` / snapshot | `contract_version: Literal['evaluation-slate-snapshot-v1'], snapshot_fingerprint: SnapshotFingerprint, created_at: datetime, source: SnapshotSource, window: EvaluationWindow, attribution: AttributionContract, split: SplitContract, writer: WriterIdentity, validation: SplitSummary, final_holdout: SplitSummary` |
 | `SnapshotArtifactInput`, `EvaluationSnapshotReceipt` / snapshot | input=`request, window, partitions, validation, final_holdout, created_at`; receipt=`snapshot_fingerprint, target_path: Path, validation_id, final_holdout_id, reused: bool` |
 
