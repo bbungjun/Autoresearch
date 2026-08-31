@@ -3,7 +3,8 @@
 [파이프라인] 최종 일일 action log Parquet와 slate identity·click attribution 사이에서
 필수 파티션을 읽고 원천 schema·KST slice·cutover 계약을 검증한다.
 
-[기능] local/GCS 공통 Arrow filesystem seam과 검증된 partition receipt/event를 제공한다.
+[기능] local/GCS 공통 Arrow filesystem seam, 전역 유일성이 검증된 source event와
+partition receipt를 제공한다.
 
 [비책임] canonical slate 재계산, click attribution, user split과 artifact 게시는 후속
 Stage B 모듈이 담당한다.
@@ -92,6 +93,7 @@ def load_required_partitions(
     else:
         active_source = source
     loaded: list[LoadedPartition] = []
+    seen_event_ids: set[str] = set()
     partition_date = request.history_start_date
     final_date = request.evaluation_end_date + timedelta(days=1)
     while partition_date <= final_date:
@@ -138,6 +140,15 @@ def load_required_partitions(
                     stage="row_validation",
                     dt=partition_date,
                 ) from error
+            if event.event_id in seen_event_ids:
+                raise EvaluationSnapshotError(
+                    code=SnapshotErrorCode.SOURCE_SCHEMA_INVALID,
+                    stage="row_validation",
+                    dt=partition_date,
+                    count=2,
+                    identifier_prefix=event.event_id,
+                )
+            seen_event_ids.add(event.event_id)
             if event.event_timestamp.astimezone(_KST).date() != partition_date:
                 raise EvaluationSnapshotError(
                     code=SnapshotErrorCode.PARTITION_TIMESTAMP_MISMATCH,
