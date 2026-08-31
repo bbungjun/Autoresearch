@@ -187,7 +187,7 @@ def load_required_partitions(
                     dt=partition_date,
                     uri=active_source.partition_uri(partition_date),
                     rows=table.num_rows,
-                    sha256="0" * 64,
+                    sha256=hashlib.sha256(payload).hexdigest(),
                 ),
                 events=tuple(events),
             )
