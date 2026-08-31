@@ -66,4 +66,3 @@ def request_for(root: str, output_root: Path) -> EvaluationSnapshotRequest:
         slate_id_cutover_date=date(2026, 9, 1),
         output_root=output_root,
     )
-
