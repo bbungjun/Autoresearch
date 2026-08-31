@@ -1,46 +1,34 @@
+import os
 from pathlib import Path
-import subprocess
-import sys
+import runpy
+
+import pytest
 
 
-def test_concurrency_module_collects_when_msvcrt_is_unavailable_on_posix() -> None:
+@pytest.mark.skipif(os.name != "posix", reason="POSIX runtime required")
+def test_concurrency_module_collects_on_actual_posix_runtime() -> None:
     # Given
     module_path = Path(__file__).with_name("test_snapshot_publisher_concurrency.py")
-    code = """
-import builtins
-import os
-import pytest
-import runpy
-import sys
-import types
-
-original_import = builtins.__import__
-
-def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
-    if name == "msvcrt":
-        raise ModuleNotFoundError("simulated POSIX: msvcrt unavailable")
-    return original_import(name, globals, locals, fromlist, level)
-
-builtins.__import__ = guarded_import
-posix_os = types.ModuleType("os")
-posix_os.__dict__.update(os.__dict__)
-posix_os.name = "posix"
-sys.modules["os"] = posix_os
-runpy.run_path(sys.argv[1], run_name="snapshot_publisher_concurrency_collection")
-print("COLLECTION_OK")
-"""
 
     # When
-    completed = subprocess.run(
-        [sys.executable, "-c", code, str(module_path)],
-        check=False,
-        capture_output=True,
-        text=True,
+    namespace = runpy.run_path(
+        str(module_path), run_name="snapshot_publisher_concurrency_collection"
     )
 
     # Then
-    assert (
-        completed.returncode,
-        completed.stdout.strip(),
-        completed.stderr.strip(),
-    ) == (0, "COLLECTION_OK", "")
+    generic_test = namespace["test_two_concurrent_identical_publishers_cooperate"]
+    assert callable(generic_test)
+    assert getattr(generic_test, "pytestmark", ()) == ()
+
+    windows_only_tests = (
+        "test_windows_contention_beyond_crt_retry_limit_eventually_reuses",
+        "test_non_contention_lock_failure_is_typed_sanitized_and_cleans_staging",
+        "test_lock_release_failure_is_typed_sanitized_and_cleans_staging",
+    )
+    for test_name in windows_only_tests:
+        windows_test = namespace[test_name]
+        assert callable(windows_test)
+        assert any(
+            mark.name == "skipif" and mark.args == (True,)
+            for mark in windows_test.pytestmark
+        )
