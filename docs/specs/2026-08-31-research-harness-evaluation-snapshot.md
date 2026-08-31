@@ -1,6 +1,6 @@
 # Research Harness P0-1 — 재현 가능한 평가 데이터와 split
 
-> 작성: 2026-08-31 | 상태: Stage A producer 계약 구현, Stage B/C 설계 대기 | 추적: #17
+> 작성: 2026-08-31 | 상태: Stage A producer 계약 구현, Stage B Task 0 canonical 계약 잠금 완료, Stage B builder/Stage C 구현 대기 | 추적: #17
 >
 > 상위 계약:
 > `docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md`
@@ -321,30 +321,100 @@ labels row는 정렬된 slate row와 같은 순서로 기록한다. slate와 lab
 eval_<64 lowercase hex>
 ```
 
-digest 입력은 다음 canonical payload다.
+digest 입력은 추가 field를 허용하지 않는 다음 exact payload다. 날짜는 `YYYY-MM-DD`,
+UTC timestamp는 정확히 `YYYY-MM-DDTHH:MM:SS.ffffffZ`, nullable 값은 JSON `null`로
+직렬화한다.
 
-- contract version `evaluation-slate-snapshot-v1`
-- split name `validation|final_holdout`
-- source partition URI·row count·SHA-256
-- date·cutover·attribution·user split 규칙
-- `evaluation_id`를 넣기 전의 정렬된 slate row
-- `evaluation_id`를 넣기 전의 정렬된 label row
+```text
+EvaluationIdPayload = {
+  contract_version: "evaluation-slate-snapshot-v1",
+  split_name: "validation" | "final_holdout",
+  source: {
+    root: str,
+    partitions: [{dt: YYYY-MM-DD, uri: str, rows: int>=0, sha256: lowercase-64hex}],
+    slate_id_cutover_date: YYYY-MM-DD
+  },
+  window: {
+    history_start_date: YYYY-MM-DD,
+    evaluation_start_date: YYYY-MM-DD,
+    evaluation_end_date: YYYY-MM-DD,
+    label_scan_end_date: YYYY-MM-DD,
+    complete_history_label_end_date: YYYY-MM-DD,
+    candidate_history_partitions: [full SourcePartitionReceipt]
+  },
+  attribution: {
+    version: "click-attribution-v1",
+    lookback_seconds: 1800,
+    tie_break: ["event_timestamp_desc", "source_event_id_desc"]
+  },
+  split: {
+    version: "user-hash-80-20-v1",
+    salt: "research-harness-slate-v1:",
+    validation_buckets: [0,1,2,3,4,5,6,7],
+    final_holdout_buckets: [8,9]
+  },
+  writer: {engine: "pyarrow", version: str, options: WriterOptions},
+  slate_rows: [{
+    slate_id: str, user_id: str, video_id: str, event_timestamp: UTC-timestamp,
+    original_rank: int | null, candidate_source: str | null
+  }],
+  label_rows: [{
+    slate_id: str, user_id: str, video_id: str, source_event_id: str, clicked: bool
+  }]
+}
+```
 
-이 계산 순서로 ID를 먼저 만든 뒤 두 parquet에 ID를 채워 순환 참조를 피한다.
-`evaluation_id`는 재현 식별자이지 label 기밀성을 제공하는 secret이 아니다.
+`source.partitions`와 `window.candidate_history_partitions`는 각각 `dt` 오름차순이다.
+후자는 `dt < T`인 source receipt의 부분열이며 `dt`, `uri`, `rows`, `sha256`를 생략한
+요약이 아니라 full `SourcePartitionReceipt` 배열이다. `slate_rows`는
+`(user_id, slate_id, event_timestamp, video_id)`로, `label_rows`는 같은 slate row 순서로
+정렬한다. 두 row object는 위 열 집합만 가지며 `evaluation_id` 삽입 전 값을 담는다.
+
+canonical bytes는 UTF-8, `ensure_ascii=false`, 재귀 key sort,
+`separators=(',', ':')`, trailing newline 없음으로 만든 JSON이다. 배열의 순서는 위
+규칙으로 먼저 결정하고 serializer는 object key만 정렬한다. 이 계산으로 ID를 먼저
+만든 뒤 두 parquet에 `evaluation_id`를 채워 순환 참조를 피한다. `evaluation_id`는 재현
+식별자이지 label 기밀성을 제공하는 secret이 아니다.
+
+`WriterOptions`는 정확히 다음 10 field다. `uv.lock`이 고정한 PyArrow 21.0.0 runtime에서
+writer identity는 `engine="pyarrow"`, `version="21.0.0"`과 이 options 전체다.
+
+```json
+{"version":"2.6","coerce_timestamps":"us","allow_truncated_timestamps":false,"use_deprecated_int96_timestamps":false,"compression":"NONE","use_dictionary":false,"row_group_size":50000,"write_statistics":true,"data_page_version":"1.0","store_schema":true}
+```
+
+writer의 engine, version 또는 options 하나라도 바뀌면 identity가 바뀌고 evaluation ID도
+바뀐다. 결정성 보장은 같은 `uv.lock`과 같은 writer runtime에 한정하며, writer 변경은
+contract-impact review 없이는 허용하지 않는다.
+
+#### Canonical JSON test vector
+
+아래 한 줄은 synthetic receipt를 사용하는 validation split의 literal canonical UTF-8
+JSON이다. `slt_20260901_0123456789abcdef01234567`은 `slt_YYYYMMDD_<24hex>`이고,
+`evt_20260901_00000001`은 `evt_YYYYMMDD_<8 digits>` 형식이다. 별도 one-shot
+SHA-256 재계산의 expected digest는
+`dafb0e95e3595ada1da4ddbe0b75a076b173ffffc5b9e0c53021fc659df49d8d`이며,
+evaluation ID는 `eval_dafb0e95e3595ada1da4ddbe0b75a076b173ffffc5b9e0c53021fc659df49d8d`다.
+
+```json
+{"attribution":{"lookback_seconds":1800,"tie_break":["event_timestamp_desc","source_event_id_desc"],"version":"click-attribution-v1"},"contract_version":"evaluation-slate-snapshot-v1","label_rows":[{"clicked":false,"slate_id":"slt_20260901_0123456789abcdef01234567","source_event_id":"evt_20260901_00000001","user_id":"user-01","video_id":"video-A"}],"slate_rows":[{"candidate_source":"model","event_timestamp":"2026-09-01T00:00:00.000000Z","original_rank":1,"slate_id":"slt_20260901_0123456789abcdef01234567","user_id":"user-01","video_id":"video-A"}],"source":{"partitions":[{"dt":"2026-08-30","rows":2,"sha256":"f42aeca04305f5654582dd541ef0d56d832bd3cea2e1da0b8274fb88fcf34bf8","uri":"memory://research-harness-vector/dt=2026-08-30/part-0.parquet"},{"dt":"2026-08-31","rows":3,"sha256":"3f7b574ee4fde5dfd56a206317e6959311f8577667dfe07614d94d80e4ce7573","uri":"memory://research-harness-vector/dt=2026-08-31/part-0.parquet"},{"dt":"2026-09-01","rows":1,"sha256":"e930108a7a48791a5891486b4419eb2186b84a45b01a1cde3081514ec99e3420","uri":"memory://research-harness-vector/dt=2026-09-01/part-0.parquet"},{"dt":"2026-09-02","rows":0,"sha256":"663fc92e06df292c05a44a4bf5c86d2b4429b03edbe2f11cef21da9cfe6ea5d0","uri":"memory://research-harness-vector/dt=2026-09-02/part-0.parquet"},{"dt":"2026-09-03","rows":1,"sha256":"aa40602ef43f323ba14e1b52265d8f2bc9ea3d624ce0a0a650045c5006de282b","uri":"memory://research-harness-vector/dt=2026-09-03/part-0.parquet"}],"root":"memory://research-harness-vector","slate_id_cutover_date":"2026-08-30"},"split":{"final_holdout_buckets":[8,9],"salt":"research-harness-slate-v1:","validation_buckets":[0,1,2,3,4,5,6,7],"version":"user-hash-80-20-v1"},"split_name":"validation","window":{"candidate_history_partitions":[{"dt":"2026-08-30","rows":2,"sha256":"f42aeca04305f5654582dd541ef0d56d832bd3cea2e1da0b8274fb88fcf34bf8","uri":"memory://research-harness-vector/dt=2026-08-30/part-0.parquet"},{"dt":"2026-08-31","rows":3,"sha256":"3f7b574ee4fde5dfd56a206317e6959311f8577667dfe07614d94d80e4ce7573","uri":"memory://research-harness-vector/dt=2026-08-31/part-0.parquet"}],"complete_history_label_end_date":"2026-08-30","evaluation_end_date":"2026-09-02","evaluation_start_date":"2026-09-01","history_start_date":"2026-08-30","label_scan_end_date":"2026-09-03"},"writer":{"engine":"pyarrow","options":{"allow_truncated_timestamps":false,"coerce_timestamps":"us","compression":"NONE","data_page_version":"1.0","row_group_size":50000,"store_schema":true,"use_deprecated_int96_timestamps":false,"use_dictionary":false,"version":"2.6","write_statistics":true},"version":"21.0.0"}}
+```
 
 ### 10.2 `snapshot_fingerprint`
 
-두 split parquet를 쓴 뒤 각 파일 SHA-256을 계산한다. manifest에서
-`snapshot_fingerprint`와 `created_at`을 제외한 canonical payload를 SHA-256해
-`snapshot_fingerprint`를 만든다.
+두 split parquet를 쓴 뒤 각 파일 SHA-256을 계산한다. fingerprint payload는 typed
+`EvaluationSnapshotManifest` 전체의 model dump에서 정확히 `snapshot_fingerprint`와
+`created_at`만 제거한 canonical JSON이다. 다른 field를 제외하거나 unknown field를
+묵살하는 것은 금지한다. 이 payload의 SHA-256은 directory name, `_SUCCESS` 내용, typed
+manifest의 `snapshot_fingerprint`의 정본이다.
 
 동일 원천과 계약은 동일 `evaluation_id`·`snapshot_fingerprint`를 만들어야 한다.
 `created_at`은 관측 메타데이터이며 identity에 참여하지 않는다.
 
 ## 11. Manifest
 
-`manifest.json`은 최소 다음 필드를 가진다.
+`manifest.json`은 추가 field를 허용하지 않는 typed `EvaluationSnapshotManifest`이며 다음
+중첩 구조를 가진다.
 
 ```json
 {
@@ -363,7 +433,10 @@ digest 입력은 다음 canonical payload다.
     "evaluation_start_date": "2026-08-31",
     "evaluation_end_date": "2026-09-02",
     "label_scan_end_date": "2026-09-03",
-    "complete_history_label_end_date": "2026-08-29"
+    "complete_history_label_end_date": "2026-08-29",
+    "candidate_history_partitions": [
+      {"dt": "2026-08-01", "uri": "opaque uri", "rows": 100, "sha256": "64 lowercase hex"}
+    ]
   },
   "attribution": {
     "version": "click-attribution-v1",
@@ -376,29 +449,82 @@ digest 입력은 다음 canonical payload다.
     "validation_buckets": [0, 1, 2, 3, 4, 5, 6, 7],
     "final_holdout_buckets": [8, 9]
   },
+  "writer": {
+    "engine": "pyarrow",
+    "version": "21.0.0",
+    "options": {
+      "version": "2.6",
+      "coerce_timestamps": "us",
+      "allow_truncated_timestamps": false,
+      "use_deprecated_int96_timestamps": false,
+      "compression": "NONE",
+      "use_dictionary": false,
+      "row_group_size": 50000,
+      "write_statistics": true,
+      "data_page_version": "1.0",
+      "store_schema": true
+    }
+  },
   "validation": {
     "evaluation_id": "eval_...",
-    "users": 80,
-    "slates": 80,
-    "rows": 1920,
-    "click_positive_slates": 42,
-    "click_positive_slate_ratio": 0.525,
-    "mean_slate_size": 24.0,
+    "counts": {
+      "user_count": 80,
+      "slate_count": 80,
+      "row_count": 1920,
+      "clicked_row_count": 42,
+      "click_positive_slate_count": 42,
+      "click_positive_slate_ratio": 0.525,
+      "mean_slate_size": 24.0
+    },
     "optional_non_null_ratio": {
       "candidate_source": 1.0,
       "original_rank": 1.0
     },
     "artifacts": {
-      "slate": {"path": "validation/slate.parquet", "sha256": "..."},
-      "labels": {"path": "validation/labels.parquet", "sha256": "..."}
+      "slate": {"relative_path": "validation/slate.parquet", "rows": 1920, "sha256": "64 lowercase hex"},
+      "labels": {"relative_path": "validation/labels.parquet", "rows": 1920, "sha256": "64 lowercase hex"}
     }
   },
-  "final_holdout": {"evaluation_id": "eval_..."}
+  "final_holdout": {
+    "evaluation_id": "eval_...",
+    "counts": {
+      "user_count": 20,
+      "slate_count": 20,
+      "row_count": 480,
+      "clicked_row_count": 11,
+      "click_positive_slate_count": 11,
+      "click_positive_slate_ratio": 0.55,
+      "mean_slate_size": 24.0
+    },
+    "optional_non_null_ratio": {
+      "candidate_source": 1.0,
+      "original_rank": 1.0
+    },
+    "artifacts": {
+      "slate": {"relative_path": "final_holdout/slate.parquet", "rows": 480, "sha256": "64 lowercase hex"},
+      "labels": {"relative_path": "final_holdout/labels.parquet", "rows": 480, "sha256": "64 lowercase hex"}
+    }
+  }
 }
 ```
 
-예시에서 축약한 `final_holdout`도 validation과 같은 count,
-`optional_non_null_ratio`, `artifacts` 구조를 전부 가진다.
+`| None`이 없는 field는 non-null/required다. typed field는 다음 exact table을 따른다.
+
+| Type/module | Exact fields |
+| --- | --- |
+| `EvaluationSnapshotError` / errors | `code: SnapshotErrorCode`, `stage: str`, `dt: date | None`, `count: int | None`, `identifier_prefix: str | None`; prefix는 UTF-8 최대 16 bytes를 code-point 경계에서 자른다 |
+| `EvaluationSnapshotRequest` / snapshot | `action_log_root: str`, `history_start_date: date`, `evaluation_start_date: date`, `evaluation_end_date: date`, `slate_id_cutover_date: date`, `output_root: Path` |
+| `SnapshotSource` / snapshot | `root: str`, `partitions: tuple[SourcePartitionReceipt, ...]`, `slate_id_cutover_date: date` |
+| `EvaluationWindow` / snapshot | `history_start_date: date`, `evaluation_start_date: date`, `evaluation_end_date: date`, `label_scan_end_date: date`, `complete_history_label_end_date: date`, `candidate_history_partitions: tuple[SourcePartitionReceipt, ...]` |
+| `SourceEvent` / source | `partition_date: date`, `source_event_id: str`, `event_type: Literal['impression', 'click', 'view', 'like']`, `user_id: str`, `video_id: str`, `event_timestamp: datetime`, `slate_id: str | None`, `rank: int | None`, `exposure_source: str | None`, `policy_version: str | None` |
+| `SourcePartitionReceipt`, `LoadedPartition` / source | receipt=`dt: date, uri: str, rows: int, sha256: str`; loaded=`receipt: SourcePartitionReceipt, events: tuple[SourceEvent, ...]` |
+| `AttributedImpression` / snapshot | `slate_id: str`, `user_id: str`, `video_id: str`, `event_timestamp: datetime`, `source_event_id: str`, `clicked: bool`, `original_rank: int | None`, `candidate_source: str | None` |
+| `EvaluationSplit` / snapshot | `name: SplitName`, `rows: tuple[AttributedImpression, ...]`, `user_ids: tuple[str, ...]` |
+| `AttributionContract`, `SplitContract` / snapshot | attribution=`version: Literal['click-attribution-v1'], lookback_seconds: Literal[1800], tie_break: tuple[str, str]`; split=`version: Literal['user-hash-80-20-v1'], salt: Literal['research-harness-slate-v1:'], validation_buckets: tuple[int, ...], final_holdout_buckets: tuple[int, ...]` |
+| `WriterIdentity`, `WriterOptions` / snapshot | writer=`engine: Literal['pyarrow'], version: str, options: WriterOptions`; options는 §10.1의 literal 10 fields 전부다 |
+| `ArtifactReceipt`, `SplitArtifacts`, `SplitCounts`, `SplitSummary` / snapshot | artifact=`relative_path: str, rows: int, sha256: str`; artifacts=`slate: ArtifactReceipt, labels: ArtifactReceipt`; counts=`user_count: int, slate_count: int, row_count: int, clicked_row_count: int, click_positive_slate_count: int, click_positive_slate_ratio: float, mean_slate_size: float`; summary=`evaluation_id: EvaluationId, counts: SplitCounts, optional_non_null_ratio: dict[str, float], artifacts: SplitArtifacts` |
+| `EvaluationSnapshotManifest` / snapshot | `contract_version: Literal['evaluation-slate-snapshot-v1'], snapshot_fingerprint: SnapshotFingerprint, created_at: datetime, source: SnapshotSource, window: EvaluationWindow, attribution: AttributionContract, split: SplitContract, writer: WriterIdentity, validation: SplitSummary, final_holdout: SplitSummary` |
+| `SnapshotArtifactInput`, `EvaluationSnapshotReceipt` / snapshot | input=`request, window, partitions, validation, final_holdout, created_at`; receipt=`snapshot_fingerprint, target_path: Path, validation_id, final_holdout_id, reused: bool` |
 
 `complete_history_label_end_date=T-2`는 candidate가 받은 history만으로 완전한 label을
 만들 수 있는 마지막 출력일이다. candidate history의 실제 파티션 목록도 manifest에

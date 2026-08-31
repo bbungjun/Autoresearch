@@ -400,7 +400,15 @@ Task 1의 선행 작업이다. **이 저장소의 데이터 계약을 바꾸는 
 
 action log parquet에서 평가 slate를 조립하고 정답을 분리 봉인한다. 정확한 timestamp
 경계, parquet schema, `evaluation_id`·snapshot fingerprint, manifest와 write-once 계약은
-`docs/specs/2026-08-31-research-harness-evaluation-snapshot.md` §6~§12가 정본이다.
+`docs/specs/2026-08-31-research-harness-evaluation-snapshot.md` §6~§12가 정본이다. 특히
+Stage B Task 0은 §10~§12의 exact `EvaluationIdPayload`, canonical JSON bytes, writer
+identity, typed nested manifest와 fingerprint exclusion을 잠근다.
+
+### Stage B 부분 완료 경계
+
+이 계획에서 완료된 것은 Stage A의 producer 계약과 Stage B Task 0의 문서 계약 잠금뿐이다.
+아래 Stage B 구현 bullet은 체크하지 않으며, Stage C fixture·Judge handoff도 여전히 범위
+밖이다.
 
 - [ ] `slate.py` 작성. 입력은 action log parquet 경로(로컬/GCS), 평가 **출력일** 범위
       `[T, T_end]`, 필수 `slate_id_cutover_date`. `T`는 첫 출력일이고
