@@ -37,6 +37,7 @@
 
 - [가이드 — action log 모듈 사용법](guides/action-log.md)
 - [가이드 — Agent Simulator 명세 (action log SSOT)](guides/agent-simulator-spec.md)
+- [Spec — Research Harness P0-1 평가 snapshot](specs/2026-08-31-research-harness-evaluation-snapshot.md) — 원천 `slate_id`, 시간·click 귀속, validation/final split, label 봉인과 write-once manifest 계약 (#17)
 
 ### 🎯 Feature Engineering
 
@@ -95,6 +96,7 @@
 - [Plan — 가설 수신부터 `[AR]` 이슈 발행까지 구현](plans/2026-08-04-hypothesis-to-auto-research-issue.md) (#516)
 - [Spec — 자율 ML 연구 Harness 기반 MVP와 논문 로드맵](specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md) — 저장소 전체 수정·외부 Sealed Judge·σ 기반 판정·local-first 반복 연구 계약 (#769)
 - [Plan — 로컬 Research Harness MVP](plans/2026-08-15-local-research-harness-mvp.md) — 현행 executor와 분리된 로컬 경로에서 사람이 준 가설·ExperimentCard부터 Sealed Judge·반복 실행·ledger·REPORT까지의 구현 순서 (#769)
+- [Spec — Research Harness P0-1 평가 snapshot](specs/2026-08-31-research-harness-evaluation-snapshot.md) — P0-1 구현 정본: `slate_id`, 평가 기간·click 귀속, label 봉인, split·fingerprint (#17)
 - `applications/experiment_platform/` (FastAPI + Codex CLI/OpenAI + PostgreSQL 실험 API)
 - [Spec — Agent Orchestration GKE 내부 배포](specs/2026-07-30-agent-orchestration-gke-internal-deployment.md)
 - [Plan — Agent Orchestration GKE 내부 배포](plans/2026-07-30-agent-orchestration-gke-internal-deployment.md)
@@ -164,6 +166,9 @@
 - [자율 ML 연구 Harness 기반 MVP와 논문 로드맵](specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md) —
   저장소 전체 수정, 예측 점수 artifact 기반 Sealed Judge, baseline seed 노이즈 상대 판정,
   local-first 반복 연구 계약 (#769)
+- [Research Harness P0-1 평가 snapshot](specs/2026-08-31-research-harness-evaluation-snapshot.md) —
+  원천 `slate_id`, multi-day click 귀속, validation/final 분리, label 봉인과
+  content-addressed write-once snapshot 계약 (#17)
 - [로컬 Research Harness MVP 구현 계획](plans/2026-08-15-local-research-harness-mvp.md) —
   사람이 준 가설·ExperimentCard부터 봉인 평가·반복 실행·ledger·REPORT까지의 구현 순서 (#769)
 

@@ -87,7 +87,8 @@ KR TrendingVideo(parquet) ┘         (video_source.load_video_records 로 video
 
 ### 4.1 parquet 컬럼 (`EVENT_LOG_PARQUET_SCHEMA`)
 
-**도메인 8컬럼** + **메타 4컬럼**.
+현재 final Parquet은 **18개 nullable Arrow field**를 가진다. legacy reader는 필수
+필드와 타입을 유지하면서 알려진 optional additive field의 부분집합만 허용한다.
 
 | 컬럼 | 타입(Arrow) | 규칙 |
 |---|---|---|
@@ -99,13 +100,17 @@ KR TrendingVideo(parquet) ┘         (video_source.load_video_records 로 video
 | `watch_time_sec` | int64 (nullable) | **`view`일 때만** 값(≥0), 그 외 `null` |
 | `rank` | int64 (nullable) | **Phase 1은 항상 `null`** (추천 순위 없음) |
 | `source` | string | `historical` (Phase 1 고정) |
+| `policy`, `ctr_score`, `is_exploration`, `policy_version` | string/double/bool/string (nullable) | policy·노출 lineage 호환 필드 |
+| `exposure_source` | string (nullable) | `model` / `trending` / `random` 노출 출처. 과거 parquet에는 없을 수 있음 |
+| `slate_id` | string (nullable) | 일일 producer가 생성한 exposure-group 식별자. §4.4 참조 |
 | `schema_version` | string | `action_log_schema_v1` |
 | `prompt_version` | string | `action_log_ctr_v4` |
 | `llm_model` | string | 생성 모델명 (예: `mistralai/mistral-nemo`) |
 | `generated_at` | string | 배치 생성 시각(ISO) |
 
 - **PK**: `event_id`. `(user_id, video_id)`는 **non-unique FK** — 한 (유저, 영상) 쌍이 `impression`/`click`/`view`/`like` 최대 4행을 가질 수 있다.
-- **Warehouse jsonl**(`EventLog.to_warehouse_row`)은 위 도메인 **8컬럼만** flat하게 담는다(메타 4컬럼 제외, timestamp는 ISO 문자열).
+- **Warehouse jsonl**(`EventLog.to_warehouse_row`)은 event·user·video·watch·rank·source와
+  policy/exposure lineage 및 `slate_id`를 flat하게 담고 timestamp는 ISO 문자열로 직렬화한다.
 
 ### 4.2 검증 규칙 (`EventLog`)
 - `watch_time_only_for_view`: `event_type == "view"` → `watch_time_sec`는 non-null(≥0). 그 외 이벤트 → `watch_time_sec is None` 강제. 위반 시 `ValidationError`.
@@ -119,6 +124,28 @@ KR TrendingVideo(parquet) ┘         (video_source.load_video_records 로 video
 - **timestamp**: 같은 (user, video) 세션은 `impression < click < view < like`로 단조 증가.
 - **일일 상한**(`max_events_per_user_per_day`): **impression 기준**으로만 적용(파생 click/view/like는 같은 노출의 후속이라 상한에 안 셈). → "하루에 노출 몇 개"를 제한하는 의미.
 - **window**: 모든 이벤트가 `[history_end - history_days일, history_end]` 안. impression을 `history_end`보다 최소 `_MIN_IMPRESSION_HOURS`시간 이전에 배치해 후속 세션 이벤트가 `history_end`를 넘지 않도록 보장(→ 5.2 참고).
+
+### 4.4 일일 `slate_id` 계약 (Stage A 구현 완료)
+
+`slate_id`는 한 사용자의 한 번에 확정된 후보 묶음을 producer 시점에 식별한다. 형식은
+`slt_<YYYYMMDD>_<24 lowercase hex>`이며, `action-log-slate-v1` canonical JSON의
+SHA-256 앞 96 bit다. canonical identity는 KST `partition_date`, producer
+`daily-action-log-v1`, user와 정렬된 member(`video_id`, nullable rank/source/policy
+version)를 포함하고 shard·worker·event 순서는 제외한다.
+
+- `run_daily_action_log`와 `run_daily_action_log_shard`/`merge_daily_action_log_shards`는
+  `SlateGenerationContext(partition_date, producer)`를 명시해 ID를 만든다. 같은 slate의
+  impression·click·view·like는 같은 ID를 가진다.
+- context 없는 범용 생성과 30일 policy simulation은 자동 추론하지 않고 `slate_id=null`을
+  남긴다. 이 결과는 P0-1 cutover 이후 평가 원천이 아니다.
+- daily context는 `history_days == 1` 및 `max_events_per_user_per_day >=
+  candidates_per_user`를 요구한다. non-null `exposure_source`에 rank가 없거나 1 미만이면
+  typed failure로 final publish 전에 중단한다. 서로 다른 canonical payload가 같은
+  truncated ID가 되면 run-local collision registry가 생성 전체를 실패시킨다.
+- `slate_id`는 additive nullable final event/warehouse/spool field다. 기존 parquet의
+  column 부재와 null은 legacy 호환으로 읽되, schema version은 `action_log_schema_v1`을
+  유지한다. draft/checkpoint Arrow schema에는 저장하지 않으며 shard merge에서 context로
+  다시 계산한다. cutover fail-closed는 아직 구현하지 않은 snapshot builder(Stage B)의 책임이다.
 
 ---
 
@@ -149,6 +176,7 @@ LLM 판정 결과 1건 = 후보(노출) 1건 = `impression` 1행에 대응.
 | `candidates_per_user` | `24` | 유저당 노출 후보 수 |
 | `exploration_ratio` | `0.2` | 후보 중 exploration(랜덤) 비율 |
 | `history_days` | `30` | historical window 길이(일) |
+| `slate_context` | `null` | daily producer 전용 `partition_date`와 `daily-action-log-v1` producer. 있을 때 1일 history와 충분한 impression capacity를 강제 |
 | `history_end` | now(UTC) | window 끝 시각 |
 | `max_events_per_user_per_day` | `8` | 유저별 **일일 impression 상한** |
 | `seed` | `42` | 재현성 시드 |
@@ -430,3 +458,20 @@ Variable이며, 그 값 옆 주석에 마지막 재캘리브레이션 근거를 
 - **Phase 2**(`online_simulated`) — 추천 서버 연동, `rank`/`exposure_type` 실제값, `session_id`/`request_id`/`query`/`search` 이벤트.
 - **action_logs 내 category_affinity 잔여 참조 정리** — candidate/llm_generator가 `category_affinity`를 읽는 코드가 남아 있으나 virtual_user가 더는 제공하지 않아 항상 빈 값이다(무해). 죽은 경로 제거는 후속 정리 대상.
 - **스케일** — 100k 규모 병렬/Batch 생성.
+- **Research Harness Stage B/C** — snapshot builder의 cutover 검증, multi-day click
+  attribution, validation/final split·label 봉인과 Judge handoff는 아직 구현하지 않았다.
+
+---
+
+## 10. Stage A 구현 기록 (2026-08-31)
+
+**문제:** 일일 후보 묶음 경계가 final event log에 남지 않아 평가 slate를 사후에
+추정해야 했고, direct·shard 경로 및 legacy/policy 결과의 의미가 혼동될 수 있었다.
+
+**해결:** canonical identity와 explicit daily context를 도입하고 nullable final schema로만
+전파했다. shard/checkpoint의 중간 schema와 `event_id`·KST `dt` 의미는 그대로 유지했다.
+
+**결과:** fresh local RuleBased fixture에서 direct와 2-shard merge는 각각 24 row, 4개의
+non-null slate를 만들고 전체 projection SHA-256이 일치했다. event ID 고유성, 파생 event
+ID 전파, deterministic rerun, malformed rank 시 기존 final SHA-256 보존을 실측했다.
+상세 machine-readable 증거는 `.omo/evidence/research-harness-stage-a/task-6.json`에 남긴다.

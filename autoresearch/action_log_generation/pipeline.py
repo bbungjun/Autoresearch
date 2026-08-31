@@ -3,9 +3,9 @@
 [파이프라인] 노출 후보 조립 다음, action log 파티션 publish 이전 구간에서
 LLM 판정·클릭 선정·이벤트 확장·로컬 산출물 기록을 담당한다.
 
-[기능] shard/checkpoint가 사용하는 legacy draft/batch 계약과 단일 모드의
-bounded active-user 스트리밍, Parquet row-group 및 JSONL 기록, completion-time
-publish 실패 시 기존 산출물 복구를 제공한다.
+[기능] shard/checkpoint가 사용하는 legacy draft/batch 계약, 일일 slate identity
+전파·충돌 검증, bounded active-user 스트리밍, Parquet row-group 및 JSONL
+기록, completion-time publish 실패 시 기존 산출물 복구를 제공한다.
 
 [비책임] 일일 partition 검증·publish는 autoresearch/action_logs/daily.py,
 공개 CLI dispatch는 autoresearch/jobs/action_log.py, KPO resource 설정은
@@ -22,7 +22,7 @@ from collections.abc import Mapping, MutableMapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import ExitStack
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from time import monotonic
 from types import TracebackType
@@ -48,6 +48,13 @@ from autoresearch.action_log_generation.schema import (
     EventLogBatch,
     ImpressionDraft,
     QuarantineRecord,
+)
+from autoresearch.action_log_generation.slate_identity import (
+    SlateId,
+    SlateIdentity,
+    SlateIdentityRegistry,
+    SlateMember,
+    generate_slate_id,
 )
 from autoresearch.action_log_generation.video_source import _MAX_DURATION, nominal_duration_sec
 
@@ -82,6 +89,28 @@ class ActionLogGenerator(Protocol):
 
 class ActionLogGenerationError(RuntimeError):
     """격리 비율이 임계치를 넘어 전량/대량 실패로 판정될 때 발생한다."""
+
+
+SlateContractErrorCode = Literal[
+    "slate_capacity_exceeded",
+    "slate_partition_date_mismatch",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class ActionLogSlateContractError(RuntimeError):
+    """일일 slate의 용량·partition 계약 위반을 식별하는 오류."""
+
+    code: SlateContractErrorCode
+    partition_date: date
+    member_count: int | None = None
+
+    def __str__(self) -> str:
+        count_text = str(self.member_count) if self.member_count is not None else "unknown"
+        return (
+            f"daily slate rejected: code={self.code} "
+            f"dt={self.partition_date.isoformat()} member_count={count_text}"
+        )
 
 
 @dataclass(frozen=True)
@@ -237,6 +266,7 @@ EVENT_LOG_PARQUET_SCHEMA = pa.schema(
         pa.field("is_exploration", pa.bool_()),
         pa.field("policy_version", pa.string()),
         pa.field("exposure_source", pa.string()),
+        pa.field("slate_id", pa.string()),
         pa.field("schema_version", pa.string()),
         pa.field("prompt_version", pa.string()),
         pa.field("llm_model", pa.string()),
@@ -251,7 +281,7 @@ _PARQUET_TARGET_ROW_GROUP_ROWS = 50_000
 
 # additive 확장 컬럼 — 이 컬럼이 없는 legacy 파티션 스키마도 event log 계약에서
 # 관용한다 (#221). event log 스키마 계약의 단일 출처로 이곳에 둔다.
-OPTIONAL_ADDITIVE_COLUMNS = frozenset({"exposure_source"})
+OPTIONAL_ADDITIVE_COLUMNS = frozenset({"exposure_source", "slate_id"})
 
 ACTION_LOG_DRAFT_PARQUET_SCHEMA = pa.schema(
     [
@@ -865,6 +895,7 @@ def _expand_events(
     source: str = SOURCE_HISTORICAL,
     event_id_prefix: str = "evt",
     event_id_sequence_start: int = 0,
+    slate_registry: SlateIdentityRegistry | None = None,
 ) -> list[EventLog]:
     """draft + 클릭 결정 → long EventLog 스트림.
 
@@ -884,6 +915,38 @@ def _expand_events(
     by_user: dict[str, list[int]] = defaultdict(list)
     for idx, draft in enumerate(drafts):
         by_user[draft.user_id].append(idx)
+
+    slate_id_by_user: dict[str, SlateId] = {}
+    slate_context = request.slate_context
+    if slate_context is not None:
+        active_registry = (
+            slate_registry if slate_registry is not None else SlateIdentityRegistry()
+        )
+        for user_id, indices in by_user.items():
+            if len(indices) > request.max_events_per_user_per_day:
+                raise ActionLogSlateContractError(
+                    code="slate_capacity_exceeded",
+                    partition_date=slate_context.partition_date,
+                    member_count=len(indices),
+                )
+            identity = SlateIdentity(
+                partition_date=slate_context.partition_date,
+                user_id=user_id,
+                members=tuple(
+                    SlateMember(
+                        video_id=drafts[index].video_id,
+                        rank=drafts[index].exposure_rank,
+                        exposure_source=drafts[index].exposure_source,
+                        policy_version=drafts[index].policy_version,
+                    )
+                    for index in indices
+                ),
+                producer=slate_context.producer,
+            )
+            slate_id_by_user[user_id] = generate_slate_id(
+                identity,
+                registry=active_registry,
+            )
 
     events: list[EventLog] = []
     seq = event_id_sequence_start
@@ -906,6 +969,7 @@ def _expand_events(
                 is_exploration=meta.is_exploration if meta else None,
                 policy_version=meta.policy_version if meta else None,
                 exposure_source=meta.exposure_source if meta else None,
+                slate_id=slate_id_by_user.get(user_id),
             )
         )
         seq += 1
@@ -948,6 +1012,15 @@ def _expand_events(
                 f"session event {last_ts} exceeded history_end {end} — "
                 "check _MIN_IMPRESSION_HOURS vs _MAX_SESSION_SPAN_SEC"
             )
+    if slate_context is not None and any(
+        event.event_timestamp.astimezone(_KST).date()
+        != slate_context.partition_date
+        for event in events
+    ):
+        raise ActionLogSlateContractError(
+            code="slate_partition_date_mismatch",
+            partition_date=slate_context.partition_date,
+        )
     return events
 
 
@@ -971,6 +1044,7 @@ def _event_rows(batch: EventLogBatch, model_name: str) -> list[dict]:
                 "is_exploration": event.is_exploration,
                 "policy_version": event.policy_version,
                 "exposure_source": event.exposure_source,
+                "slate_id": event.slate_id,
                 "schema_version": batch.schema_version,
                 "prompt_version": batch.prompt_version,
                 "llm_model": model_name,
@@ -1001,6 +1075,7 @@ def _event_spool_rows(
             "is_exploration": event.is_exploration,
             "policy_version": event.policy_version,
             "exposure_source": event.exposure_source,
+            "slate_id": event.slate_id,
             "schema_version": ACTION_LOG_SCHEMA_VERSION,
             "prompt_version": PROMPT_VERSION,
             "llm_model": model_name,
@@ -1606,7 +1681,15 @@ def expand_action_log_drafts(
     """전체 draft에 유저별 커트라인 클릭 선정과 long event 확장을 적용한다."""
 
     clicked = select_clicks_per_slate(drafts, request.click_threshold)
-    events = _expand_events(drafts, clicked, request)
+    slate_registry = (
+        SlateIdentityRegistry() if request.slate_context is not None else None
+    )
+    events = _expand_events(
+        drafts,
+        clicked,
+        request,
+        slate_registry=slate_registry,
+    )
 
     batch = EventLogBatch(
         schema_version=ACTION_LOG_SCHEMA_VERSION,
@@ -1792,6 +1875,9 @@ def generate_action_log_single(
     provider_exhausted = False
     next_work_sequence = 0
     next_event_sequence = 0
+    slate_registry = (
+        SlateIdentityRegistry() if request.slate_context is not None else None
+    )
     activated_users = 0
     submitted_work = 0
     completed_work = 0
@@ -2032,6 +2118,7 @@ def generate_action_log_single(
                     clicked_drafts,
                     request,
                     event_id_sequence_start=next_event_sequence,
+                    slate_registry=slate_registry,
                 )
                 event_count = len(events)
                 total_events += event_count

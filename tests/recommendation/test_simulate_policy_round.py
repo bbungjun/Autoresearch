@@ -257,6 +257,29 @@ def test_round_events_are_tagged_per_policy(tmp_path, stub_reranker):
     assert (model_imps["policy_version"] == "stub-run").all()
 
 
+def test_round_final_parquet_keeps_context_free_slate_ids_null(tmp_path, stub_reranker):
+    import pyarrow.parquet as pq
+
+    main(
+        personas=_personas(),
+        virtual_users=_virtual_users(),
+        videos_raw=_videos_raw(),
+        events=_empty_events(),
+        generator=RuleBasedActionLogGenerator(),
+        reranker=stub_reranker,
+        k=6,
+        exploration_ratio=0.0,
+        click_threshold=0.0,
+        seed=42,
+        policy_version="stub-run",
+        output_dir=str(tmp_path),
+    )
+
+    slate_ids = pq.read_table(tmp_path / "event_log.parquet", columns=["slate_id"])
+    assert slate_ids.num_rows > 0
+    assert slate_ids.column("slate_id").null_count == slate_ids.num_rows
+
+
 def test_round_output_feeds_retraining_path(tmp_path, stub_reranker):
     """policy=model 필터 후 derive_wide_events가 라벨을 복원할 수 있어야 한다."""
     import pyarrow.parquet as pq

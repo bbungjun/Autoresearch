@@ -3,9 +3,10 @@
 [파이프라인] 공개 action log batch CLI와 LLM 판정 pipeline 사이에서 일일 입력
 partition을 읽고 single 또는 shard 실행을 선택한 뒤 final partition을 publish한다.
 
-[기능] 단일 coordinator가 daily temporary directory에 completion-time Parquet/JSONL을
-최종 commit한 뒤 row-group staging 검증과 last-known-good publish를 수행하며, 기존
-shard/checkpoint/merge 실행도 제공한다. 객체 저장소 publish는 임시 객체를 파티션 밖
+[기능] 단일 coordinator가 daily slate context·fingerprint를 single/shard/merge에
+일관되게 전달하고, temporary directory에 completion-time Parquet/JSONL을 최종
+commit한 뒤 row-group staging 검증과 last-known-good publish를 수행한다. 객체
+저장소 publish는 임시 객체를 파티션 밖
 prefix에 만든 뒤 서버측 복사로 최종 경로를 바꾼다(#515) — 정리가 실패해도 적재가 읽는
 파티션은 오염되지 않는다.
 
@@ -62,20 +63,12 @@ from autoresearch.action_log_generation.schema import (
     ImpressionDraft,
     QuarantineErrorType,
     QuarantineRecord,
+    SlateGenerationContext,
 )
 from autoresearch.action_log_generation.video_source import load_video_records
 
 
 _KST = ZoneInfo("Asia/Seoul")
-# 브랜치 이전에 기록된 legacy final은 OPTIONAL_ADDITIVE_COLUMNS가 없다 (#221).
-# 품질잡과 일관되게 재실행 skip 검증에서 이 legacy 스키마도 관용한다.
-_LEGACY_EVENT_LOG_PARQUET_SCHEMA = pa.schema(
-    [
-        field
-        for field in EVENT_LOG_PARQUET_SCHEMA
-        if field.name not in OPTIONAL_ADDITIVE_COLUMNS
-    ]
-)
 _PARTITION_FILE = "part-0.parquet"
 _QUARANTINE_FILE = "quarantine.jsonl"
 _MANIFEST_FILE = "manifest.json"
@@ -339,6 +332,26 @@ def _path_exists(path: str, *, filesystem=None) -> bool:
     return filesystem.get_file_info(path).type != FileType.NotFound
 
 
+def _schema_is_compatible(
+    schema: pa.Schema,
+    expected_schema: pa.Schema,
+    optional_columns: frozenset[str],
+) -> bool:
+    optional_names = tuple(
+        field.name for field in expected_schema if field.name in optional_columns
+    )
+    for optional_start in range(len(optional_names) + 1):
+        missing_optional_columns = frozenset(optional_names[optional_start:])
+        expected_fields = tuple(
+            field
+            for field in expected_schema
+            if field.name not in missing_optional_columns
+        )
+        if tuple(schema) == expected_fields:
+            return True
+    return False
+
+
 def _validate_existing_final(
     path: str,
     partition_date: date,
@@ -357,9 +370,10 @@ def _validate_existing_final(
         )
     except Exception as exc:  # noqa: BLE001 - pyarrow/filesystem errors vary by backend
         raise ValueError("existing final parquet is unreadable") from exc
-    if not (
-        schema.equals(EVENT_LOG_PARQUET_SCHEMA)
-        or schema.equals(_LEGACY_EVENT_LOG_PARQUET_SCHEMA)
+    if not _schema_is_compatible(
+        schema,
+        EVENT_LOG_PARQUET_SCHEMA,
+        OPTIONAL_ADDITIVE_COLUMNS,
     ):
         raise ValueError("existing final parquet schema does not match action log contract")
     timestamps = timestamp_table.column("event_timestamp").to_pylist()
@@ -583,6 +597,11 @@ def _fingerprint_payload(
         "history_days": request.history_days,
         "history_end": history_end.astimezone(UTC).isoformat(),
         "max_events_per_user_per_day": request.max_events_per_user_per_day,
+        "slate_context": (
+            request.slate_context.model_dump(mode="json")
+            if request.slate_context is not None
+            else None
+        ),
         "schema_version": ACTION_LOG_SCHEMA_VERSION,
         "prompt_version": PROMPT_VERSION,
     }
@@ -666,13 +685,20 @@ class _ActionLogCheckpointStore:
         filesystem=None,
     ) -> None:
         self._filesystem = filesystem
-        self._namespace_path = _dt_shard_path(
+        namespace_path = _dt_shard_path(
             checkpoint_base_path,
             partition_date,
             shard_index,
             f"fingerprint={config_fingerprint}",
             filesystem=filesystem,
         )
+        if (
+            filesystem is None
+            and not namespace_path.startswith("\\\\?\\")
+            and Path(namespace_path).drive
+        ):
+            namespace_path = f"\\\\?\\{Path(namespace_path).resolve()}"
+        self._namespace_path = namespace_path
         self._manifest_path = _child_path(
             self._namespace_path,
             _CHECKPOINT_MANIFEST_FILE,
@@ -868,6 +894,7 @@ def _build_request(
         popular_ratio=popular_ratio,
         exploration_ratio=exploration_ratio,
         history_days=1,
+        slate_context=SlateGenerationContext(partition_date=partition_date),
         history_end=history_end or _default_history_end(partition_date),
         max_events_per_user_per_day=candidates_per_user,
         seed=seed,

@@ -1,6 +1,7 @@
 import json
 import re
 import shutil
+import tempfile
 from datetime import UTC, date, datetime, tzinfo
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,7 +22,11 @@ from autoresearch.action_log_generation.daily import (
 )
 from autoresearch.action_log_generation.llm_generator import RuleBasedActionLogGenerator
 from autoresearch.action_log_generation.pipeline import ActionLogGenerationError, ExposureMetadata
-from autoresearch.action_log_generation.schema import EventLog
+from autoresearch.action_log_generation.schema import (
+    ActionLogShardManifest,
+    EventLog,
+    SlateGenerationContext,
+)
 
 
 class _SelectorFilesystem:
@@ -106,6 +111,19 @@ def _write_virtual_users(path, count: int = 3):
     pq.write_table(pa.Table.from_pylist(users), path)
 
 
+@pytest.fixture
+def short_checkpoint_path(request: pytest.FixtureRequest) -> Path:
+    working_directory = Path.cwd()
+    uses_drive_root = bool(working_directory.drive)
+    directory = tempfile.TemporaryDirectory(
+        prefix="t4-", dir=working_directory.anchor if uses_drive_root else None
+    )
+    request.addfinalizer(directory.cleanup)
+    if uses_drive_root:
+        return Path(f"\\\\?\\{directory.name}")
+    return Path(directory.name)
+
+
 def _write_youtube_partition(base, partition_date: date, count: int = 12):
     partition_dir = base / f"dt={partition_date:%Y-%m-%d}"
     partition_dir.mkdir(parents=True)
@@ -125,6 +143,149 @@ def _write_youtube_partition(base, partition_date: date, count: int = 12):
             }
         )
     pq.write_table(pa.Table.from_pylist(rows), partition_dir / "part-0.parquet")
+
+
+def test_daily_non_slate_full_row_projection_is_characterized(tmp_path) -> None:
+    # Given
+    partition_date = date(2026, 7, 1)
+    users_path = tmp_path / "users.parquet"
+    youtube_base = tmp_path / "youtube"
+    output_base = tmp_path / "output"
+    _write_virtual_users(users_path, count=1)
+    _write_youtube_partition(youtube_base, partition_date, count=4)
+    common = {
+        "user_id": "vu_0000",
+        "rank": None,
+        "source": "historical",
+        "policy": None,
+        "ctr_score": None,
+        "is_exploration": None,
+        "policy_version": None,
+        "exposure_source": None,
+        "schema_version": "action_log_schema_v1",
+        "prompt_version": "action_log_ctr_v4",
+        "llm_model": "fixture-rule-action-log",
+        "dt": "2026-07-01",
+    }
+    expected = [
+        {
+            **common,
+            "event_id": "evt_20260701_00000000",
+            "event_timestamp": datetime(2026, 7, 1, 2, 33, 4, tzinfo=UTC),
+            "event_type": "impression",
+            "video_id": "yt_0001",
+            "watch_time_sec": None,
+        },
+        {
+            **common,
+            "event_id": "evt_20260701_00000001",
+            "event_timestamp": datetime(2026, 7, 1, 2, 33, 11, tzinfo=UTC),
+            "event_type": "click",
+            "video_id": "yt_0001",
+            "watch_time_sec": None,
+        },
+        {
+            **common,
+            "event_id": "evt_20260701_00000002",
+            "event_timestamp": datetime(2026, 7, 1, 2, 33, 14, tzinfo=UTC),
+            "event_type": "view",
+            "video_id": "yt_0001",
+            "watch_time_sec": 161,
+        },
+        {
+            **common,
+            "event_id": "evt_20260701_00000003",
+            "event_timestamp": datetime(2026, 6, 30, 15, 44, 19, tzinfo=UTC),
+            "event_type": "impression",
+            "video_id": "yt_0000",
+            "watch_time_sec": None,
+        },
+    ]
+
+    # When
+    run_daily_action_log(
+        partition_date=partition_date,
+        youtube_base_path=str(youtube_base),
+        virtual_users_path=str(users_path),
+        output_base_path=str(output_base),
+        candidates_per_user=2,
+        click_threshold=0.2,
+        seed=123,
+        generator_name="rule_based",
+    )
+    rows = pq.read_table(
+        output_base / "dt=2026-07-01" / "part-0.parquet"
+    ).to_pylist()
+
+    # Then
+    assert [
+        {key: value for key, value in row.items() if key not in {"generated_at", "slate_id"}}
+        for row in rows
+    ] == expected
+    assert all(row["slate_id"] is not None for row in rows)
+
+
+def test_daily_request_and_manifest_restore_canonical_slate_context(tmp_path) -> None:
+    # Given
+    partition_date = date(2026, 7, 1)
+    request = daily_module._build_request(
+        partition_date=partition_date,
+        tmp_dir=tmp_path / "direct",
+        candidates_per_user=2,
+        click_threshold=0.2,
+        personalized_ratio=0.7,
+        popular_ratio=0.2,
+        exploration_ratio=0.1,
+        seed=123,
+        max_concurrency=1,
+        chunk_size=0,
+        max_quarantine_ratio=0.5,
+        history_end=None,
+    )
+    manifest = ActionLogShardManifest(
+        partition_date=partition_date,
+        shard_index=0,
+        shard_count=1,
+        generator="rule_based",
+        model_name="fixture-rule-action-log",
+        generator_config={},
+        candidates_per_user=2,
+        click_threshold=0.2,
+        personalized_ratio=0.7,
+        popular_ratio=0.2,
+        exploration_ratio=0.1,
+        seed=123,
+        chunk_size=0,
+        max_quarantine_ratio=0.5,
+        history_end=request.history_end,
+        total_work=1,
+        completed_work=1,
+        quarantine_count=0,
+        quarantine_error_counts={},
+        schema_version="action_log_schema_v1",
+        prompt_version="action_log_ctr_v4",
+        input_fingerprint="0" * 64,
+        config_fingerprint="1" * 64,
+    )
+
+    # When
+    restored = daily_module._manifest_request(manifest, tmp_path / "merge")
+    payload = daily_module._fingerprint_payload(
+        generator_name=manifest.generator,
+        model_name=manifest.model_name,
+        generator_config=manifest.generator_config,
+        input_fingerprint=manifest.input_fingerprint,
+        request=request,
+    )
+
+    # Then
+    expected = SlateGenerationContext(partition_date=partition_date)
+    assert request.slate_context == expected
+    assert restored.slate_context == expected
+    assert payload["slate_context"] == {
+        "partition_date": "2026-07-01",
+        "producer": "daily-action-log-v1",
+    }
 
 
 def test_run_daily_action_log_writes_dt_partition(tmp_path):
@@ -363,12 +524,9 @@ def test_validate_staged_event_parquet_rejects_null_timestamp(tmp_path: Path) ->
         daily_module._validate_staged_event_parquet(path, date(2026, 7, 1))
 
 
-def test_run_daily_action_log_publishes_duplicate_user_id_legacy_fallback(
+def test_daily_context_rejects_duplicate_user_before_publish(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """중복 user_id는 legacy fallback이어도 daily final partition을 publish해야 한다."""
-
     partition_date = date(2026, 7, 1)
     virtual_users_path = tmp_path / "virtual_users.parquet"
     youtube_base = tmp_path / "youtube"
@@ -379,31 +537,20 @@ def test_run_daily_action_log_publishes_duplicate_user_id_legacy_fallback(
     pq.write_table(pa.Table.from_pylist(users), virtual_users_path)
     _write_youtube_partition(youtube_base, partition_date)
 
-    def _legacy_batch_must_not_run(*_args: object, **_kwargs: object) -> None:
-        pytest.fail("daily must delegate duplicate IDs through generate_action_log_single")
-
-    monkeypatch.setattr(
-        daily_module,
-        "generate_action_log_batch",
-        _legacy_batch_must_not_run,
-        raising=False,
-    )
-
-    summary = run_daily_action_log(
-        partition_date=partition_date,
-        youtube_base_path=str(youtube_base),
-        virtual_users_path=str(virtual_users_path),
-        output_base_path=str(output_base),
-        candidates_per_user=3,
-        click_threshold=0.2,
-        generator_name="rule_based",
-    )
+    with pytest.raises(pipeline_module.ActionLogSlateContractError) as exc_info:
+        run_daily_action_log(
+            partition_date=partition_date,
+            youtube_base_path=str(youtube_base),
+            virtual_users_path=str(virtual_users_path),
+            output_base_path=str(output_base),
+            candidates_per_user=3,
+            click_threshold=0.2,
+            generator_name="rule_based",
+        )
 
     final_path = output_base / "dt=2026-07-01" / "part-0.parquet"
-    assert summary["status"] == "succeeded"
-    assert summary["users"] == 2
-    assert pq.read_table(final_path).num_rows == summary["total_events"]
-    assert pq.ParquetFile(final_path).num_row_groups == 1
+    assert exc_info.value.code == "slate_capacity_exceeded"
+    assert not final_path.exists()
 
 
 def test_run_daily_action_log_applies_deterministic_max_users(tmp_path):
@@ -468,7 +615,7 @@ def test_run_daily_action_log_rejects_timestamp_outside_partition_date(tmp_path)
     _write_virtual_users(virtual_users_path)
     _write_youtube_partition(youtube_base, partition_date)
 
-    with pytest.raises(ValueError, match="outside partition_date"):
+    with pytest.raises(pipeline_module.ActionLogSlateContractError) as exc_info:
         run_daily_action_log(
             partition_date=partition_date,
             youtube_base_path=str(youtube_base),
@@ -480,6 +627,7 @@ def test_run_daily_action_log_rejects_timestamp_outside_partition_date(tmp_path)
             generator_name="rule_based",
             history_end=datetime(2026, 7, 3, 0, 0, tzinfo=ZoneInfo("Asia/Seoul")),
         )
+    assert exc_info.value.code == "slate_partition_date_mismatch"
 
 
 def test_sharded_daily_action_log_merges_global_partition(tmp_path):
@@ -607,11 +755,17 @@ def test_manifest_requires_click_threshold_fail_closed() -> None:
         ActionLogShardManifest.model_validate(legacy)
 
 
-def test_shard_merge_matches_single_run_event_contract(tmp_path):
+@pytest.mark.parametrize("shard_count", [1, 3])
+def test_daily_single_and_shards_have_full_slate_parity(
+    tmp_path,
+    shard_count: int,
+    short_checkpoint_path: Path,
+) -> None:
     partition_date = date(2026, 7, 1)
     virtual_users_path = tmp_path / "virtual_users.parquet"
     youtube_base = tmp_path / "youtube_trending_kr"
     single_base = tmp_path / "single"
+    repeated_base = tmp_path / "repeated"
     work_base = tmp_path / "work"
     merged_base = tmp_path / "merged"
 
@@ -630,35 +784,51 @@ def test_shard_merge_matches_single_run_event_contract(tmp_path):
         **common,
         output_base_path=str(single_base),
     )
-    for shard_index in range(3):
+    run_daily_action_log(
+        **common,
+        output_base_path=str(repeated_base),
+    )
+    for shard_index in reversed(range(shard_count)):
         run_daily_action_log_shard(
             **common,
             shard_index=shard_index,
-            shard_count=3,
+            shard_count=shard_count,
             output_base_path=str(work_base),
+            checkpoint_base_path=str(short_checkpoint_path),
         )
     merged_summary = merge_daily_action_log_shards(
         partition_date=partition_date,
-        shard_count=3,
+        shard_count=shard_count,
         shard_output_base_path=str(work_base),
         output_base_path=str(merged_base),
     )
 
     single = pq.read_table(single_base / "dt=2026-07-01" / "part-0.parquet").to_pylist()
+    repeated = pq.read_table(
+        repeated_base / "dt=2026-07-01" / "part-0.parquet"
+    ).to_pylist()
     merged = pq.read_table(merged_base / "dt=2026-07-01" / "part-0.parquet").to_pylist()
-    single_clicked = {
-        (row["user_id"], row["video_id"])
+    single_members = {
+        (row["user_id"], row["slate_id"], row["video_id"])
         for row in single
-        if row["event_type"] == "click"
+        if row["event_type"] == "impression"
     }
-    merged_clicked = {
-        (row["user_id"], row["video_id"])
+    merged_members = {
+        (row["user_id"], row["slate_id"], row["video_id"])
         for row in merged
-        if row["event_type"] == "click"
+        if row["event_type"] == "impression"
     }
+    projections = [
+        [
+            {key: value for key, value in row.items() if key != "generated_at"}
+            for row in rows
+        ]
+        for rows in (single, repeated, merged)
+    ]
 
-    assert [row["event_id"] for row in merged] == [row["event_id"] for row in single]
-    assert merged_clicked == single_clicked
+    assert all(row["slate_id"] is not None for row in single)
+    assert projections[0] == projections[1] == projections[2]
+    assert merged_members == single_members
     assert merged_summary["ctr"] == single_summary["ctr"]
     assert {row["llm_model"] for row in merged} == {
         row["llm_model"] for row in single
@@ -708,6 +878,72 @@ def test_merge_rejects_missing_or_tampered_shard_manifest(tmp_path):
             shard_output_base_path=str(work_base),
             output_base_path=str(tmp_path / "merged"),
         )
+
+
+def test_pre_context_fingerprint_fails_closed(
+    tmp_path,
+    short_checkpoint_path: Path,
+) -> None:
+    # Given
+    partition_date = date(2026, 7, 1)
+    virtual_users_path = tmp_path / "virtual_users.parquet"
+    youtube_base = tmp_path / "youtube"
+    work_base = tmp_path / "work"
+    output_base = tmp_path / "output"
+    _write_virtual_users(virtual_users_path)
+    _write_youtube_partition(youtube_base, partition_date)
+    run_daily_action_log_shard(
+        partition_date=partition_date,
+        shard_index=0,
+        shard_count=1,
+        youtube_base_path=str(youtube_base),
+        virtual_users_path=str(virtual_users_path),
+        output_base_path=str(work_base),
+        checkpoint_base_path=str(short_checkpoint_path),
+        candidates_per_user=3,
+        click_threshold=0.2,
+        seed=123,
+    )
+    merge_daily_action_log_shards(
+        partition_date=partition_date,
+        shard_count=1,
+        shard_output_base_path=str(work_base),
+        output_base_path=str(output_base),
+    )
+    final_path = output_base / "dt=2026-07-01" / "part-0.parquet"
+    previous_final = final_path.read_bytes()
+    manifest_path = work_base / "dt=2026-07-01" / "shard=000" / "manifest.json"
+    manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = ActionLogShardManifest.model_validate(manifest_payload)
+    request = daily_module._manifest_request(manifest, tmp_path / "request")
+    fingerprint_payload = daily_module._fingerprint_payload(
+        generator_name=manifest.generator,
+        model_name=manifest.model_name,
+        generator_config=manifest.generator_config,
+        input_fingerprint=manifest.input_fingerprint,
+        request=request,
+    )
+    legacy_payload = dict(fingerprint_payload)
+    legacy_payload.pop("slate_context", None)
+    legacy_fingerprint = daily_module.hashlib.sha256(
+        json.dumps(legacy_payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert legacy_fingerprint != manifest.config_fingerprint
+    manifest_payload["config_fingerprint"] = legacy_fingerprint
+    manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
+
+    # When
+    with pytest.raises(ValueError, match="config_fingerprint"):
+        merge_daily_action_log_shards(
+            partition_date=partition_date,
+            shard_count=1,
+            shard_output_base_path=str(work_base),
+            output_base_path=str(output_base),
+            overwrite=True,
+        )
+
+    # Then
+    assert final_path.read_bytes() == previous_final
 
 
 class _OneUserFailureGenerator(RuleBasedActionLogGenerator):
@@ -1223,13 +1459,14 @@ def test_single_failed_overwrite_preserves_previous_final(tmp_path):
     output_path = output_base / "dt=2026-07-01" / "part-0.parquet"
     previous = output_path.read_bytes()
 
-    with pytest.raises(ValueError, match="outside partition_date"):
+    with pytest.raises(pipeline_module.ActionLogSlateContractError) as exc_info:
         run_daily_action_log(
             **common,
             overwrite=True,
             history_end=datetime(2026, 7, 3, 0, 0, tzinfo=UTC),
         )
 
+    assert exc_info.value.code == "slate_partition_date_mismatch"
     assert output_path.read_bytes() == previous
 
 
@@ -1255,19 +1492,132 @@ def _write_final_parquet(path: Path, schema: pa.Schema, partition_date: date) ->
     pq.write_table(pa.Table.from_pylist([row], schema=schema), path)
 
 
-def test_validate_existing_final_tolerates_legacy_schema_without_exposure_source(
+def test_validate_existing_final_tolerates_schema_without_additive_columns(
     tmp_path,
 ):
     from autoresearch.action_log_generation.pipeline import EVENT_LOG_PARQUET_SCHEMA
 
     partition_date = date(2026, 7, 1)
     legacy_schema = pa.schema(
-        [field for field in EVENT_LOG_PARQUET_SCHEMA if field.name != "exposure_source"]
+        [
+            field
+            for field in EVENT_LOG_PARQUET_SCHEMA
+            if field.name not in pipeline_module.OPTIONAL_ADDITIVE_COLUMNS
+        ]
     )
     final_path = tmp_path / "dt=2026-07-01" / "part-0.parquet"
     _write_final_parquet(final_path, legacy_schema, partition_date)
 
     daily_module._validate_existing_final(str(final_path), partition_date)
+
+
+@pytest.mark.parametrize(
+    ("schema", "is_compatible"),
+    (
+        (pipeline_module.EVENT_LOG_PARQUET_SCHEMA, True),
+        (
+            pa.schema(
+                [
+                    field
+                    for field in pipeline_module.EVENT_LOG_PARQUET_SCHEMA
+                    if field.name != "slate_id"
+                ]
+            ),
+            True,
+        ),
+        (
+            pa.schema(
+                [
+                    field
+                    for field in pipeline_module.EVENT_LOG_PARQUET_SCHEMA
+                    if field.name not in {"exposure_source", "slate_id"}
+                ]
+            ),
+            True,
+        ),
+        (
+            pa.schema(
+                [
+                    field
+                    for field in pipeline_module.EVENT_LOG_PARQUET_SCHEMA
+                    if field.name != "event_id"
+                ]
+            ),
+            False,
+        ),
+        (
+            pipeline_module.EVENT_LOG_PARQUET_SCHEMA.set(
+                pipeline_module.EVENT_LOG_PARQUET_SCHEMA.get_field_index("event_id"),
+                pa.field("event_id", pa.int64()),
+            ),
+            False,
+        ),
+        (
+            pipeline_module.EVENT_LOG_PARQUET_SCHEMA.set(
+                pipeline_module.EVENT_LOG_PARQUET_SCHEMA.get_field_index("event_id"),
+                pa.field("event_id", pa.string(), nullable=False),
+            ),
+            False,
+        ),
+        (
+            pa.schema(
+                [
+                    pipeline_module.EVENT_LOG_PARQUET_SCHEMA.field(1),
+                    pipeline_module.EVENT_LOG_PARQUET_SCHEMA.field(0),
+                    *[
+                        pipeline_module.EVENT_LOG_PARQUET_SCHEMA.field(index)
+                        for index in range(2, len(pipeline_module.EVENT_LOG_PARQUET_SCHEMA))
+                    ],
+                ]
+            ),
+            False,
+        ),
+        (
+            pipeline_module.EVENT_LOG_PARQUET_SCHEMA.append(
+                pa.field("unexpected_column", pa.string())
+            ),
+            False,
+        ),
+    ),
+    ids=(
+        "current",
+        "without-slate-id",
+        "without-additive-columns",
+        "missing-required-field",
+        "wrong-required-field-type",
+        "wrong-required-field-nullability",
+        "wrong-field-order",
+        "unexpected-field",
+    ),
+)
+def test_schema_compatibility_allows_only_known_optional_column_subsets(
+    schema,
+    is_compatible,
+):
+    assert (
+        daily_module._schema_is_compatible(
+            schema,
+            pipeline_module.EVENT_LOG_PARQUET_SCHEMA,
+            pipeline_module.OPTIONAL_ADDITIVE_COLUMNS,
+        )
+        is is_compatible
+    )
+
+
+def test_schema_compatibility_rejects_reversed_legacy_generation():
+    reversed_legacy_schema = pa.schema(
+        [
+            field
+            for field in pipeline_module.EVENT_LOG_PARQUET_SCHEMA
+            if field.name != "exposure_source"
+        ]
+    )
+
+    assert not daily_module._schema_is_compatible(
+        reversed_legacy_schema,
+        pipeline_module.EVENT_LOG_PARQUET_SCHEMA,
+        pipeline_module.OPTIONAL_ADDITIVE_COLUMNS,
+    )
 
 
 def test_validate_existing_final_rejects_unrelated_schema(tmp_path):

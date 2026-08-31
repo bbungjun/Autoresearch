@@ -1,14 +1,15 @@
-"""action log(event log) 생성 파이프라인의 데이터 계약.
-
-출력 스키마·규칙은 `docs/guides/agent-simulator-spec.md`(Single Source of Truth)를 따른다.
-이번 구현은 Phase 1(historical)만 다룬다.
+"""action log 생성·저장 구간의 typed 데이터 계약.
+[파이프라인] 후보 판정 뒤 event log가 Parquet·warehouse에 저장되는 모델 경계다.
+[기능] historical/policy event와 일일 slate context를 검증하고 flat row를 제공한다.
+[비책임] ID 계산은 ``slate_identity.py``, 직렬화는 ``pipeline.py``, 일일 배선은 ``daily.py``가 담당한다.
 """
 from datetime import UTC, date, datetime
 import logging
 import math
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,15 @@ PROMPT_VERSION = "action_log_ctr_v4"
 SOURCE_HISTORICAL = "historical"
 SOURCE_ONLINE_SIMULATED = "online_simulated"
 QuarantineErrorType = Literal["api_error", "invalid_json", "schema_fail"]
+
+
+class SlateGenerationContext(BaseModel):
+    """일일 action log producer가 명시적으로 전달하는 slate 생성 context."""
+
+    model_config = ConfigDict(frozen=True)
+
+    partition_date: date
+    producer: Literal["daily-action-log-v1"] = "daily-action-log-v1"
 
 
 def validate_candidate_ratios(
@@ -59,6 +69,7 @@ class EventLog(BaseModel):
     # 노출 조립 출처 태그 (#221). 노출별 model/trending/random 출처를 로그에 남긴다.
     # optional — exposure_source가 없는 기존 로그와 하위 호환.
     exposure_source: Literal["model", "trending", "random"] | None = None
+    slate_id: str | None = None
 
     @model_validator(mode="after")
     def watch_time_only_for_view(self) -> "EventLog":
@@ -88,6 +99,7 @@ class EventLog(BaseModel):
             "is_exploration": self.is_exploration,
             "policy_version": self.policy_version,
             "exposure_source": self.exposure_source,
+            "slate_id": self.slate_id,
         }
 
 
@@ -174,6 +186,7 @@ class EventGenerationRequest(BaseModel):
     popular_ratio: float = 0.2
     exploration_ratio: float = 0.1
     history_days: int = 30
+    slate_context: SlateGenerationContext | None = None
     history_end: datetime = Field(
         default_factory=lambda: datetime.now(UTC).replace(microsecond=0)
     )
@@ -228,6 +241,18 @@ class EventGenerationRequest(BaseModel):
             self.popular_ratio,
             self.exploration_ratio,
         )
+        return self
+
+    @model_validator(mode="after")
+    def daily_slate_context_has_single_day_capacity(self) -> "EventGenerationRequest":
+        """명시적 daily slate는 하루 안에 전체 후보를 수용해야 한다."""
+
+        if self.slate_context is None:
+            return self
+        if self.history_days != 1:
+            raise PydanticCustomError("invalid_slate_context_history_days", "slate_context requires history_days == 1")
+        if self.max_events_per_user_per_day < self.candidates_per_user:
+            raise PydanticCustomError("invalid_slate_context_capacity", "slate_context requires max_events_per_user_per_day >= candidates_per_user")
         return self
 
 

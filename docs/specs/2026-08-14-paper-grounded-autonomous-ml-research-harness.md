@@ -519,6 +519,11 @@ validation에서 고른 champion을 final holdout에서 baseline과 비교할 �
 
 ## 8. YouTube 리랭킹 Domain Adapter
 
+P0-1의 `slate_id` 생성식, 시간·click 귀속 경계, validation/final split, artifact schema,
+`evaluation_id`·manifest·write-once 계약의 정본은
+[`2026-08-31-research-harness-evaluation-snapshot.md`](2026-08-31-research-harness-evaluation-snapshot.md)다.
+이 절은 상위 제품 경계와 P0-2 이후 소비 의미를 소유한다.
+
 YouTube MVP의 목표는 CTR 확률 숫자만 낮은 오차로 맞히는 것이 아니라 사용자별 후보
 영상의 순서를 개선하는 것이다. 사용자가 세부 지표를 선택하지 않아도 adapter가 다음
 기본값을 제공한다.
