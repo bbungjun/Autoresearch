@@ -3,8 +3,8 @@
 [파이프라인] 검증된 일일 action log 원천과 P0-2 Sealed Judge 사이에서 Stage B의
 source·slate·attribution·split·artifact·publisher 단계를 순서대로 연결한다.
 
-[기능] typed 요청과 선택적 source adapter를 받아 content-addressed local snapshot
-receipt를 반환한다.
+[기능] typed 요청과 선택적 source adapter를 받아 cutover 이후 partition의 canonical
+slate identity를 검증하고 content-addressed local snapshot receipt를 반환한다.
 
 [비책임] 각 단계의 검증·귀속·분할·identity·게시 알고리즘과 Stage C fixture/Judge
 handoff는 인접 모듈 및 후속 단계가 담당한다.
@@ -37,7 +37,13 @@ def build_evaluation_snapshot(
     source: ActionLogSource | None = None,
 ) -> EvaluationSnapshotReceipt:
     partitions = load_required_partitions(request, source)
-    validate_slate_identities(partitions)
+    validate_slate_identities(
+        tuple(
+            partition
+            for partition in partitions
+            if partition.receipt.dt >= request.slate_id_cutover_date
+        )
+    )
     receipts = tuple(partition.receipt for partition in partitions)
     window = EvaluationWindow(
         history_start_date=request.history_start_date,
