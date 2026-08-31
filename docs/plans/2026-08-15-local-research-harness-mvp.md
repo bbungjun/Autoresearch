@@ -391,8 +391,9 @@ Task 1의 선행 작업이다. **이 저장소의 데이터 계약을 바꾸는 
 **검증:** `uv run python -m pytest tests/action_log_generation/ -v`
 
 > Stage A 구현 기록(2026-08-31): direct·1-shard·2-shard merge와 legacy/policy null
-> 경계를 검증했다. Task 1의 snapshot builder와 아래 cutover/label 관련 미체크 항목은
-> Stage B 소유이며 P0-1 전체 완료를 뜻하지 않는다.
+> 경계를 검증했다. Stage A 당시 snapshot builder와 cutover·label validation은 Stage B로
+> 이관되었다. 이관 항목은 아래 Stage B checklist에서 현재 완료로 기록한다. 다만 위 Stage A
+> checklist는 소급해 완료로 표시하지 않으며, P0-1 전체와 Stage C는 여전히 미완료다.
 
 ---
 
@@ -404,32 +405,32 @@ action log parquet에서 평가 slate를 조립하고 정답을 분리 봉인한
 Stage B Task 0은 §10~§12의 exact `EvaluationIdPayload`, canonical JSON bytes, writer
 identity, typed nested manifest와 fingerprint exclusion을 잠근다.
 
-### Stage B 부분 완료 경계
+### Stage B 부분 완료, Stage C 대기
 
-이 계획에서 완료된 것은 Stage A의 producer 계약과 Stage B Task 0의 문서 계약 잠금뿐이다.
-아래 Stage B 구현 bullet은 체크하지 않으며, Stage C fixture·Judge handoff도 여전히 범위
-밖이다.
+이 계획에서 Stage A의 producer 계약과 Stage B snapshot builder 구현은 완료되었다. Task 1
+전체와 후속 Research Harness MVP를 완료 처리하지 않으며, Stage C fixture·Judge handoff는
+구현 대기 상태다.
 
-- [ ] `slate.py` 작성. 입력은 action log parquet 경로(로컬/GCS), 평가 **출력일** 범위
+- [x] `slate.py` 작성 (Stage B builder/public facade 범위). 입력은 action log parquet 경로(로컬/GCS), 평가 **출력일** 범위
       `[T, T_end]`, 필수 `slate_id_cutover_date`. `T`는 첫 출력일이고
       `slate_id_cutover_date <= T`여야 한다
-- [ ] impression 행에서 slate 조립: `slate_id`(**Task 1-0의 원천 컬럼을 그대로 사용.
+- [x] impression 행에서 slate 조립: `slate_id`(**Task 1-0의 원천 컬럼을 그대로 사용.
       추론하지 않는다**), `user_id`, `video_id`, `event_timestamp`,
       optional `original_rank`(원천 `rank`), optional `candidate_source`(원천 `exposure_source`)
-- [ ] 파티션 선택을 통과한 `dt >= slate_id_cutover_date` 행에서 `slate_id`가 null이면
+- [x] 파티션 선택을 통과한 `dt >= slate_id_cutover_date` 행에서 `slate_id`가 null이면
       **오류로 거부**한다. 조용히 건너뛰거나 추론으로 채우지 않는다 (D6)
 - [ ] 개발·검증용 입력은 `RuleBasedActionLogGenerator`로 로컬 생성한다 (D7 — LLM·API 키
       불필요). 평가 구간을 생성한 입력과 seed는 Judge 소유 경로에만 두고 candidate
       workspace·argv·환경에 넣지 않는다
-- [ ] click과 귀속 후보 impression은 **`dt BETWEEN T AND T_end + 1`**로 스캔하고,
+- [x] click과 귀속 후보 impression은 **`dt BETWEEN T AND T_end + 1`**로 스캔하고,
       slate·labels 출력은 impression `dt`가 **`[T, T_end]`**인 행으로 제한한다.
       `T_end + 1` 파티션이 없거나 읽을 수 없으면 snapshot 생성을 fail-closed한다
-- [ ] click 귀속으로 `clicked`를 산출한다. **귀속 규칙(직전 30분, 같은
+- [x] click 귀속으로 `clicked`를 산출한다. **귀속 규칙(직전 30분, 같은
       `(user_id, video_id)`의 전역 최근 impression 1건)은
       `docs/specs/2026-07-26-training-entity-incremental-slice.md:68-100`과
       `autoresearch/jobs/feature_store_build.py:295-370`의 기존 계약과 동일해야 한다.** 상수를
       공유하거나, 불가능하면 후보·출력 범위를 포함해 동일 규칙임을 테스트로 고정한다
-- [ ] raw action log 선택을 시간으로 분리한다. candidate history는 설정한 history 시작일부터
+- [x] raw action log 선택을 시간으로 분리한다. candidate history는 설정한 history 시작일부터
       **`dt < T`까지만** 허용한다. 평가 출력은 `[T, T_end]`, 라벨 스캔은
       `[T, T_end + 1]`만 허용한다. 현행
       action log가 click을 저장하고(`autoresearch/action_log_generation/schema.py:37-61`)
@@ -438,29 +439,35 @@ identity, typed nested manifest와 fingerprint exclusion을 잠근다.
       섞이면 안 된다. `dt < T`는 누출이 아니지만, candidate history로 완전한 라벨을 만들 수
       있는 마지막 출력일은 **`T-2`**다. 마지막 파티션 `T-1`을 출력일 `T-1`의 완전한 라벨로
       사용하지 못하게 manifest와 검증 계약에 기록한다
-- [ ] `[T, T_end]` 평가 출력 구간 안에서 고정 salt의 SHA-256 bucket으로 유저 단위 80/20
+- [x] `[T, T_end]` 평가 출력 구간 안에서 고정 salt의 SHA-256 bucket으로 유저 단위 80/20
       분할한다.
       validation/final 중 한쪽이 비거나 spec §8의 structural coverage가 없으면 snapshot
       생성을 거부한다. 지표별 제품 coverage는 P0-2 Judge가 소유한다
-- [ ] 산출물을 content-addressed 디렉터리에 write-once 게시:
+- [x] 산출물을 content-addressed 디렉터리에 write-once 게시:
       - `validation/slate.parquet` — `evaluation_id`, `slate_id`, `user_id`, `video_id`,
         `event_timestamp`와 optional 메타데이터. **라벨 없음**
       - `validation/labels.parquet` — `evaluation_id`, `slate_id`, `user_id`, `video_id`,
         `source_event_id`, `clicked`. **봉인**
-      - `final_holdout/slate.parquet`과 `final_holdout/labels.parquet` — 같은 schema이되 반복
-        loop가 끝날 때까지 slate도 candidate에게 주입하지 않음
+      - `final_holdout/slate.parquet`과 `final_holdout/labels.parquet` — 각각 대응하는 validation artifact schema와 일치하며, final slate는 label-free이고 final labels는 봉인. 반복
+        loop의 candidate 주입 차단은 Stage C candidate workspace 범위로 남김
       - `manifest.json` — split별 `evaluation_id`(content hash), 유저 분할 규칙, 행 수,
         출력일 `[T, T_end]`, candidate history의 `dt < T` 파티션 목록과 완전 라벨 출력일
         상한 `T-2`, 평가 스캔의 `[T, T_end + 1]` 원천 파티션, slate 수, slate당 평균 크기,
         click 보유 slate 비율
-- [ ] optional 컬럼의 실제 non-null 비율을 manifest에 기록 (갭 조사에서 미확인 항목)
-- [ ] 테스트: `clicked`는 labels에만 있고 slate에는 없음, 두 파일이 join key
+- [x] optional 컬럼의 실제 non-null 비율을 manifest에 기록 (갭 조사에서 미확인 항목)
+- [x] 테스트: `clicked`는 labels에만 있고 slate에는 없음, 두 파일이 join key
       (`evaluation_id`, `slate_id`, `user_id`, `video_id`)를 공유함, 같은 유저의 slate가
       split을 넘지 않음, candidate history에 `dt >= T`가 한 건도 없음, 출력에
       `[T, T_end]` 밖 impression이 없음, `T_end + 1` click과 impression이 귀속 후보에는
       포함되지만 출력에는 없음, `T_end + 1` 파티션 누락 시 실패, 출력일 `T-1`을
       candidate의 완전 라벨로 취급하지 않음, 동일 입력 → 동일 `evaluation_id`,
       write-once 위반 시 실패
+
+Stage C fixture·Judge handoff는 구현 대기 상태다. `RuleBasedActionLogGenerator` fixture,
+fixture seed custody, candidate workspace·argv·환경 주입 검사와 Judge handoff는 위 Stage B
+체크의 완료 범위에 포함하지 않는다.
+
+Task 1 전체와 Research Harness MVP는 완료 처리하지 않는다.
 
 **검증:** `uv run python -m pytest tests/research_harness/test_slate.py -v`
 

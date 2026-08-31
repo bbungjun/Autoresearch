@@ -53,6 +53,7 @@ autoresearch/        # 폐루프 파이프라인 — 단계마다 한 패키지
 ├── data_collection/      # YouTube 트렌딩 수집 (fetch/transform/load/backfill + 복원력 레이어)
 ├── virtual_user_generation/  # LLM 기반 가상 유저(페르소나) 생성 + 파이프라인 어댑터
 ├── action_log_generation/    # action log 생성·shard·merge·품질 계약
+├── research_harness/  # 재현 가능한 평가 snapshot: label-free slate·봉인 label·split·local write-once
 ├── feature_engineering/  # 피처 조립·임베딩·Feast 조회
 ├── model_training/       # 모델 정의, 학습, 학습 데이터셋, provenance, 스냅샷
 ├── model_evaluation/     # 평가, 열화 측정, paired 비교, seed sweep, 승격 근거
@@ -77,6 +78,28 @@ docs/                # 문서 — docs/README.md 인덱스 참조
 `feature_repo/`는 Feast가 요구하는 규격이라 최상위에 그대로 둡니다. 파이프라인 단계
 축으로 자르면 마지막 단계가 첫 단계를 참조하게 되는데(`recommendation` →
 `action_log_generation`), 폐루프 구조상 자연스러운 방향이며 import 순환은 아닙니다.
+
+### Research Harness 평가 snapshot (Stage B)
+
+`autoresearch/research_harness/`는 검증된 action log 일일 파티션에서 재현 가능한
+평가 snapshot을 조립하는 파이프라인 경계입니다. 공개 Python API는 정확히
+`ActionLogSource`, `EvaluationSnapshotError`, `EvaluationSnapshotReceipt`,
+`EvaluationSnapshotRequest`, `SnapshotErrorCode`,
+`build_evaluation_snapshot` 여섯 항목입니다. 마지막 함수의 계약은
+`build_evaluation_snapshot(request: EvaluationSnapshotRequest, *, source: ActionLogSource | None = None) -> EvaluationSnapshotReceipt`입니다.
+
+평가 출력은 `validation/slate.parquet`, `validation/labels.parquet`,
+`final_holdout/slate.parquet`, `final_holdout/labels.parquet`의 네 artifact와
+`manifest.json`으로 구성합니다. slate에는 label을 넣지 않으며 labels와 final holdout은
+후속 Judge 경계의 입력입니다. click은 같은 `(user_id, video_id)`에서 직전 30분 안의
+전역 최근 impression 한 건에만 귀속하고, 유저는 고정 SHA-256 bucket의 80/20
+validation/final holdout split으로 나눕니다. local publisher는 같은 lock protocol을 따르는
+cooperating publisher에 한해 동일한 완성 target을 재사용하고, 불완전하거나 digest가 다른
+target은 덮어쓰지 않고 실패합니다.
+
+RuleBased fixture·seed custody, candidate workspace 주입 검사, Sealed Judge 및 artifact
+handoff는 Stage C/P0-2 이후 범위로 아직 구현되지 않았습니다. 계약 정본은
+[`Research Harness P0-1 평가 snapshot`](docs/specs/2026-08-31-research-harness-evaluation-snapshot.md)입니다.
 
 ## 배포 이미지
 

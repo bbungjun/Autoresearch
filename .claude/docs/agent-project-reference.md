@@ -43,6 +43,7 @@ docs/
 | **Agent Orchestration** | FastAPI 채팅 저장 API, Codex CLI/OpenAI 호출, PostgreSQL 저장 | `applications/experiment_platform/` |
 | **Reranking Serving** | 리랭킹 API | `applications/reranking_api/` |
 | **Recommendation** | 정책 라운드, 일일 추천 폐루프 | `autoresearch/recommendation/` |
+| **Research Harness snapshot (Stage B)** | action log 평가 snapshot 조립, label 분리, attribution, user split, local write-once 게시 | `autoresearch/research_harness/` |
 
 ## Responsibility Boundaries
 
@@ -62,6 +63,26 @@ docs/
   유지합니다(BQ 리더는 `autoresearch/recommendation/`).
 - **경계:** `jobs/`는 입력을 검증하고 도메인 모듈을 호출하지만 schedule,
   retry, timeout, Pool과 KubernetesPodOperator 설정은 소유하지 않습니다.
+
+### `autoresearch/research_harness/` (Stage B)
+- **책임:** 검증된 action log 파티션에서 source 검증 → slate identity 검증 → 다일
+  click attribution → user split/구조 coverage → artifact/manifest → local publisher를
+  조립합니다. 공개 API는 `ActionLogSource`, `EvaluationSnapshotError`,
+  `EvaluationSnapshotReceipt`, `EvaluationSnapshotRequest`, `SnapshotErrorCode`,
+  `build_evaluation_snapshot` 여섯 항목이며, builder의 typed signature는
+  `build_evaluation_snapshot(request: EvaluationSnapshotRequest, *, source: ActionLogSource | None = None) -> EvaluationSnapshotReceipt`입니다.
+- **데이터 계약:** click은 같은 `(user_id, video_id)`의 엄격히 앞선 30분 안 최근
+  impression에만 귀속합니다. 유저는 `user-hash-80-20-v1`의 SHA-256 고정 salt/bucket으로
+  validation과 final holdout에 배타적으로 나뉩니다. 네 artifact 상대 경로는
+  `validation/slate.parquet`, `validation/labels.parquet`,
+  `final_holdout/slate.parquet`, `final_holdout/labels.parquet`입니다. slate는 label-free이고
+  label 파일은 봉인됩니다.
+- **게시 경계:** local content-addressed target은 같은 lock protocol을 따르는 cooperating
+  publisher에게만 write-once 의미를 보장합니다. 완성·동일 target만 재사용하며 부분 target이나
+  manifest/artifact digest 불일치는 `snapshot_write_conflict`로 거부하고 덮어쓰지 않습니다.
+- **비책임:** action log producer, RuleBased fixture 및 seed custody, candidate workspace
+  주입 검사, Sealed Judge·지표·승격, Judge artifact handoff는 소유하지 않습니다. 이들은
+  Stage C 또는 P0-2 이후의 명시적 후속 범위입니다.
 
 ### `autoresearch/`의 학습·평가 단계 패키지
 - **책임:** 피처 조립(`feature_engineering/`), 모델 정의·학습·학습 데이터셋·

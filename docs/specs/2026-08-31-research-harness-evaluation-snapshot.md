@@ -1,12 +1,19 @@
 # Research Harness P0-1 — 재현 가능한 평가 데이터와 split
 
-> 작성: 2026-08-31 | 상태: Stage A producer 계약 구현, Stage B Task 0 canonical 계약 잠금 완료, Stage B builder/Stage C 구현 대기 | 추적: #17
+> 작성: 2026-08-31 | 상태: Stage A producer 계약 및 Stage B snapshot builder 구현 완료, Stage C 대기 | 추적: #17
 >
 > 상위 계약:
 > `docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md`
 >
 > 구현 순서:
 > `docs/plans/2026-08-15-local-research-harness-mvp.md` Task 1-0, Task 1
+
+## Stage B 부분 완료, Stage C 대기
+
+Stage B는 원천 파티션 검증, canonical slate 검증, 다일 click attribution, 고정 user
+split·구조 coverage, label 분리 artifact·typed manifest, local write-once publisher와 공개
+snapshot builder까지 구현했습니다. Stage C의 RuleBased fixture·seed custody, candidate
+workspace 주입 검증, Sealed Judge 및 validation/final artifact handoff는 구현 대기 상태입니다.
 
 ## 1. 목적
 
@@ -600,17 +607,17 @@ event schema는 additive nullable `slate_id`로 유지하고 draft/checkpoint sc
 final artifact SHA-256을 보존했다. 재현 가능한 수치와 cleanup receipt는
 `.omo/evidence/research-harness-stage-a/task-6.json`에 있다.
 
-이는 producer 기반만 완료한 상태다. 아래 Stage B/C, 특히 cutover fail-closed,
-snapshot, label 봉인, validation/final split 및 Judge handoff는 완료로 표시하지 않는다.
+이는 Stage A producer 기록의 범위만 설명한다. 이후 Stage B snapshot builder는 완료되었고,
+Stage C fixture·Judge handoff는 완료로 표시하지 않는다.
 
-### Stage B — snapshot builder
+### Stage B — snapshot builder (구현 완료)
 
-1. source adapter와 필수 파티션 검증
-2. cutover·row schema 검증
-3. multi-day attribution
-4. user split과 structural coverage 검증
-5. evaluation ID·parquet·manifest 생성
-6. write-once local publisher
+1. [x] source adapter와 필수 파티션 검증
+2. [x] cutover·row schema 검증
+3. [x] multi-day attribution
+4. [x] user split과 structural coverage 검증
+5. [x] evaluation ID·parquet·manifest 생성
+6. [x] write-once local publisher
 
 ### Stage C — fixture와 실증
 
@@ -618,6 +625,37 @@ snapshot, label 봉인, validation/final split 및 Judge handoff는 완료로 �
 2. 동일 입력 재생성의 ID·fingerprint 일치 확인
 3. candidate view에 label·final holdout·fixture seed가 없는지 확인
 4. P0-2 Judge가 소비할 수 있는 validation/final artifact handoff
+
+## Portfolio Record — Stage B snapshot builder
+
+### Problem
+
+P0-1 이전에는 action log에 후보 묶음의 원천 식별자가 없어 slate를 사후 추정하면 안 되었고,
+평가 기간 raw log를 candidate가 읽으면 같은 30분 join으로 숨긴 click label을 복원할 수
+있었습니다. 또한 부분 게시나 동일 경로의 상이한 artifact가 재현성 근거를 훼손할 수
+있었습니다. Stage B는 producer 계약을 바꾸지 않고, 로컬 Parquet·PyArrow와 기존 action log
+계약 안에서 이 경계를 fail-closed로 고정해야 했습니다.
+
+### Solution
+
+기존 action log의 저장된 `slate_id`만 검증해 사용하고, `T`부터 `T_end + 1`까지를 scan하되
+출력은 `[T, T_end]` impression으로 제한했습니다. click은 같은 `(user_id, video_id)`의 직전
+30분 내 전역 최근 impression에 귀속하고, 고정 SHA-256 80/20 user split으로 validation과
+final holdout을 분리했습니다. 네 Parquet artifact에서 slate와 labels를 분리하고 typed
+manifest의 fingerprint를 content address로 사용했습니다. 게시은 cooperating publisher의
+lock protocol 아래 동일 완성 target만 재사용하며, 다른 내용·불완전 target은 overwrite 대신
+`snapshot_write_conflict`로 실패하도록 선택했습니다. 임의 filesystem actor 경쟁, GCS 게시,
+fixture/Judge/candidate workspace는 이 단계의 범위에서 제외했습니다.
+
+### Result
+
+현재 Stage B 공개 facade는 정확히 여섯 export를 제공하고, local output에 네 artifact(두 label-free slate와 두 sealed labels)와
+`manifest.json`을 게시합니다. Stage B 최종 검증에서 `tests/research_harness`와
+`tests/action_log_generation`의 404개 테스트가 통과했고, real local Parquet manual QA는 같은
+입력 재빌드의 `reused=true`, 네 artifact의 1:1 join key, tampered target의 typed conflict,
+staging residue 없음 을 관찰했습니다. 이 결과는 Stage B snapshot 경계에 한정되며 Stage C의
+RuleBased fixture·seed custody, candidate workspace isolation, Sealed Judge 및 artifact handoff는
+여전히 후속 과제입니다.
 
 ## 16. 검증 매트릭스
 
