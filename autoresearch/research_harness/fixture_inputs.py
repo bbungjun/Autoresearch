@@ -17,8 +17,6 @@ from typing import Final
 
 import pyarrow as pa
 
-from autoresearch.data_collection.load import _to_table as _trending_video_table
-from autoresearch.data_collection.schema import TrendingVideo
 from autoresearch.research_harness.evaluation_artifacts import (
     WRITER_OPTIONS,
     _write_table,
@@ -33,7 +31,6 @@ from autoresearch.research_harness.fixture_models import (
     FixturePartitionReceipt,
     LocalEvaluationFixtureRequest,
 )
-from autoresearch.virtual_user_generation.pipeline import VIRTUAL_USERS_PARQUET_SCHEMA
 
 
 VALIDATION_USER_COUNT: Final = 160
@@ -43,15 +40,95 @@ _VIRTUAL_USER_PATH: Final = "inputs/virtual_users.parquet"
 _YOUTUBE_ROOT: Final = "inputs/youtube_trending_kr"
 _CATEGORIES: Final = ("Gaming", "Music", "Education", "Entertainment")
 _WATCH_TIME_BANDS: Final = ("morning", "afternoon", "evening", "night", "mixed")
+_TIMESTAMP_US_UTC: Final = pa.timestamp("us", tz="UTC")
+
+# `youtube-ctr-input-v1`의 schema는 production 모듈과 별도로 고정한다. Production에
+# additive/change가 생겨도 같은 generator version의 bytes가 조용히 변하면 안 된다.
+FIXTURE_VIRTUAL_USER_SCHEMA_V1: Final = pa.schema(
+    [
+        pa.field("user_id", pa.string()),
+        pa.field("source_uuid", pa.string()),
+        pa.field("source_dataset", pa.string()),
+        pa.field("source_hash", pa.string()),
+        pa.field("age", pa.int64()),
+        pa.field("sex", pa.string()),
+        pa.field("age_bucket", pa.string()),
+        pa.field("marital_status", pa.string()),
+        pa.field("military_status", pa.string()),
+        pa.field("family_type", pa.string()),
+        pa.field("housing_type", pa.string()),
+        pa.field("education_level", pa.string()),
+        pa.field("bachelors_field", pa.string()),
+        pa.field("occupation", pa.string()),
+        pa.field("province", pa.string()),
+        pa.field("district", pa.string()),
+        pa.field("country", pa.string()),
+        pa.field("locale", pa.string()),
+        pa.field("persona_summary", pa.string()),
+        pa.field("hobby_keywords", pa.list_(pa.string())),
+        pa.field("interest_keywords", pa.list_(pa.string())),
+        pa.field("lifestyle_keywords", pa.list_(pa.string())),
+        pa.field("food_keywords", pa.list_(pa.string())),
+        pa.field("travel_keywords", pa.list_(pa.string())),
+        pa.field("career_keywords", pa.list_(pa.string())),
+        pa.field("family_context_keywords", pa.list_(pa.string())),
+        pa.field("primary_categories", pa.list_(pa.string())),
+        pa.field("watch_time_band", pa.string()),
+        pa.field("source_persona_json", pa.string()),
+        pa.field("schema_version", pa.string()),
+        pa.field("prompt_version", pa.string()),
+        pa.field("llm_model", pa.string()),
+        pa.field("generated_at", pa.string()),
+    ]
+)
+FIXTURE_YOUTUBE_SCHEMA_V1: Final = pa.schema(
+    [
+        pa.field("video_id", pa.string()),
+        pa.field("video_published_at", _TIMESTAMP_US_UTC),
+        pa.field("video_trending_date", _TIMESTAMP_US_UTC),
+        pa.field("video_trending_country", pa.string()),
+        pa.field("video_title", pa.string()),
+        pa.field("video_description", pa.string()),
+        pa.field("video_default_thumbnail", pa.string()),
+        pa.field("video_category", pa.string()),
+        pa.field("video_tags", pa.list_(pa.string())),
+        pa.field("video_duration", pa.string()),
+        pa.field("video_dimension", pa.string()),
+        pa.field("video_definition", pa.string()),
+        pa.field("video_licensed_content", pa.bool_()),
+        pa.field("video_view_count", pa.int64()),
+        pa.field("video_like_count", pa.int64()),
+        pa.field("video_comment_count", pa.int64()),
+        pa.field("channel_id", pa.string()),
+        pa.field("channel_title", pa.string()),
+        pa.field("channel_description", pa.string()),
+        pa.field("channel_custom_url", pa.string()),
+        pa.field("channel_published_at", _TIMESTAMP_US_UTC),
+        pa.field("channel_country", pa.string()),
+        pa.field("channel_view_count", pa.int64()),
+        pa.field("channel_subscriber_count", pa.int64()),
+        pa.field("channel_have_hidden_subscribers", pa.bool_()),
+        pa.field("channel_video_count", pa.int64()),
+        pa.field("channel_localized_title", pa.string()),
+        pa.field("channel_localized_description", pa.string()),
+        pa.field("collected_at", _TIMESTAMP_US_UTC),
+    ]
+)
 
 
 def canonical_fixture_dates(evaluation_start_date: date) -> tuple[date, ...]:
     """Return history, evaluation, and scan-tail partition dates in canonical order."""
 
-    return tuple(
-        evaluation_start_date + timedelta(days=offset)
-        for offset in (-2, -1, 0, 1)
-    )
+    try:
+        return tuple(
+            evaluation_start_date + timedelta(days=offset)
+            for offset in (-2, -1, 0, 1)
+        )
+    except OverflowError:
+        raise StageCError(
+            StageCErrorCode.FIXTURE_REQUEST_INVALID,
+            "fixture_date_window_validation",
+        ) from None
 
 
 def select_fixture_user_ids(
@@ -118,7 +195,7 @@ def write_canonical_fixture_inputs(
     validation_ids, final_holdout_ids = select_fixture_user_ids(request.fixture_seed)
     virtual_user_table = pa.Table.from_pylist(
         _virtual_user_rows(validation_ids + final_holdout_ids, request.evaluation_start_date),
-        schema=VIRTUAL_USERS_PARQUET_SCHEMA,
+        schema=FIXTURE_VIRTUAL_USER_SCHEMA_V1,
     )
     _write_table(virtual_user_table, virtual_users_path)
     virtual_users_receipt = FixtureInputReceipt(
@@ -134,7 +211,10 @@ def write_canonical_fixture_inputs(
         )
         partition_path = fixture_root / relative_path
         partition_path.parent.mkdir(parents=True, exist_ok=True)
-        table = _trending_video_table(_fixture_videos(partition_date))
+        table = pa.Table.from_pylist(
+            _fixture_video_rows(partition_date),
+            schema=FIXTURE_YOUTUBE_SCHEMA_V1,
+        )
         _write_table(table, partition_path)
         youtube_receipts.append(
             FixturePartitionReceipt(
@@ -237,49 +317,49 @@ def _virtual_user_rows(
     return rows
 
 
-def _fixture_videos(partition_date: date) -> list[TrendingVideo]:
+def _fixture_video_rows(partition_date: date) -> list[dict[str, object]]:
     collected_at = datetime.combine(
         partition_date,
         datetime.min.time(),
         tzinfo=UTC,
     )
-    videos: list[TrendingVideo] = []
+    videos: list[dict[str, object]] = []
     for index in range(VIDEO_COUNT_PER_PARTITION):
         category = _CATEGORIES[index % len(_CATEGORIES)]
         video_id = f"fixture-video-{partition_date:%Y%m%d}-{index:04d}"
         channel_index = index % 12
         videos.append(
-            TrendingVideo(
-                video_id=video_id,
-                video_published_at=collected_at - timedelta(days=30 + index),
-                video_trending_date=collected_at,
-                video_trending_country="KR",
-                video_title=f"{category} fixture 영상 {index:02d}",
-                video_description=f"{category} 연구용 결정적 영상 설명 {index:02d}",
-                video_default_thumbnail=f"https://fixture.invalid/{video_id}.jpg",
-                video_category=category,
-                video_tags=[category, "fixture", f"topic-{index % 6}"],
-                video_duration=f"PT{5 + index % 20}M",
-                video_dimension="2d",
-                video_definition="hd",
-                video_licensed_content=False,
-                video_view_count=1_000_000 - index * 1_000,
-                video_like_count=50_000 - index * 100,
-                video_comment_count=5_000 - index * 10,
-                channel_id=f"fixture-channel-{channel_index:02d}",
-                channel_title=f"Fixture Channel {channel_index:02d}",
-                channel_description="결정적 local fixture 채널",
-                channel_custom_url=f"@fixture-channel-{channel_index:02d}",
-                channel_published_at=collected_at - timedelta(days=3650),
-                channel_country="KR",
-                channel_view_count=10_000_000 + channel_index,
-                channel_subscriber_count=100_000 + channel_index,
-                channel_have_hidden_subscribers=False,
-                channel_video_count=100 + channel_index,
-                channel_localized_title=f"Fixture Channel {channel_index:02d}",
-                channel_localized_description="결정적 local fixture 채널",
-                collected_at=collected_at,
-            )
+            {
+                "video_id": video_id,
+                "video_published_at": collected_at - timedelta(days=30 + index),
+                "video_trending_date": collected_at,
+                "video_trending_country": "KR",
+                "video_title": f"{category} fixture 영상 {index:02d}",
+                "video_description": f"{category} 연구용 결정적 영상 설명 {index:02d}",
+                "video_default_thumbnail": f"https://fixture.invalid/{video_id}.jpg",
+                "video_category": category,
+                "video_tags": [category, "fixture", f"topic-{index % 6}"],
+                "video_duration": f"PT{5 + index % 20}M",
+                "video_dimension": "2d",
+                "video_definition": "hd",
+                "video_licensed_content": False,
+                "video_view_count": 1_000_000 - index * 1_000,
+                "video_like_count": 50_000 - index * 100,
+                "video_comment_count": 5_000 - index * 10,
+                "channel_id": f"fixture-channel-{channel_index:02d}",
+                "channel_title": f"Fixture Channel {channel_index:02d}",
+                "channel_description": "결정적 local fixture 채널",
+                "channel_custom_url": f"@fixture-channel-{channel_index:02d}",
+                "channel_published_at": collected_at - timedelta(days=3650),
+                "channel_country": "KR",
+                "channel_view_count": 10_000_000 + channel_index,
+                "channel_subscriber_count": 100_000 + channel_index,
+                "channel_have_hidden_subscribers": False,
+                "channel_video_count": 100 + channel_index,
+                "channel_localized_title": f"Fixture Channel {channel_index:02d}",
+                "channel_localized_description": "결정적 local fixture 채널",
+                "collected_at": collected_at,
+            }
         )
     return videos
 

@@ -405,11 +405,11 @@ action log parquet에서 평가 slate를 조립하고 정답을 분리 봉인한
 Stage B Task 0은 §10~§12의 exact `EvaluationIdPayload`, canonical JSON bytes, writer
 identity, typed nested manifest와 fingerprint exclusion을 잠근다.
 
-### Stage B 완료, Stage C 계약 확정·구현 대기
+### Stage B 완료, Stage C 입력 foundation 구현·orchestration 대기
 
 이 계획에서 Stage A의 producer 계약과 Stage B snapshot builder 구현은 완료되었다. Task 1
-전체와 후속 Research Harness MVP를 완료 처리하지 않으며, Stage C fixture·Judge handoff는
-구현 대기 상태다.
+전체와 후속 Research Harness MVP를 완료 처리하지 않으며, Stage C 입력 foundation 이후의
+fixture·Judge handoff orchestration은 구현 대기 상태다.
 
 - [x] `slate.py` 작성 (Stage B builder/public facade 범위). 입력은 action log parquet 경로(로컬/GCS), 평가 **출력일** 범위
       `[T, T_end]`, 필수 `slate_id_cutover_date`. `T`는 첫 출력일이고
@@ -463,7 +463,8 @@ identity, typed nested manifest와 fingerprint exclusion을 잠근다.
       candidate의 완전 라벨로 취급하지 않음, 동일 입력 → 동일 `evaluation_id`,
       write-once 위반 시 실패
 
-Stage C fixture·Judge handoff는 구현 대기 상태다. `RuleBasedActionLogGenerator` fixture,
+Stage C fixture·Judge handoff orchestration은 구현 대기 상태다. typed contract와 canonical
+입력 foundation은 구현했지만 `RuleBasedActionLogGenerator` 일일 실행,
 fixture seed custody, data-only candidate view와 Judge handoff는 위 Stage B 체크의 완료 범위에
 포함하지 않는다. 실제 candidate worktree·argv·환경 주입 검사는 Task 3 책임이다.
 
@@ -478,6 +479,14 @@ Task 1 전체와 Research Harness MVP는 완료 처리하지 않는다.
 이 Task는 #22와
 `docs/specs/2026-08-31-research-harness-evaluation-snapshot.md` §13의 exact contract를
 구현해 P0-1을 닫는다. 실제 git worktree와 subprocess 환경은 만들지 않는다.
+
+> **2026-09-01 foundation 구현 기록:** 아래 체크리스트는 Stage C 전체 완료 전까지
+> 미완료로 유지합니다. 현재는 exact typed model/error, canonical T-2..T+1 입력,
+> Stage B bucket 기준 validation 160명/final 40명 선택, versioned production-compatible
+> Parquet schema와 descriptor identity 기반까지만 구현했습니다. 일일 producer 실행,
+> source adapter, snapshot build, write-once fixture 게시, Judge handoff 검증과 candidate view
+> materialization은 남아 있습니다. 문제·해결·검증 근거는 연결 spec의
+> `Portfolio Record — Stage C fixture input foundation`에 기록합니다.
 
 - [ ] `LocalEvaluationFixture` module의 작은 interface
       `build_local_evaluation_fixture(LocalEvaluationFixtureRequest)`를 구현한다. 필수

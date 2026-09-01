@@ -1,6 +1,6 @@
 # Research Harness P0-1 — 재현 가능한 평가 데이터와 split
 
-> 작성: 2026-08-31 | 상태: Stage A·B 구현 완료, Stage C 계약 확정·구현 대기 | 추적: #17, #22
+> 작성: 2026-08-31 | 상태: Stage A·B 및 Stage C 입력 foundation 구현, Stage C orchestration 대기 | 추적: #17, #22
 >
 > 상위 계약:
 > `docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md`
@@ -8,12 +8,14 @@
 > 구현 순서:
 > `docs/plans/2026-08-15-local-research-harness-mvp.md` Task 1-0, Task 1
 
-## Stage B 완료, Stage C 계약 확정·구현 대기
+## Stage B 완료, Stage C 입력 foundation 구현·orchestration 대기
 
 Stage B는 원천 파티션 검증, canonical slate 검증, 다일 click attribution, 고정 user
 split·구조 coverage, label 분리 artifact·typed manifest, local write-once publisher와 공개
 snapshot builder까지 구현했습니다. Stage C는 RuleBased fixture·seed custody, data-only
-candidate view와 P0-2용 Judge snapshot handoff를 구현합니다. 실제 disposable worktree,
+candidate view와 P0-2용 Judge snapshot handoff를 구현합니다. 그중 typed contract와
+canonical input/descriptor foundation은 구현됐고 실제 일일 실행·게시·handoff 검증은
+남아 있습니다. 실제 disposable worktree,
 subprocess argv·환경과 Sealed Judge의 지표·판정은 각각 후속 Task 3과 P0-2 책임입니다.
 
 ## 1. 목적
@@ -838,6 +840,39 @@ fixture로 성공 metric 경로를 시작할 수 있고 Task 3은 snapshot manif
 중복 구현하지 않습니다. 이 기록은 계약 검토 결과이며 Stage C runtime 구현·성능·테스트
 통과를 주장하지 않습니다.
 
+## Portfolio Record — Stage C fixture input foundation
+
+### Problem
+
+Stage C 전체 orchestration 전에 descriptor와 candidate-safe manifest의 타입만 선언하면 날짜
+관계, partition 순서·중복, `evaluation_id` 형식과 경로가 의미적으로 잘못되어도 JSON 검증을
+통과할 수 있었습니다. 또한 fixture 입력이 production의 private Arrow schema 객체를 직접
+따르면 production schema 변경이 `youtube-ctr-input-v1`의 bytes와 descriptor identity를 같은
+version 아래에서 조용히 바꿀 수 있었습니다. `date.min`·`date.max` 부근 요청은 파일 생성
+도중 raw `OverflowError`를 낼 위험도 있었습니다.
+
+### Solution
+
+`FixtureDescriptor`에 T 기준 `history_start=cutover=T-2`, `evaluation_end=T`, 정확한
+T-2..T+1 partition 순서·경로·행 수와 200-user receipt 검증을 추가했습니다. Candidate
+manifest는 Stage B의 `eval_<64 lowercase hex>` ID, `slate.parquet`, dt에서 유도한 history
+경로, 오름차순·unique 과거 partition과 `complete_history_label_end_date=T-2`만 허용합니다.
+Fixture 요청은 날짜 산술 가능 범위를 파일 생성 전에 검사합니다. 입력 generator는
+production consumer가 읽을 수 있는 field projection을 `youtube-ctr-input-v1` 전용 Arrow
+schema로 별도 고정하고, schema fingerprint와 대표 Parquet SHA를 golden test로 봉인했습니다.
+
+### Result
+
+같은 seed 917·평가일 2026-09-01의 두 staging root에서 virtual-user 입력과 네 YouTube
+partition 및 descriptor bytes가 일치함을 테스트로 확인했습니다. Focused model/input
+테스트 37개가 통과했고, production schema 객체를 빈 schema로 바꾼 테스트에서도 v1 대표
+virtual-user/YouTube Parquet SHA가 유지됐습니다. 날짜 최솟값·최댓값 요청은 fixture 경로를
+만들기 전에 `fixture_request_invalid`로 실패합니다. 이어 실행한 전체
+`tests/research_harness`는 195개 통과·1개 환경 의존 skip이었습니다. 이 foundation은 일일 producer 실행,
+action log·snapshot 생성, write-once fixture 게시, source adapter, Judge handoff 재검증과
+candidate view materialization을 아직 구현하지 않았으므로 Stage C 체크리스트는 완료로
+표시하지 않습니다.
+
 ## Portfolio Record — Stage B snapshot builder
 
 ### Problem
@@ -861,12 +896,13 @@ fixture/Judge/candidate workspace는 이 단계의 범위에서 제외했습니�
 
 ### Result
 
-현재 Stage B 공개 facade는 정확히 여섯 export를 제공하고, local output에 네 artifact(두 label-free slate와 두 sealed labels)와
-`manifest.json`을 게시합니다. Stage B 최종 검증에서 `tests/research_harness`와
+Stage B snapshot surface 여섯 항목은 유지되며 package facade에는 이후 Stage C foundation의
+typed contract와 순수 identity helper가 추가됐습니다. Stage B builder는 local output에 네
+artifact(두 label-free slate와 두 sealed labels)와 `manifest.json`을 게시합니다. Stage B 최종 검증에서 `tests/research_harness`와
 `tests/action_log_generation`의 404개 테스트가 통과했고, real local Parquet manual QA는 같은
 입력 재빌드의 `reused=true`, 네 artifact의 1:1 join key, tampered target의 typed conflict,
 staging residue 없음 을 관찰했습니다. 이 결과는 Stage B snapshot 경계에 한정되며 Stage C의
-RuleBased fixture·seed custody, candidate data view와 Judge handoff는 아직 구현 전입니다.
+일일 producer·write-once fixture orchestration, candidate data view와 검증된 Judge handoff는 아직 구현 전입니다.
 실제 candidate workspace와 Sealed Judge는 각각 Task 3과 P0-2의 후속 과제입니다.
 
 ## 16. 검증 매트릭스

@@ -11,11 +11,19 @@
 """
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Annotated, ClassVar, Literal
+import re
+from typing import Annotated, ClassVar, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from autoresearch.research_harness.evaluation_snapshot_models import (
     ArtifactReceipt,
@@ -28,6 +36,7 @@ from autoresearch.research_harness.fixture_errors import StageCError, StageCErro
 
 
 _DATACLASS_CONFIG: ConfigDict = ConfigDict(extra="forbid")
+_EVALUATION_ID_PATTERN = re.compile(r"eval_[0-9a-f]{64}\Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +58,7 @@ class LocalEvaluationFixtureRequest:
                 StageCErrorCode.FIXTURE_REQUEST_INVALID,
                 "fixture_request_validation",
             )
+        _require_fixture_date_window(self.evaluation_start_date)
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +116,78 @@ class FixtureDescriptor(BaseModel):
     virtual_users: FixtureInputReceipt
     youtube_partitions: tuple[FixturePartitionReceipt, ...]
 
+    @model_validator(mode="after")
+    def require_canonical_fixture_semantics(self) -> Self:
+        _require_fixture_date_window(self.evaluation_start_date)
+        history_start_date = self.evaluation_start_date - timedelta(days=2)
+        expected_dates = tuple(
+            self.evaluation_start_date + timedelta(days=offset)
+            for offset in (-2, -1, 0, 1)
+        )
+        if (
+            self.history_start_date != history_start_date
+            or self.slate_id_cutover_date != history_start_date
+            or self.evaluation_end_date != self.evaluation_start_date
+        ):
+            raise StageCError(
+                StageCErrorCode.FIXTURE_REQUEST_INVALID,
+                "fixture_descriptor_window_validation",
+            )
+        if (
+            self.virtual_users.relative_path != "inputs/virtual_users.parquet"
+            or self.virtual_users.rows != 200
+        ):
+            raise StageCError(
+                StageCErrorCode.FIXTURE_REQUEST_INVALID,
+                "fixture_descriptor_user_input_validation",
+            )
+        partition_dates = tuple(receipt.dt for receipt in self.youtube_partitions)
+        if partition_dates != expected_dates:
+            raise StageCError(
+                StageCErrorCode.FIXTURE_REQUEST_INVALID,
+                "fixture_descriptor_partition_order_validation",
+            )
+        for receipt in self.youtube_partitions:
+            expected_path = (
+                "inputs/youtube_trending_kr/"
+                f"dt={receipt.dt.isoformat()}/part-0.parquet"
+            )
+            if receipt.relative_path != expected_path or receipt.rows != 48:
+                raise StageCError(
+                    StageCErrorCode.FIXTURE_REQUEST_INVALID,
+                    "fixture_descriptor_partition_receipt_validation",
+                    dt=receipt.dt,
+                )
+        return self
+
+    @classmethod
+    def model_validate_json(
+        cls,
+        json_data: str | bytes | bytearray,
+        *,
+        strict: bool | None = None,
+        extra: Literal["allow", "ignore", "forbid"] | None = None,
+        context: object | None = None,
+        by_alias: bool | None = None,
+        by_name: bool | None = None,
+    ) -> Self:
+        """Parse a descriptor while mapping all schema failures to the Stage C code."""
+
+        try:
+            return super().model_validate_json(
+                json_data,
+                strict=strict,
+                extra=extra,
+                context=context,
+                by_alias=by_alias,
+                by_name=by_name,
+            )
+        except ValidationError:
+            raise StageCError(
+                StageCErrorCode.FIXTURE_REQUEST_INVALID,
+                "fixture_descriptor_schema_validation",
+            ) from None
+
 
 @dataclass(frozen=True, slots=True)
 class JudgeSnapshotHandoff:
@@ -146,6 +228,15 @@ class CandidateHistoryReceipt:
             self.sha256,
             code=StageCErrorCode.CANDIDATE_VIEW_CONFLICT,
         )
+        expected_path = (
+            f"history/action_log/dt={self.dt.isoformat()}/part-0.parquet"
+        )
+        if self.relative_path != expected_path:
+            raise StageCError(
+                StageCErrorCode.CANDIDATE_VIEW_CONFLICT,
+                "candidate_history_path_validation",
+                dt=self.dt,
+            )
 
 
 class CandidateDataManifest(BaseModel):
@@ -157,6 +248,19 @@ class CandidateDataManifest(BaseModel):
     complete_history_label_end_date: date
     slate: ArtifactReceipt
     history_partitions: tuple[CandidateHistoryReceipt, ...]
+
+    @field_validator("evaluation_id")
+    @classmethod
+    def require_canonical_evaluation_id(
+        cls,
+        evaluation_id: EvaluationId,
+    ) -> EvaluationId:
+        if _EVALUATION_ID_PATTERN.fullmatch(str(evaluation_id)) is None:
+            raise StageCError(
+                StageCErrorCode.CANDIDATE_VIEW_CONFLICT,
+                "candidate_evaluation_id_validation",
+            )
+        return evaluation_id
 
     @field_validator("slate")
     @classmethod
@@ -173,6 +277,35 @@ class CandidateDataManifest(BaseModel):
             code=StageCErrorCode.CANDIDATE_VIEW_CONFLICT,
         )
         return slate
+
+    @model_validator(mode="after")
+    def require_candidate_history_window(self) -> Self:
+        try:
+            expected_complete_end = self.evaluation_start_date - timedelta(days=2)
+        except OverflowError:
+            raise StageCError(
+                StageCErrorCode.CANDIDATE_VIEW_CONFLICT,
+                "candidate_window_validation",
+            ) from None
+        if self.complete_history_label_end_date != expected_complete_end:
+            raise StageCError(
+                StageCErrorCode.CANDIDATE_VIEW_CONFLICT,
+                "candidate_window_validation",
+            )
+        partition_dates = tuple(receipt.dt for receipt in self.history_partitions)
+        if (
+            partition_dates != tuple(sorted(set(partition_dates)))
+            or any(
+                partition_date >= self.evaluation_start_date
+                or partition_date > self.complete_history_label_end_date
+                for partition_date in partition_dates
+            )
+        ):
+            raise StageCError(
+                StageCErrorCode.CANDIDATE_VIEW_CONFLICT,
+                "candidate_history_order_validation",
+            )
+        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,3 +353,12 @@ def _is_posix_relative_path(value: str) -> bool:
         and ".." not in posix_path.parts
         and str(posix_path) == value
     )
+
+
+def _require_fixture_date_window(evaluation_start_date: date) -> None:
+    ordinal = evaluation_start_date.toordinal()
+    if ordinal < date.min.toordinal() + 2 or ordinal > date.max.toordinal() - 1:
+        raise StageCError(
+            StageCErrorCode.FIXTURE_REQUEST_INVALID,
+            "fixture_date_window_validation",
+        )

@@ -1,5 +1,6 @@
 from dataclasses import FrozenInstanceError, fields
-from datetime import date
+from datetime import date, timedelta
+import json
 from pathlib import Path
 
 import pytest
@@ -46,20 +47,24 @@ def _handoff() -> JudgeSnapshotHandoff:
     )
 
 
-def test_local_fixture_request_requires_non_negative_seed_and_is_frozen() -> None:
-    with pytest.raises(TypeError):
-        LocalEvaluationFixtureRequest(Path("judge"), date(2026, 9, 1))
-    with pytest.raises(StageCError) as raised:
-        LocalEvaluationFixtureRequest(Path("judge"), date(2026, 9, 1), -1)
-
-    assert raised.value.code is StageCErrorCode.FIXTURE_REQUEST_INVALID
-    request = LocalEvaluationFixtureRequest(Path("judge"), date(2026, 9, 1), 0)
-    with pytest.raises(FrozenInstanceError):
-        request.fixture_seed = 1
-
-
-def test_fixture_descriptor_has_exact_frozen_json_contract() -> None:
-    descriptor = FixtureDescriptor(
+def _descriptor() -> FixtureDescriptor:
+    evaluation_start_date = date(2026, 9, 1)
+    partitions = tuple(
+        FixturePartitionReceipt(
+            partition_date,
+            (
+                "inputs/youtube_trending_kr/"
+                f"dt={partition_date.isoformat()}/part-0.parquet"
+            ),
+            48,
+            f"{index + 1:x}" * 64,
+        )
+        for index, partition_date in enumerate(
+            evaluation_start_date + timedelta(days=offset)
+            for offset in (-2, -1, 0, 1)
+        )
+    )
+    return FixtureDescriptor(
         contract_version="youtube-ctr-local-fixture-v1",
         input_generator_version="youtube-ctr-input-v1",
         input_writer=_writer(),
@@ -67,8 +72,8 @@ def test_fixture_descriptor_has_exact_frozen_json_contract() -> None:
         generator="rule_based",
         generator_model="fixture-rule-action-log",
         history_start_date=date(2026, 8, 30),
-        evaluation_start_date=date(2026, 9, 1),
-        evaluation_end_date=date(2026, 9, 1),
+        evaluation_start_date=evaluation_start_date,
+        evaluation_end_date=evaluation_start_date,
         slate_id_cutover_date=date(2026, 8, 30),
         candidates_per_user=24,
         video_count_per_partition=48,
@@ -85,15 +90,48 @@ def test_fixture_descriptor_has_exact_frozen_json_contract() -> None:
         validation_user_count=160,
         final_holdout_user_count=40,
         virtual_users=FixtureInputReceipt("inputs/virtual_users.parquet", 200, "e" * 64),
-        youtube_partitions=(
-            FixturePartitionReceipt(
+        youtube_partitions=partitions,
+    )
+
+
+def _candidate_manifest() -> CandidateDataManifest:
+    return CandidateDataManifest(
+        contract_version="candidate-data-view-v1",
+        evaluation_id=EvaluationId("eval_" + "e" * 64),
+        evaluation_start_date=date(2026, 9, 1),
+        complete_history_label_end_date=date(2026, 8, 30),
+        slate=ArtifactReceipt("slate.parquet", 24, "f" * 64),
+        history_partitions=(
+            CandidateHistoryReceipt(
+                date(2026, 8, 29),
+                "history/action_log/dt=2026-08-29/part-0.parquet",
+                100,
+                "a" * 64,
+            ),
+            CandidateHistoryReceipt(
                 date(2026, 8, 30),
-                "inputs/youtube_trending_kr/dt=2026-08-30/part-0.parquet",
-                48,
-                "f" * 64,
+                "history/action_log/dt=2026-08-30/part-0.parquet",
+                100,
+                "b" * 64,
             ),
         ),
     )
+
+
+def test_local_fixture_request_requires_non_negative_seed_and_is_frozen() -> None:
+    with pytest.raises(TypeError):
+        LocalEvaluationFixtureRequest(Path("judge"), date(2026, 9, 1))
+    with pytest.raises(StageCError) as raised:
+        LocalEvaluationFixtureRequest(Path("judge"), date(2026, 9, 1), -1)
+
+    assert raised.value.code is StageCErrorCode.FIXTURE_REQUEST_INVALID
+    request = LocalEvaluationFixtureRequest(Path("judge"), date(2026, 9, 1), 0)
+    with pytest.raises(FrozenInstanceError):
+        request.fixture_seed = 1
+
+
+def test_fixture_descriptor_has_exact_frozen_json_contract() -> None:
+    descriptor = _descriptor()
 
     assert list(FixtureDescriptor.model_fields) == [
         "contract_version",
@@ -145,21 +183,7 @@ def test_candidate_safe_receipts_reject_non_posix_relative_paths(relative_path: 
 
 def test_candidate_contract_has_no_split_or_final_selector() -> None:
     request = CandidateDataViewRequest(_handoff(), Path("candidate"))
-    manifest = CandidateDataManifest(
-        contract_version="candidate-data-view-v1",
-        evaluation_id=EvaluationId("eval_" + "e" * 64),
-        evaluation_start_date=date(2026, 9, 1),
-        complete_history_label_end_date=date(2026, 8, 30),
-        slate=ArtifactReceipt("slate.parquet", 24, "f" * 64),
-        history_partitions=(
-            CandidateHistoryReceipt(
-                date(2026, 8, 30),
-                "history/action_log/dt=2026-08-30/part-0.parquet",
-                100,
-                "a" * 64,
-            ),
-        ),
-    )
+    manifest = _candidate_manifest()
     receipt = CandidateDataViewReceipt(Path("candidate/harness_in"), manifest, "b" * 64, False)
 
     assert [field.name for field in fields(request)] == ["judge", "destination_root"]
@@ -173,6 +197,99 @@ def test_candidate_contract_has_no_split_or_final_selector() -> None:
     payload["split_name"] = "final_holdout"
     with pytest.raises(ValidationError):
         CandidateDataManifest.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "stage"),
+    (
+        (
+            lambda payload: payload.update(
+                evaluation_id="eval_C:/judge/fixture_seed=917"
+            ),
+            "candidate_evaluation_id_validation",
+        ),
+        (
+            lambda payload: payload.update(
+                complete_history_label_end_date="2026-08-31"
+            ),
+            "candidate_window_validation",
+        ),
+        (
+            lambda payload: payload["history_partitions"].reverse(),
+            "candidate_history_order_validation",
+        ),
+        (
+            lambda payload: payload["history_partitions"].append(
+                payload["history_partitions"][0]
+            ),
+            "candidate_history_order_validation",
+        ),
+        (
+            lambda payload: payload["history_partitions"][0].update(
+                dt="2026-09-01",
+                relative_path="history/action_log/dt=2026-09-01/part-0.parquet",
+            ),
+            "candidate_history_order_validation",
+        ),
+        (
+            lambda payload: payload["history_partitions"][0].update(
+                relative_path="history/action_log/dt=2026-08-30/part-0.parquet"
+            ),
+            "candidate_history_path_validation",
+        ),
+        (
+            lambda payload: payload["slate"].update(
+                relative_path="C:/judge/fixture_seed=917"
+            ),
+            "candidate_manifest_validation",
+        ),
+    ),
+)
+def test_candidate_manifest_rejects_noncanonical_or_judge_owned_values(
+    mutation,
+    stage: str,
+) -> None:
+    payload = _candidate_manifest().model_dump(mode="json")
+    mutation(payload)
+
+    with pytest.raises(StageCError) as raised:
+        CandidateDataManifest.model_validate(payload)
+
+    assert raised.value.code is StageCErrorCode.CANDIDATE_VIEW_CONFLICT
+    assert raised.value.stage == stage
+    assert "judge" not in str(raised.value).lower()
+    assert "917" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda payload: payload.update(history_start_date="2026-08-29"),
+        lambda payload: payload.update(slate_id_cutover_date="2026-08-31"),
+        lambda payload: payload.update(evaluation_end_date="2026-09-02"),
+        lambda payload: payload["virtual_users"].update(relative_path="inputs/users.parquet"),
+        lambda payload: payload["virtual_users"].update(rows=199),
+        lambda payload: payload["youtube_partitions"].reverse(),
+        lambda payload: payload["youtube_partitions"].append(
+            payload["youtube_partitions"][0]
+        ),
+        lambda payload: payload["youtube_partitions"][0].update(rows=47),
+        lambda payload: payload["youtube_partitions"][0].update(
+            relative_path="inputs/youtube_trending_kr/dt=2026-08-31/part-0.parquet"
+        ),
+        lambda payload: payload.update(unexpected=True),
+    ),
+)
+def test_fixture_descriptor_json_rejects_semantic_drift_with_typed_error(
+    mutation,
+) -> None:
+    payload = _descriptor().model_dump(mode="json")
+    mutation(payload)
+
+    with pytest.raises(StageCError) as raised:
+        FixtureDescriptor.model_validate_json(json.dumps(payload))
+
+    assert raised.value.code is StageCErrorCode.FIXTURE_REQUEST_INVALID
 
 
 def test_all_stage_c_value_models_are_frozen_slotted_dataclasses() -> None:
