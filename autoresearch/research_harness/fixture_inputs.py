@@ -26,10 +26,13 @@ from autoresearch.research_harness.evaluation_snapshot_models import WriterIdent
 from autoresearch.research_harness.evaluation_split import SPLIT_CONTRACT, user_bucket
 from autoresearch.research_harness.fixture_errors import StageCError, StageCErrorCode
 from autoresearch.research_harness.fixture_models import (
+    FIXTURE_CHANNEL_PUBLISHED_OFFSET_DAYS,
+    FIXTURE_HISTORY_START_OFFSET_DAYS,
     FixtureDescriptor,
     FixtureInputReceipt,
     FixturePartitionReceipt,
     LocalEvaluationFixtureRequest,
+    require_fixture_date_window,
 )
 
 
@@ -119,10 +122,11 @@ FIXTURE_YOUTUBE_SCHEMA_V1: Final = pa.schema(
 def canonical_fixture_dates(evaluation_start_date: date) -> tuple[date, ...]:
     """Return history, evaluation, and scan-tail partition dates in canonical order."""
 
+    require_fixture_date_window(evaluation_start_date)
     try:
         return tuple(
             evaluation_start_date + timedelta(days=offset)
-            for offset in (-2, -1, 0, 1)
+            for offset in (-FIXTURE_HISTORY_START_OFFSET_DAYS, -1, 0, 1)
         )
     except OverflowError:
         raise StageCError(
@@ -350,7 +354,8 @@ def _fixture_video_rows(partition_date: date) -> list[dict[str, object]]:
                 "channel_title": f"Fixture Channel {channel_index:02d}",
                 "channel_description": "결정적 local fixture 채널",
                 "channel_custom_url": f"@fixture-channel-{channel_index:02d}",
-                "channel_published_at": collected_at - timedelta(days=3650),
+                "channel_published_at": collected_at
+                - timedelta(days=FIXTURE_CHANNEL_PUBLISHED_OFFSET_DAYS),
                 "channel_country": "KR",
                 "channel_view_count": 10_000_000 + channel_index,
                 "channel_subscriber_count": 100_000 + channel_index,

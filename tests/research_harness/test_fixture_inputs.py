@@ -45,7 +45,15 @@ def test_fixture_dates_cover_history_evaluation_and_scan_tail() -> None:
     )
 
 
-@pytest.mark.parametrize("evaluation_start_date", (date.min, date.max))
+@pytest.mark.parametrize(
+    "evaluation_start_date",
+    (
+        date.min,
+        date.fromordinal(date.min.toordinal() + 2),
+        date.fromordinal(date.min.toordinal() + 3651),
+        date.max,
+    ),
+)
 def test_fixture_date_overflow_fails_typed_before_writing(
     tmp_path,
     evaluation_start_date: date,

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
-from typing import Annotated, ClassVar, Literal, Self
+from typing import Annotated, ClassVar, Final, Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -37,6 +37,11 @@ from autoresearch.research_harness.fixture_errors import StageCError, StageCErro
 
 _DATACLASS_CONFIG: ConfigDict = ConfigDict(extra="forbid")
 _EVALUATION_ID_PATTERN = re.compile(r"eval_[0-9a-f]{64}\Z")
+FIXTURE_HISTORY_START_OFFSET_DAYS: Final = 2
+FIXTURE_CHANNEL_PUBLISHED_OFFSET_DAYS: Final = 3650
+FIXTURE_MAX_EVALUATION_PAST_OFFSET_DAYS: Final = (
+    FIXTURE_HISTORY_START_OFFSET_DAYS + FIXTURE_CHANNEL_PUBLISHED_OFFSET_DAYS
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +63,7 @@ class LocalEvaluationFixtureRequest:
                 StageCErrorCode.FIXTURE_REQUEST_INVALID,
                 "fixture_request_validation",
             )
-        _require_fixture_date_window(self.evaluation_start_date)
+        require_fixture_date_window(self.evaluation_start_date)
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,11 +123,13 @@ class FixtureDescriptor(BaseModel):
 
     @model_validator(mode="after")
     def require_canonical_fixture_semantics(self) -> Self:
-        _require_fixture_date_window(self.evaluation_start_date)
-        history_start_date = self.evaluation_start_date - timedelta(days=2)
+        require_fixture_date_window(self.evaluation_start_date)
+        history_start_date = self.evaluation_start_date - timedelta(
+            days=FIXTURE_HISTORY_START_OFFSET_DAYS
+        )
         expected_dates = tuple(
             self.evaluation_start_date + timedelta(days=offset)
-            for offset in (-2, -1, 0, 1)
+            for offset in (-FIXTURE_HISTORY_START_OFFSET_DAYS, -1, 0, 1)
         )
         if (
             self.history_start_date != history_start_date
@@ -354,9 +361,13 @@ def _is_posix_relative_path(value: str) -> bool:
     )
 
 
-def _require_fixture_date_window(evaluation_start_date: date) -> None:
+def require_fixture_date_window(evaluation_start_date: date) -> None:
     ordinal = evaluation_start_date.toordinal()
-    if ordinal < date.min.toordinal() + 2 or ordinal > date.max.toordinal() - 1:
+    if (
+        ordinal
+        < date.min.toordinal() + FIXTURE_MAX_EVALUATION_PAST_OFFSET_DAYS
+        or ordinal > date.max.toordinal() - 1
+    ):
         raise StageCError(
             StageCErrorCode.FIXTURE_REQUEST_INVALID,
             "fixture_date_window_validation",

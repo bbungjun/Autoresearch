@@ -848,8 +848,9 @@ Stage C 전체 orchestration 전에 descriptor와 candidate-safe manifest의 타
 관계, partition 순서·중복, `evaluation_id` 형식과 경로가 의미적으로 잘못되어도 JSON 검증을
 통과할 수 있었습니다. 또한 fixture 입력이 production의 private Arrow schema 객체를 직접
 따르면 production schema 변경이 `youtube-ctr-input-v1`의 bytes와 descriptor identity를 같은
-version 아래에서 조용히 바꿀 수 있었습니다. `date.min`·`date.max` 부근 요청은 파일 생성
-도중 raw `OverflowError`를 낼 위험도 있었습니다.
+version 아래에서 조용히 바꿀 수 있었습니다. 특히 `T=date.min+2`는 T-2 날짜창 검사를
+통과한 뒤 채널 발행일 3650일 offset에서 raw `OverflowError`를 내고 일부 입력을 남길 수
+있었으며, `date.max` 부근 요청도 날짜 산술 위험이 있었습니다.
 
 ### Solution
 
@@ -857,7 +858,8 @@ version 아래에서 조용히 바꿀 수 있었습니다. `date.min`·`date.max
 T-2..T+1 partition 순서·경로·행 수와 200-user receipt 검증을 추가했습니다. Candidate
 manifest는 Stage B의 `eval_<64 lowercase hex>` ID, `slate.parquet`, dt에서 유도한 history
 경로, 오름차순·unique 과거 partition과 `complete_history_label_end_date=T-2`만 허용합니다.
-Fixture 요청은 날짜 산술 가능 범위를 파일 생성 전에 검사합니다. 입력 generator는
+Fixture 요청과 입력 generator는 T-2 history partition의 채널 발행일 3650일 offset까지
+합친 최대 3652일 과거 범위를 공유해 파일 생성 전에 검사합니다. 입력 generator는
 production consumer가 읽을 수 있는 field projection을 `youtube-ctr-input-v1` 전용 Arrow
 schema로 별도 고정하고, schema fingerprint와 대표 Parquet SHA를 golden test로 봉인했습니다.
 
@@ -866,9 +868,9 @@ schema로 별도 고정하고, schema fingerprint와 대표 Parquet SHA를 golde
 같은 seed 917·평가일 2026-09-01의 두 staging root에서 virtual-user 입력과 네 YouTube
 partition 및 descriptor bytes가 일치함을 테스트로 확인했습니다. Focused model/input
 테스트 37개가 통과했고, production schema 객체를 빈 schema로 바꾼 테스트에서도 v1 대표
-virtual-user/YouTube Parquet SHA가 유지됐습니다. 날짜 최솟값·최댓값 요청은 fixture 경로를
-만들기 전에 `fixture_request_invalid`로 실패합니다. 이어 실행한 전체
-`tests/research_harness`는 195개 통과·1개 환경 의존 skip이었습니다. 이 foundation은 일일 producer 실행,
+virtual-user/YouTube Parquet SHA가 유지됐습니다. `date.min`부터 `date.min+3651`까지와
+`date.max` 요청은 fixture 경로를 만들기 전에 `fixture_request_invalid`로 실패합니다. 이어 실행한 전체
+`tests/research_harness`는 198개 통과·1개 환경 의존 skip이었습니다. 이 foundation은 일일 producer 실행,
 action log·snapshot 생성, write-once fixture 게시, source adapter, Judge handoff 재검증과
 candidate view materialization을 아직 구현하지 않았으므로 Stage C 체크리스트는 완료로
 표시하지 않습니다.
