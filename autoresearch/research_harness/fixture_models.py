@@ -297,7 +297,6 @@ class CandidateDataManifest(BaseModel):
             partition_dates != tuple(sorted(set(partition_dates)))
             or any(
                 partition_date >= self.evaluation_start_date
-                or partition_date > self.complete_history_label_end_date
                 for partition_date in partition_dates
             )
         ):

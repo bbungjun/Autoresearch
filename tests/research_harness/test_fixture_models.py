@@ -103,18 +103,47 @@ def _candidate_manifest() -> CandidateDataManifest:
         slate=ArtifactReceipt("slate.parquet", 24, "f" * 64),
         history_partitions=(
             CandidateHistoryReceipt(
-                date(2026, 8, 29),
-                "history/action_log/dt=2026-08-29/part-0.parquet",
+                date(2026, 8, 30),
+                "history/action_log/dt=2026-08-30/part-0.parquet",
                 100,
                 "a" * 64,
             ),
             CandidateHistoryReceipt(
-                date(2026, 8, 30),
-                "history/action_log/dt=2026-08-30/part-0.parquet",
+                date(2026, 8, 31),
+                "history/action_log/dt=2026-08-31/part-0.parquet",
                 100,
                 "b" * 64,
             ),
         ),
+    )
+
+
+def test_candidate_manifest_accepts_canonical_t_minus_2_and_t_minus_1_history() -> None:
+    manifest = CandidateDataManifest(
+        contract_version="candidate-data-view-v1",
+        evaluation_id=EvaluationId("eval_" + "e" * 64),
+        evaluation_start_date=date(2026, 9, 1),
+        complete_history_label_end_date=date(2026, 8, 30),
+        slate=ArtifactReceipt("slate.parquet", 24, "f" * 64),
+        history_partitions=(
+            CandidateHistoryReceipt(
+                date(2026, 8, 30),
+                "history/action_log/dt=2026-08-30/part-0.parquet",
+                100,
+                "a" * 64,
+            ),
+            CandidateHistoryReceipt(
+                date(2026, 8, 31),
+                "history/action_log/dt=2026-08-31/part-0.parquet",
+                100,
+                "b" * 64,
+            ),
+        ),
+    )
+
+    assert tuple(receipt.dt for receipt in manifest.history_partitions) == (
+        date(2026, 8, 30),
+        date(2026, 8, 31),
     )
 
 
@@ -233,7 +262,7 @@ def test_candidate_contract_has_no_split_or_final_selector() -> None:
         ),
         (
             lambda payload: payload["history_partitions"][0].update(
-                relative_path="history/action_log/dt=2026-08-30/part-0.parquet"
+                relative_path="history/action_log/dt=2026-08-31/part-0.parquet"
             ),
             "candidate_history_path_validation",
         ),
