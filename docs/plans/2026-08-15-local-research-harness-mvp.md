@@ -405,11 +405,11 @@ action log parquet에서 평가 slate를 조립하고 정답을 분리 봉인한
 Stage B Task 0은 §10~§12의 exact `EvaluationIdPayload`, canonical JSON bytes, writer
 identity, typed nested manifest와 fingerprint exclusion을 잠근다.
 
-### Stage B 및 Stage C Judge fixture 경계 구현, CandidateDataView·최종 실증 대기
+### Stage B 및 Stage C data-only 경계 구현, 독립 최종 실증 대기
 
 이 계획에서 Stage A의 producer 계약과 Stage B snapshot builder 구현은 완료되었다. Task 1
 전체와 후속 Research Harness MVP를 완료 처리하지 않습니다. Stage C의 model/input, production
-daily fixture builder, canonical source adapter와 Judge handoff는 구현됐고 CandidateDataView와
+daily fixture builder, canonical source adapter, Judge handoff와 CandidateDataView는 구현됐고
 독립 two-root 최종 실증은 대기 상태입니다.
 
 - [x] `slate.py` 작성 (Stage B builder/public facade 범위). 입력은 action log parquet 경로(로컬/GCS), 평가 **출력일** 범위
@@ -484,7 +484,7 @@ Task 1 전체와 Research Harness MVP는 완료 처리하지 않는다.
 > **2026-09-01 현재 상태:** exact typed model/error와 canonical 입력, production daily 4-run
 > fixture builder, canonical `fixture://` source adapter, Stage B snapshot build, P0-2 coverage,
 > outer integrity marker 기반 write-once 게시와 Judge handoff 재검증까지 구현했습니다.
-> CandidateDataView materialization과 독립 두 run의 최종 실증은 남아 있으므로 이 Task와 Stage C
+> CandidateDataView materialization은 구현됐고 독립 두 run의 최종 실증은 남아 있으므로 이 Task와 Stage C
 > 전체 체크박스는 완료 처리하지 않습니다. 문제·해결·검증 근거는 연결 spec의 두 Stage C
 > Portfolio Record에 기록합니다.
 
@@ -503,12 +503,12 @@ Task 1 전체와 Research Harness MVP는 완료 처리하지 않는다.
       40명을 결정적으로 만들고 양 split의 모든 evaluation slate가 24행·click-positive
       (`click_positive_slate_count == slate_count`, ratio `1.0`)이며 clicked/non-clicked row를
       함께 만족하게 한다
-- [ ] `CandidateDataView` module의
+- [x] `CandidateDataView` module의
       `materialize_candidate_data_view(CandidateDataViewRequest, *, source: ActionLogSource)`를
       구현한다. source root·partition URI를 Judge manifest receipt와 먼저 대조하며 exact
       output은 `harness_in/candidate-view.json`, validation `slate.parquet`, manifest가 허용한
       `dt < T` history의 물리적 byte-copy뿐이다. fixture는 같은 내부 adapter를 주입한다
-- [ ] candidate view에서 labels/final, 전체 snapshot manifest·root·fingerprint, 평가 source
+- [x] candidate view에서 labels/final, 전체 snapshot manifest·root·fingerprint, 평가 source
       URI, fixture descriptor·seed·input과 Judge path를 filename·내용·receipt 모두에서
       배제한다. symlink·junction·hardlink를 거부하고 identical complete target만 reuse한다
 - [x] `CandidateDataViewRequest`에 split/final 선택 parameter를 두지 않는다. final slate는

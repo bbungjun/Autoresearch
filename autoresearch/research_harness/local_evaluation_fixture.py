@@ -105,9 +105,14 @@ class FixtureActionLogSource(ActionLogSource):
     def partition_uri(self, dt: date) -> str:
         return f"{self._opaque_root}/dt={dt.isoformat()}/part-0.parquet"
 
+    def _physical_partition_path(self, dt: date) -> Path:
+        """Return the trusted-process-only local path for alias validation."""
+
+        return self._physical_root / f"dt={dt.isoformat()}" / "part-0.parquet"
+
     def open_partition(self, dt: date) -> AbstractContextManager[pa.NativeFile]:
         return pa.OSFile(
-            str(self._physical_root / f"dt={dt.isoformat()}" / "part-0.parquet"),
+            str(self._physical_partition_path(dt)),
             "rb",
         )
 

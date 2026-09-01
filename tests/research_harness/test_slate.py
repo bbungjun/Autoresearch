@@ -148,6 +148,7 @@ def test_public_surface_exports_only_snapshot_entrypoint_contract() -> None:
         "StageCErrorCode",
         "build_evaluation_snapshot",
         "build_local_evaluation_fixture",
+        "materialize_candidate_data_view",
         "canonical_fixture_dates",
         "descriptor_sha256",
         "select_fixture_user_ids",

@@ -19,6 +19,9 @@ from autoresearch.research_harness.evaluation_snapshot_models import (
     EvaluationSnapshotRequest,
 )
 from autoresearch.research_harness.evaluation_source import ActionLogSource
+from autoresearch.research_harness.candidate_data_view import (
+    materialize_candidate_data_view,
+)
 from autoresearch.research_harness.fixture_errors import StageCError, StageCErrorCode
 from autoresearch.research_harness.fixture_inputs import (
     canonical_fixture_dates,
@@ -63,6 +66,7 @@ __all__ = [
     "StageCErrorCode",
     "build_evaluation_snapshot",
     "build_local_evaluation_fixture",
+    "materialize_candidate_data_view",
     "canonical_fixture_dates",
     "descriptor_sha256",
     "select_fixture_user_ids",

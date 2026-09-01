@@ -1,6 +1,6 @@
 # Research Harness P0-1 — 재현 가능한 평가 데이터와 split
 
-> 작성: 2026-08-31 | 상태: Stage A·B, Stage C fixture builder·adapter·Judge handoff 구현; CandidateDataView·독립 two-root 최종 실증 대기 | 추적: #17, #22
+> 작성: 2026-08-31 | 상태: Stage A·B, Stage C fixture·Judge handoff·CandidateDataView 구현; 독립 two-root 최종 실증 대기 | 추적: #17, #22
 >
 > 상위 계약:
 > `docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md`
@@ -8,13 +8,13 @@
 > 구현 순서:
 > `docs/plans/2026-08-15-local-research-harness-mvp.md` Task 1-0, Task 1
 
-## Stage B 및 Stage C Judge fixture 경계 구현, CandidateDataView·최종 실증 대기
+## Stage B 및 Stage C data-only 경계 구현, 독립 최종 실증 대기
 
 Stage B는 원천 파티션 검증, canonical slate 검증, 다일 click attribution, 고정 user
 split·구조 coverage, label 분리 artifact·typed manifest, local write-once publisher와 공개
 snapshot builder까지 구현했습니다. Stage C는 typed model과 canonical input, production daily
-4-run fixture builder, canonical source adapter, write-once 게시와 P0-2용 Judge snapshot handoff
-검증까지 구현했습니다. Data-only CandidateDataView와 독립 two-root 최종 실증은 남아 있습니다.
+4-run fixture builder, canonical source adapter, write-once 게시, P0-2용 Judge snapshot handoff와
+validation 전용 data-only CandidateDataView까지 구현했습니다. 독립 two-root 최종 실증은 남아 있습니다.
 실제 disposable worktree,
 subprocess argv·환경과 Sealed Judge의 지표·판정은 각각 후속 Task 3과 P0-2 책임입니다.
 
@@ -823,7 +823,7 @@ final artifact SHA-256을 보존했다. 재현 가능한 수치와 cleanup recei
 `.omo/evidence/research-harness-stage-a/task-6.json`에 있다.
 
 이는 2026-08-31 Stage A producer 완료 시점의 기록이다. 이후 Stage B snapshot builder와
-Stage C fixture·Judge handoff가 구현됐으며, CandidateDataView와 독립 two-root 최종 실증은
+Stage C fixture·Judge handoff·CandidateDataView가 구현됐으며, 독립 two-root 최종 실증은
 완료로 표시하지 않는다.
 
 ### Stage B — snapshot builder (구현 완료)
@@ -839,10 +839,10 @@ Stage C fixture·Judge handoff가 구현됐으며, CandidateDataView와 독립 t
 
 1. [x] versioned fixture descriptor와 Judge 소유 write-once state 구현
 2. [x] P0-2-ready rule-based 일일 파티션 fixture 생성
-3. [ ] data-only `CandidateDataView`와 safe manifest 구현
+3. [x] data-only `CandidateDataView`와 safe manifest 구현
 4. [x] 검증된 `JudgeSnapshotHandoff` 구현
 5. [ ] 독립 2-run 재생성 및 별도 reuse 경로 실증
-6. [ ] candidate view에 label·final·source URI·fixture seed·Judge path가 없는지 확인
+6. [x] candidate view에 label·final·source URI·fixture seed·Judge path가 없는지 확인
 
 ## Portfolio Record — Stage C contract review
 
@@ -905,8 +905,8 @@ virtual-user/YouTube Parquet SHA가 유지됐습니다. `date.min`부터 `date.m
 `date.max` 요청은 fixture 경로를 만들기 전에 `fixture_request_invalid`로 실패합니다. 이어 실행한 전체
 `tests/research_harness`는 198개 통과·1개 환경 의존 skip이었습니다. 이는 input foundation
 완료 당시의 범위 기록입니다. 이후 일일 producer, action log·snapshot 생성, write-once fixture
-게시, source adapter와 Judge handoff 재검증이 구현됐고 candidate view materialization은
-여전히 미완료이므로 Stage C 전체는 완료로 표시하지 않습니다.
+게시, source adapter, Judge handoff 재검증과 candidate view materialization까지 구현됐지만
+독립 two-root 최종 프로토콜이 남아 있어 Stage C 전체는 완료로 표시하지 않습니다.
 
 ## Portfolio Record — Stage C fixture builder and Judge handoff
 
@@ -937,17 +937,48 @@ digest·row count, 입력과 action-log receipt를 다시 검증하며 상이하
 holdout 40개 slate 모두 24행·click-positive 조건을 충족했습니다. 같은 seed 917·평가일의
 서로 다른 두 Judge root를 사용하는 자동화 테스트는 같은 descriptor, source digest, event ID,
 evaluation ID와 snapshot fingerprint를 만들었고 seed 918은 다른 source digest를 만들었습니다.
-서로 다른 Judge root의 독립 최종 비교는 CandidateDataView와 함께 남아 있습니다. 같은 root에서
+서로 다른 Judge root의 독립 최종 비교는 후속 작업으로 남아 있습니다. 같은 root에서
 동시에 시작한 실제 두 process는 descriptor lock 아래 한 번만 게시되고 다른 한 번은 검증된
 `reused=true`가 됨을 확인했습니다. Focused 테스트는 완성
 target reuse, partial/tamper conflict, handoff marker·schema·fingerprint·manifest bytes·artifact
 digest/row-count·extra tree와 special-entry 변조, 일부만 click-positive인 coverage 실패의 typed
 code를 확인합니다. Staging cleanup 실패는 원문 path나 원인 문자열 없이 warning을 남기고 기존
-성공/실패를 덮지 않습니다. CandidateDataView와 실제
+성공/실패를 덮지 않습니다. CandidateDataView는 후속 기록과 같이 구현했지만 실제
 workspace/subprocess 환경은 생성하지 않았으며 Stage C 전체 완료는 주장하지 않습니다.
 최신 검증은 fixture focused 31개 통과·Windows 전용 제약 2개 skip,
 전체 `tests/research_harness` 229개 통과·3개 skip, `tests/action_log_generation` 254개 통과였고
 changed-file Ruff와 `git diff --check`도 통과했습니다.
+
+## Portfolio Record — Stage C validation CandidateDataView
+
+### Problem
+
+검증용 candidate가 Stage B snapshot이나 fixture root를 직접 받으면 labels, final holdout,
+source URI와 seed를 파일명·manifest·receipt를 통해 관찰할 수 있었습니다. 단순 파일 복사는
+Judge handoff 또는 source partition의 게시 후 변조, symlink·junction·hardlink alias와 부분
+target 재사용을 구분하지 못해 평가 격리를 보장할 수 없었습니다.
+
+### Solution
+
+`materialize_candidate_data_view(request, *, source)`는 시작 전에 Judge `_SUCCESS`, canonical
+typed manifest와 SHA/fingerprint, validation/final ID, 네 artifact digest·row count를 공통
+handoff validator로 다시 확인합니다. 주입 source의 opaque root와 허용된 `dt<T` receipt URI를
+open 전에 대조하고 실제 Parquet bytes의 SHA-256·행 수를 검증합니다. Candidate에는 validation
+slate와 history 두 파티션을 새 bytes로만 복사하고 최소 `candidate-data-view-v1` JSON만 남깁니다.
+sibling staging의 exact tree를 검증한 뒤 atomic rename하며, 완전히 동일한 single-link target만
+`reused=true`로 허용합니다. final 선택과 consumption registry는 이 interface에 추가하지
+않았습니다.
+
+### Result
+
+실제 production fixture를 사용하는 focused 테스트에서 validation slate와 T-2/T-1 history의
+byte identity·행 수, canonical manifest receipt, 허용 날짜만 open하는 동작을 확인했습니다.
+root/URI mismatch는 source open 전에 실패하고 bad bytes, Judge marker·manifest·네 artifact
+변조, destination/source reparse와 hardlink, partial·extra·tampered target은 sanitized typed
+error로 거부됩니다. Receipt와 게시 tree의 파일명·전체 bytes를 탐색해 labels/final ID·path,
+snapshot fingerprint, source URI, fixture seed와 Judge path가 없음을 확인했습니다. 동일 완성
+target만 `reused=true`였고 focused 테스트 24개가 통과했습니다. 독립 두 Judge root의 최종
+프로토콜과 실제 worktree/subprocess/final consumption registry는 여전히 후속 범위입니다.
 
 ## Portfolio Record — Stage B snapshot builder
 
