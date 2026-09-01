@@ -29,7 +29,11 @@ from autoresearch.research_harness.fixture_models import (
     FixtureDescriptor,
     LocalEvaluationFixtureReceipt,
 )
-from autoresearch.research_harness.local_evaluation_fixture import _io_path
+from autoresearch.research_harness.local_evaluation_fixture import (
+    _fixture_is_valid,
+    _io_path,
+    _receipt_from_complete_fixture,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,8 +59,8 @@ def _verify_independent_fixture_reproduction(
     try:
         if first.reused or second.reused:
             raise ValueError
-        first_root = first.fixture_root.resolve(strict=True)
-        second_root = second.fixture_root.resolve(strict=True)
+        first_root = _validate_complete_receipt(first)
+        second_root = _validate_complete_receipt(second)
         if (
             not first_root.is_absolute()
             or not second_root.is_absolute()
@@ -78,6 +82,30 @@ def _verify_independent_fixture_reproduction(
             StageCErrorCode.FIXTURE_REPRODUCIBILITY_MISMATCH,
             "fixture_reproducibility_validation",
         ) from None
+
+
+def _validate_complete_receipt(receipt: LocalEvaluationFixtureReceipt) -> Path:
+    """Bind a claimed receipt to the complete fixture tree at its exact root."""
+
+    root = receipt.fixture_root.resolve(strict=True)
+    descriptor_path = _io_path(root / "fixture.json")
+    descriptor_bytes = descriptor_path.read_bytes()
+    descriptor = FixtureDescriptor.model_validate_json(descriptor_bytes)
+    if (
+        receipt.fixture_root != root
+        or receipt.descriptor_path != root / "fixture.json"
+        or sha256(descriptor_bytes).hexdigest() != receipt.descriptor_sha256
+        or not _fixture_is_valid(root, descriptor, receipt.descriptor_sha256)
+    ):
+        raise ValueError
+    reconstructed = _receipt_from_complete_fixture(
+        root,
+        receipt.descriptor_sha256,
+        reused=False,
+    )
+    if reconstructed != receipt:
+        raise ValueError
+    return root
 
 
 def _collect_evidence(
@@ -186,5 +214,5 @@ def _slate_projection_sha256(snapshot_root: Path, relative_path: str) -> str:
     ).column("slate_id").to_pylist()
     if any(not isinstance(value, str) or not value for value in slate_ids):
         raise ValueError
-    projection = tuple(sorted(set(slate_ids)))
+    projection = tuple(slate_ids)
     return sha256(canonical_json_bytes(projection)).hexdigest()

@@ -1016,13 +1016,18 @@ artifact는 같아도 실행 시각인 manifest `created_at` 때문에 manifest 
 
 외부 seam은 `build_local_evaluation_fixture()`와
 `materialize_candidate_data_view()` 두 개로 유지했습니다. 내부 typed verifier가 두 receipt의
-`reused=false`와 서로 다른 physical root를 요구하고, descriptor 및 virtual-user·네 YouTube
+`reused=false`와 서로 다른 physical root를 요구합니다. 각 receipt는 먼저 해당 exact root의
+complete tree, outer `_SUCCESS`, descriptor, canonical snapshot path와 실제 reconstructed
+receipt에 다시 결속한 뒤 비교하므로 다른 root의 snapshot/path를 가리키는 receipt spoof를
+거부합니다. verifier는 descriptor 및 virtual-user·네 YouTube
 input receipt, 날짜순 action-log SHA·행 수·canonical URI, validation/final slate ID projection,
 두 evaluation ID, 네 snapshot artifact SHA·행 수, manifest SHA와 fingerprint를 한곳에서
-비교합니다. 어떤 parse·I/O·비교 실패도 원문 root·user·seed 없이
+비교합니다. Slate projection은 Parquet에 저장된 행 순서와 중복을 보존한 전체 `slate_id`
+sequence의 canonical SHA입니다. 어떤 parse·I/O·비교 실패도 원문 root·user·seed 없이
 `fixture_reproducibility_mismatch`로 정제합니다. Stage C는 snapshot 조립의 private clock seam에
 평가일 00:00 UTC를 넣어 manifest까지 결정적으로 만들되 Stage B 공개 facade signature는
-바꾸지 않았습니다. CandidateDataView는 각 Judge handoff에서 별도 destination으로 최초
+바꾸지 않았고, 공개 builder는 호출 전후 실제 UTC window 안의 `created_at`을 유지합니다.
+CandidateDataView는 각 Judge handoff에서 별도 destination으로 최초
 materialize하고, 동일 destination 재호출 reuse는 별도 protocol로 유지했습니다.
 
 ### Result
@@ -1040,9 +1045,10 @@ root를 production daily부터 snapshot까지 각각 생성하고 두 fixture와
 source URI, fixture seed, virtual-user input과 두 Judge path가 없음을 확인했습니다. 이어 같은
 fixture target과 같은 candidate destination을 완전 재검증해 각각 `reused=true`를 별도로
 확인했습니다. Immutable receipt의 controlled descriptor difference는 exact typed mismatch를
-냈고 원 fixture는 변경하지 않았습니다. 새 protocol focused 3개는 10.14초에 통과했고,
-최종 전체 `tests/research_harness`는 264개 통과·Windows/POSIX 환경 의존 3개 skip,
-`tests/action_log_generation`은 254개 통과(기존 의존성 warning 2개)였습니다. 전체
+냈고 원 fixture는 변경하지 않았습니다. Cross-root snapshot redirect와 fixture/descriptor path
+spoof도 같은 typed mismatch였으며, 서로 다른 순서·중복의 pure slate projection hash가 다름을
+확인했습니다. 최종 전체 `tests/research_harness`는 270개 통과·Windows/POSIX 환경 의존 3개
+skip(34.64초), `tests/action_log_generation`은 254개 통과·기존 의존성 warning 2개(9.23초)였습니다. 전체
 `autoresearch tests` Ruff와 `git diff --check`도 통과했습니다.
 
 이 완료는 같은 UID의 hostile actor가 descriptor·artifact·manifest·outer marker를 모두

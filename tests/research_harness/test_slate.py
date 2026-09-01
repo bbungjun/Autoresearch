@@ -13,6 +13,7 @@ from autoresearch.action_log_generation.slate_identity import (
     generate_slate_id,
 )
 from autoresearch.research_harness.evaluation_snapshot_models import (
+    EvaluationSnapshotManifest,
     EvaluationSnapshotReceipt,
     EvaluationSnapshotRequest,
 )
@@ -195,4 +196,21 @@ def test_build_evaluation_snapshot_publishes_real_local_parquet(tmp_path: Path) 
     assert (receipt.target_path / "manifest.json").is_file()
     assert (receipt.target_path / "_SUCCESS").read_text(encoding="utf-8") == (
         f"{receipt.snapshot_fingerprint}\n"
+    )
+
+
+def test_public_builder_manifest_uses_actual_utc_call_time(tmp_path: Path) -> None:
+    request = _snapshot_request(tmp_path)
+    before = datetime.now(UTC)
+
+    receipt = research_harness.build_evaluation_snapshot(request)
+    after = datetime.now(UTC)
+    manifest_bytes = (receipt.target_path / "manifest.json").read_bytes()
+    manifest = EvaluationSnapshotManifest.model_validate_json(manifest_bytes)
+
+    assert manifest.created_at.tzinfo is not None
+    assert manifest.created_at.utcoffset() == timedelta(0)
+    assert before <= manifest.created_at <= after
+    assert f'"created_at":"{manifest.created_at:%Y-%m-%dT%H:%M:%S.%fZ}"' in (
+        manifest_bytes.decode("utf-8")
     )

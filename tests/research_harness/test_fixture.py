@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import replace
 from hashlib import sha256
@@ -41,6 +41,7 @@ from autoresearch.research_harness.local_evaluation_fixture import (
     _validated_judge_handoff,
 )
 from autoresearch.research_harness.fixture_reproducibility import (
+    _slate_projection_sha256,
     _verify_independent_fixture_reproduction,
 )
 
@@ -355,6 +356,62 @@ def test_reproducibility_verifier_reports_sanitized_typed_mismatch(
     assert str(second.fixture_root) not in str(caught.value)
     assert "917" not in str(caught.value)
     assert "user" not in str(caught.value).lower()
+
+
+def test_reproducibility_verifier_rejects_cross_root_snapshot_redirect(
+    independent_fixture_pair,
+) -> None:
+    first, second = independent_fixture_pair
+    redirected = replace(
+        second,
+        judge=replace(second.judge, snapshot_root=first.judge.snapshot_root),
+    )
+
+    with pytest.raises(StageCError) as caught:
+        _verify_independent_fixture_reproduction(first, redirected)
+
+    assert caught.value.code == StageCErrorCode.FIXTURE_REPRODUCIBILITY_MISMATCH
+    assert str(first.fixture_root) not in str(caught.value)
+    assert str(second.fixture_root) not in str(caught.value)
+
+
+@pytest.mark.parametrize("spoofed_field", ("fixture_root", "descriptor_path"))
+def test_reproducibility_verifier_rejects_receipt_path_spoof(
+    independent_fixture_pair,
+    spoofed_field: str,
+) -> None:
+    first, second = independent_fixture_pair
+    spoofed = replace(second, **{spoofed_field: getattr(first, spoofed_field)})
+
+    with pytest.raises(StageCError) as caught:
+        _verify_independent_fixture_reproduction(first, spoofed)
+
+    assert caught.value.code == StageCErrorCode.FIXTURE_REPRODUCIBILITY_MISMATCH
+
+
+def test_fixture_snapshot_clock_is_deterministic(independent_fixture_pair) -> None:
+    first, second = independent_fixture_pair
+    manifests = tuple(
+        EvaluationSnapshotManifest.model_validate_json(
+            _long_path(receipt.judge.snapshot_root / "manifest.json").read_bytes()
+        )
+        for receipt in (first, second)
+    )
+
+    assert manifests[0].created_at == datetime(2026, 9, 1, tzinfo=UTC)
+    assert manifests[1].created_at == manifests[0].created_at
+
+
+def test_slate_projection_preserves_stored_order_and_duplicates(tmp_path: Path) -> None:
+    first = tmp_path / "first.parquet"
+    second = tmp_path / "second.parquet"
+    pq.write_table(pa.table({"slate_id": ["a", "b"]}), first)
+    pq.write_table(pa.table({"slate_id": ["b", "a", "a"]}), second)
+
+    assert _slate_projection_sha256(tmp_path, first.name) != _slate_projection_sha256(
+        tmp_path,
+        second.name,
+    )
 
 
 def test_missing_success_marker_is_partial_target_conflict(built_fixture) -> None:
