@@ -405,11 +405,12 @@ action log parquet에서 평가 slate를 조립하고 정답을 분리 봉인한
 Stage B Task 0은 §10~§12의 exact `EvaluationIdPayload`, canonical JSON bytes, writer
 identity, typed nested manifest와 fingerprint exclusion을 잠근다.
 
-### Stage B 완료, Stage C 입력 foundation 구현·orchestration 대기
+### Stage B 및 Stage C Judge fixture 경계 구현, CandidateDataView·최종 실증 대기
 
 이 계획에서 Stage A의 producer 계약과 Stage B snapshot builder 구현은 완료되었다. Task 1
-전체와 후속 Research Harness MVP를 완료 처리하지 않으며, Stage C 입력 foundation 이후의
-fixture·Judge handoff orchestration은 구현 대기 상태다.
+전체와 후속 Research Harness MVP를 완료 처리하지 않습니다. Stage C의 model/input, production
+daily fixture builder, canonical source adapter와 Judge handoff는 구현됐고 CandidateDataView와
+독립 two-root 최종 실증은 대기 상태입니다.
 
 - [x] `slate.py` 작성 (Stage B builder/public facade 범위). 입력은 action log parquet 경로(로컬/GCS), 평가 **출력일** 범위
       `[T, T_end]`, 필수 `slate_id_cutover_date`. `T`는 첫 출력일이고
@@ -419,7 +420,7 @@ fixture·Judge handoff orchestration은 구현 대기 상태다.
       optional `original_rank`(원천 `rank`), optional `candidate_source`(원천 `exposure_source`)
 - [x] 파티션 선택을 통과한 `dt >= slate_id_cutover_date` 행에서 `slate_id`가 null이면
       **오류로 거부**한다. 조용히 건너뛰거나 추론으로 채우지 않는다 (D6)
-- [ ] 개발·검증용 입력은 `RuleBasedActionLogGenerator`로 로컬 생성한다 (D7 — LLM·API 키
+- [x] 개발·검증용 입력은 `RuleBasedActionLogGenerator`로 로컬 생성한다 (D7 — LLM·API 키
       불필요). 평가 구간을 생성한 입력과 seed는 Judge 소유 경로에만 두고 Stage C
       `CandidateDataView`에 넣지 않는다. 실제 workspace·argv·환경 검증은 Task 3이 소유한다
 - [x] click과 귀속 후보 impression은 **`dt BETWEEN T AND T_end + 1`**로 스캔하고,
@@ -463,10 +464,10 @@ fixture·Judge handoff orchestration은 구현 대기 상태다.
       candidate의 완전 라벨로 취급하지 않음, 동일 입력 → 동일 `evaluation_id`,
       write-once 위반 시 실패
 
-Stage C fixture·Judge handoff orchestration은 구현 대기 상태다. typed contract와 canonical
-입력 foundation은 구현했지만 `RuleBasedActionLogGenerator` 일일 실행,
-fixture seed custody, data-only candidate view와 Judge handoff는 위 Stage B 체크의 완료 범위에
-포함하지 않는다. 실제 candidate worktree·argv·환경 주입 검사는 Task 3 책임이다.
+Stage C typed contract·canonical 입력, `RuleBasedActionLogGenerator` production daily 실행,
+fixture seed custody, canonical adapter와 Judge handoff는 구현됐습니다. Data-only candidate view와
+독립 two-root 최종 실증은 위 Stage B 체크의 완료 범위에 포함하지 않습니다. 실제 candidate
+worktree·argv·환경 주입 검사는 Task 3 책임입니다.
 
 Task 1 전체와 Research Harness MVP는 완료 처리하지 않는다.
 
@@ -487,18 +488,18 @@ Task 1 전체와 Research Harness MVP는 완료 처리하지 않는다.
 > 전체 체크박스는 완료 처리하지 않습니다. 문제·해결·검증 근거는 연결 spec의 두 Stage C
 > Portfolio Record에 기록합니다.
 
-- [ ] `LocalEvaluationFixture` module의 작은 interface
+- [x] `LocalEvaluationFixture` module의 작은 interface
       `build_local_evaluation_fixture(LocalEvaluationFixtureRequest)`를 구현한다. 필수
       `judge_state_root`, `evaluation_start_date`, default 없는 `fixture_seed`만 받고, 내부에서
       canonical input 생성·4개 일일 producer 실행·Stage B snapshot build를 완주한다
-- [ ] frozen/extra-forbid `FixtureDescriptor`와 exact receipt를 구현하고, descriptor hash의
+- [x] frozen/extra-forbid `FixtureDescriptor`와 exact receipt를 구현하고, descriptor hash의
       Judge-owned root에 input·action log·snapshot을 write-once 게시한다. seed와 input은 이
       root 밖이나 candidate-safe model에 직렬화하지 않는다
-- [ ] Stage B `ActionLogSource` seam의 내부 `FixtureActionLogSource` adapter를 구현한다.
+- [x] Stage B `ActionLogSource` seam의 내부 `FixtureActionLogSource` adapter를 구현한다.
       물리 Judge root에서 Parquet를 읽되 identity에는
       `fixture://<descriptor_sha256>/action-log/...` canonical URI만 보고한다. production
       local/GCS adapter 계약은 바꾸지 않는다
-- [ ] canonical fixture는 `T-2..T+1`, 24 candidates, validation user 160명, final user
+- [x] canonical fixture는 `T-2..T+1`, 24 candidates, validation user 160명, final user
       40명을 결정적으로 만들고 양 split이 각각 click-positive slate 30개·20% 이상 및
       clicked/non-clicked row를 만족하게 한다
 - [ ] `CandidateDataView` module의
@@ -509,14 +510,14 @@ Task 1 전체와 Research Harness MVP는 완료 처리하지 않는다.
 - [ ] candidate view에서 labels/final, 전체 snapshot manifest·root·fingerprint, 평가 source
       URI, fixture descriptor·seed·input과 Judge path를 filename·내용·receipt 모두에서
       배제한다. symlink·junction·hardlink를 거부하고 identical complete target만 reuse한다
-- [ ] `CandidateDataViewRequest`에 split/final 선택 parameter를 두지 않는다. final slate는
+- [x] `CandidateDataViewRequest`에 split/final 선택 parameter를 두지 않는다. final slate는
       consumption registry 권한을 요구하는 별도 후속 interface로 남긴다
-- [ ] Stage B `_SUCCESS`, typed manifest, manifest SHA와 네 artifact digest·row count를
+- [x] Stage B `_SUCCESS`, typed manifest, manifest SHA와 네 artifact digest·row count를
       재검증한 최소 `JudgeSnapshotHandoff`를 만든다. P0-2는 이 handoff만 소비한다
 - [ ] 서로 다른 두 Judge root에서 같은 seed·날짜를 독립 생성해 두 receipt가 모두
       `reused=false`이고 source SHA·slate ID·evaluation ID·네 artifact SHA·snapshot
       fingerprint가 같은지 확인한다. 같은 target 재호출의 `reused=true`는 별도 테스트다
-- [ ] spec의 실패 code를 typed error로 구현하고, 오류에 user/input/path 원문을 노출하지
+- [x] spec의 실패 code를 typed error로 구현하고, 오류에 user/input/path 원문을 노출하지
       않는다
 - [ ] Problem/Solution/Result에 candidate/Judge interface 분리, canonical source adapter,
       독립 재생성 증거와 남은 same-UID 한계를 기록한다

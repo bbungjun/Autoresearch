@@ -4,7 +4,8 @@
 production 일일 action log 4개를 생성하고 P0-2가 소비할 검증된 Judge handoff를 게시한다.
 
 [기능] 물리 Judge 경로를 canonical fixture URI로 가리는 source adapter, coverage 검사,
-content-addressed write-once fixture 게시와 완성 target 재검증을 제공한다.
+derived path·lock alias 검증, content-addressed write-once fixture 게시와 완성 target
+재검증을 제공한다.
 
 [비책임] candidate data view·workspace·argv·환경 구성과 metric/Judge 판정은 후속 Stage C 및
 P0-2 모듈이 담당한다. 임의 hostile filesystem actor와의 경쟁 방어도 담당하지 않는다.
@@ -18,6 +19,7 @@ from hashlib import sha256
 import os
 from pathlib import Path
 import shutil
+import stat
 from tempfile import mkdtemp
 from typing import Final, Literal
 
@@ -117,9 +119,8 @@ def build_local_evaluation_fixture(
     """Build or fully validate one content-addressed Judge-owned local fixture."""
 
     _require_safe_state_root(request.judge_state_root)
-    output_root = request.judge_state_root / _FIXTURES_PATH
+    output_root = _prepare_fixture_output_root(request.judge_state_root)
     try:
-        output_root.mkdir(parents=True, exist_ok=True)
         staging = Path(mkdtemp(prefix=".staging-", dir=output_root))
     except OSError:
         raise _fixture_error(StageCErrorCode.FIXTURE_REQUEST_INVALID, "fixture_root_prepare")
@@ -129,8 +130,15 @@ def build_local_evaluation_fixture(
         descriptor_digest = descriptor_sha256(descriptor)
         target = output_root / descriptor_digest
         lock_path = output_root / f".{descriptor_digest}.lock"
-        lock_path.touch(exist_ok=True)
-        with lock_path.open("a+b") as lock_file:
+        expected_lock_identity = _prepare_descriptor_lock(lock_path)
+        with lock_path.open("r+b") as lock_file:
+            if not _open_lock_matches(
+                lock_path, lock_file.fileno(), expected_lock_identity
+            ):
+                raise _fixture_error(
+                    StageCErrorCode.FIXTURE_STATE_CONFLICT,
+                    "fixture_lock_validation",
+                )
             _acquire_lock(lock_file)
             try:
                 if target.exists():
@@ -575,6 +583,101 @@ def _require_safe_state_root(root: Path) -> None:
             StageCErrorCode.FIXTURE_REQUEST_INVALID,
             "fixture_request_validation",
         )
+
+
+def _prepare_fixture_output_root(state_root: Path) -> Path:
+    root_resolved = state_root.resolve(strict=True)
+    current = state_root
+    for component in _FIXTURES_PATH.parts:
+        current = current / component
+        try:
+            current.lstat()
+        except FileNotFoundError:
+            try:
+                current.mkdir()
+            except FileExistsError:
+                pass
+            except OSError:
+                raise _fixture_error(
+                    StageCErrorCode.FIXTURE_REQUEST_INVALID,
+                    "fixture_root_prepare",
+                ) from None
+        except OSError:
+            raise _fixture_error(
+                StageCErrorCode.FIXTURE_REQUEST_INVALID,
+                "fixture_root_prepare",
+            ) from None
+        if not _safe_derived_directory(current, root_resolved):
+            raise _fixture_error(
+                StageCErrorCode.FIXTURE_REQUEST_INVALID,
+                "fixture_root_validation",
+            )
+    return current
+
+
+def _safe_derived_directory(path: Path, root_resolved: Path) -> bool:
+    if not _resolved_without_link(path):
+        return False
+    try:
+        resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return False
+    return path.is_dir() and resolved.is_relative_to(root_resolved)
+
+
+def _prepare_descriptor_lock(lock_path: Path) -> tuple[int, int]:
+    try:
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+    except FileExistsError:
+        pass
+    except OSError:
+        raise _fixture_error(
+            StageCErrorCode.FIXTURE_STATE_CONFLICT,
+            "fixture_lock_prepare",
+        ) from None
+    else:
+        os.close(descriptor)
+    identity = _safe_regular_file_identity(lock_path)
+    if identity is None:
+        raise _fixture_error(
+            StageCErrorCode.FIXTURE_STATE_CONFLICT,
+            "fixture_lock_validation",
+        )
+    return identity
+
+
+def _open_lock_matches(
+    lock_path: Path,
+    descriptor: int,
+    expected_identity: tuple[int, int],
+) -> bool:
+    try:
+        opened = os.fstat(descriptor)
+    except OSError:
+        return False
+    current_identity = _safe_regular_file_identity(lock_path)
+    return (
+        current_identity == expected_identity
+        and (opened.st_dev, opened.st_ino) == expected_identity
+        and stat.S_ISREG(opened.st_mode)
+        and opened.st_nlink == 1
+    )
+
+
+def _safe_regular_file_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        file_stat = path.lstat()
+    except OSError:
+        return None
+    reparse = getattr(file_stat, "st_file_attributes", 0) & 0x400
+    if (
+        reparse
+        or not stat.S_ISREG(file_stat.st_mode)
+        or file_stat.st_nlink != 1
+        or not _resolved_without_link(path)
+    ):
+        return None
+    return (file_stat.st_dev, file_stat.st_ino)
 
 
 def _safe_tree(root: Path) -> bool:

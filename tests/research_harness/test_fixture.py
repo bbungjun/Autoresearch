@@ -6,6 +6,7 @@ import inspect
 import json
 import os
 from pathlib import Path
+import subprocess
 
 import pyarrow.parquet as pq
 import pytest
@@ -61,6 +62,27 @@ def _copy_snapshot(source: Path, destination: Path) -> None:
         target = destination / artifact.relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(_long_path(source / artifact.relative_path).read_bytes())
+
+
+def _make_directory_link(link: Path, target: Path) -> None:
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            pytest.skip("directory junction creation is unavailable")
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+def _remove_directory_link(link: Path) -> None:
+    if os.name == "nt":
+        link.rmdir()
+    else:
+        link.unlink()
 
 
 def test_builder_has_exact_public_interface() -> None:
@@ -482,6 +504,56 @@ def test_reparse_state_root_is_rejected_without_path_disclosure(tmp_path: Path) 
         )
     assert caught.value.code == StageCErrorCode.FIXTURE_REQUEST_INVALID
     assert str(linked) not in str(caught.value)
+
+
+@pytest.mark.parametrize("component", ("fixtures", "by-hash"))
+def test_derived_fixture_root_does_not_follow_directory_links(
+    tmp_path: Path, component: str
+) -> None:
+    state_root = tmp_path / "state"
+    external = tmp_path / "external"
+    state_root.mkdir()
+    external.mkdir()
+    if component == "fixtures":
+        link = state_root / "fixtures"
+    else:
+        (state_root / "fixtures").mkdir()
+        link = state_root / "fixtures" / "by-hash"
+    _make_directory_link(link, external)
+    try:
+        with pytest.raises(StageCError) as caught:
+            build_local_evaluation_fixture(
+                LocalEvaluationFixtureRequest(state_root, EVALUATION_DATE, 917)
+            )
+        assert caught.value.code == StageCErrorCode.FIXTURE_REQUEST_INVALID
+        assert not tuple(external.iterdir())
+        assert str(external) not in str(caught.value)
+    finally:
+        _remove_directory_link(link)
+
+
+def test_preexisting_hardlinked_descriptor_lock_is_not_opened_or_modified(
+    built_fixture, tmp_path: Path
+) -> None:
+    _, receipt = built_fixture
+    state_root = tmp_path / "state"
+    output_root = state_root / "fixtures" / "by-hash"
+    output_root.mkdir(parents=True)
+    external_lock = tmp_path / "external-lock"
+    external_lock.write_bytes(b"external-content")
+    lock_path = output_root / f".{receipt.descriptor_sha256}.lock"
+    try:
+        os.link(external_lock, lock_path)
+    except OSError:
+        pytest.skip("hardlink creation is unavailable")
+
+    with pytest.raises(StageCError) as caught:
+        build_local_evaluation_fixture(
+            LocalEvaluationFixtureRequest(state_root, EVALUATION_DATE, 917)
+        )
+    assert caught.value.code == StageCErrorCode.FIXTURE_STATE_CONFLICT
+    assert external_lock.read_bytes() == b"external-content"
+    assert not (output_root / receipt.descriptor_sha256).exists()
 
 
 @pytest.mark.parametrize("boundary", ("producer", "snapshot"))

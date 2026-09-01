@@ -1,6 +1,6 @@
 # Research Harness P0-1 — 재현 가능한 평가 데이터와 split
 
-> 작성: 2026-08-31 | 상태: Stage A·B 및 Stage C 입력 foundation 구현, Stage C orchestration 대기 | 추적: #17, #22
+> 작성: 2026-08-31 | 상태: Stage A·B, Stage C fixture builder·adapter·Judge handoff 구현; CandidateDataView·독립 two-root 최종 실증 대기 | 추적: #17, #22
 >
 > 상위 계약:
 > `docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md`
@@ -8,14 +8,14 @@
 > 구현 순서:
 > `docs/plans/2026-08-15-local-research-harness-mvp.md` Task 1-0, Task 1
 
-## Stage B 완료, Stage C 입력 foundation 구현·orchestration 대기
+## Stage B 및 Stage C Judge fixture 경계 구현, CandidateDataView·최종 실증 대기
 
 Stage B는 원천 파티션 검증, canonical slate 검증, 다일 click attribution, 고정 user
 split·구조 coverage, label 분리 artifact·typed manifest, local write-once publisher와 공개
-snapshot builder까지 구현했습니다. Stage C는 RuleBased fixture·seed custody, data-only
-candidate view와 P0-2용 Judge snapshot handoff를 구현합니다. 그중 typed contract와
-canonical input/descriptor foundation은 구현됐고 실제 일일 실행·게시·handoff 검증은
-남아 있습니다. 실제 disposable worktree,
+snapshot builder까지 구현했습니다. Stage C는 typed model과 canonical input, production daily
+4-run fixture builder, canonical source adapter, write-once 게시와 P0-2용 Judge snapshot handoff
+검증까지 구현했습니다. Data-only CandidateDataView와 독립 two-root 최종 실증은 남아 있습니다.
+실제 disposable worktree,
 subprocess argv·환경과 Sealed Judge의 지표·판정은 각각 후속 Task 3과 P0-2 책임입니다.
 
 ## 1. 목적
@@ -635,6 +635,13 @@ Judge 소유 `fixture.json`에만 남긴다.
 point를 포함하거나 `destination_root`와 서로 포함 관계인 경로는
 `fixture_request_invalid`로 거부한다. 같은 UID가 다른 절대 경로를 추측해 읽는 공격까지
 막는 보안 sandbox가 아니라는 §4 상위 위협 모델은 유지한다.
+Builder는 root 아래 `fixtures`, `by-hash`를 `parents=True`로 한 번에 따라가지 않고 각
+component를 lstat한다. 기존 component는 실제 directory이면서 symlink·junction/reparse가
+아니어야 하고, 없는 component는 한 단계 생성한 직후 다시 lstat·resolve containment를
+검증한다. Descriptor lock도 open 전 regular single-link file인지 검사하고 open descriptor의
+device/inode/type/link count를 경로와 다시 대조한 뒤에만 잠근다. 위반은 원문 경로 없이
+derived root에서는 `fixture_request_invalid`, descriptor state에서는
+`fixture_state_conflict`로 실패한다.
 
 ### 13.2 canonical fixture와 P0-2-ready coverage
 
@@ -811,8 +818,9 @@ event schema는 additive nullable `slate_id`로 유지하고 draft/checkpoint sc
 final artifact SHA-256을 보존했다. 재현 가능한 수치와 cleanup receipt는
 `.omo/evidence/research-harness-stage-a/task-6.json`에 있다.
 
-이는 Stage A producer 기록의 범위만 설명한다. 이후 Stage B snapshot builder는 완료되었고,
-Stage C fixture·Judge handoff는 완료로 표시하지 않는다.
+이는 2026-08-31 Stage A producer 완료 시점의 기록이다. 이후 Stage B snapshot builder와
+Stage C fixture·Judge handoff가 구현됐으며, CandidateDataView와 독립 two-root 최종 실증은
+완료로 표시하지 않는다.
 
 ### Stage B — snapshot builder (구현 완료)
 
@@ -823,12 +831,12 @@ Stage C fixture·Judge handoff는 완료로 표시하지 않는다.
 5. [x] evaluation ID·parquet·manifest 생성
 6. [x] write-once local publisher
 
-### Stage C — fixture와 실증
+### Stage C — fixture와 실증 (부분 구현)
 
-1. [ ] versioned fixture descriptor와 Judge 소유 write-once state 구현
-2. [ ] P0-2-ready rule-based 일일 파티션 fixture 생성
+1. [x] versioned fixture descriptor와 Judge 소유 write-once state 구현
+2. [x] P0-2-ready rule-based 일일 파티션 fixture 생성
 3. [ ] data-only `CandidateDataView`와 safe manifest 구현
-4. [ ] 검증된 `JudgeSnapshotHandoff` 구현
+4. [x] 검증된 `JudgeSnapshotHandoff` 구현
 5. [ ] 독립 2-run 재생성 및 별도 reuse 경로 실증
 6. [ ] candidate view에 label·final·source URI·fixture seed·Judge path가 없는지 확인
 
@@ -858,8 +866,8 @@ Stage B source seam에 배치해 production local/GCS 계약을 바꾸지 않고
 Stage C 구현자는 fixture 규모·coverage, seed custody, 두 handoff의 exact fields, 게시 충돌,
 금지 파일·경로와 독립 재생성 증거를 하나의 정본에서 확인할 수 있습니다. P0-2는 같은
 fixture로 성공 metric 경로를 시작할 수 있고 Task 3은 snapshot manifest 해석과 복사 규칙을
-중복 구현하지 않습니다. 이 기록은 계약 검토 결과이며 Stage C runtime 구현·성능·테스트
-통과를 주장하지 않습니다.
+중복 구현하지 않습니다. 이 문단은 Stage C runtime 구현 전 계약 검토 당시의 결과이며,
+현재 구현·검증 상태는 아래 fixture builder Portfolio Record가 갱신합니다.
 
 ## Portfolio Record — Stage C fixture input foundation
 
@@ -891,10 +899,10 @@ partition 및 descriptor bytes가 일치함을 테스트로 확인했습니다. 
 테스트 37개가 통과했고, production schema 객체를 빈 schema로 바꾼 테스트에서도 v1 대표
 virtual-user/YouTube Parquet SHA가 유지됐습니다. `date.min`부터 `date.min+3651`까지와
 `date.max` 요청은 fixture 경로를 만들기 전에 `fixture_request_invalid`로 실패합니다. 이어 실행한 전체
-`tests/research_harness`는 198개 통과·1개 환경 의존 skip이었습니다. 이 foundation은 일일 producer 실행,
-action log·snapshot 생성, write-once fixture 게시, source adapter, Judge handoff 재검증과
-candidate view materialization을 아직 구현하지 않았으므로 Stage C 체크리스트는 완료로
-표시하지 않습니다.
+`tests/research_harness`는 198개 통과·1개 환경 의존 skip이었습니다. 이는 input foundation
+완료 당시의 범위 기록입니다. 이후 일일 producer, action log·snapshot 생성, write-once fixture
+게시, source adapter와 Judge handoff 재검증이 구현됐고 candidate view materialization은
+여전히 미완료이므로 Stage C 전체는 완료로 표시하지 않습니다.
 
 ## Portfolio Record — Stage C fixture builder and Judge handoff
 
@@ -929,8 +937,8 @@ evaluation ID와 snapshot fingerprint를 만들었고 seed 918은 다른 source 
 target reuse, partial/tamper conflict, handoff marker·schema·fingerprint·manifest bytes·artifact
 digest/row-count·extra tree 변조와 coverage 실패의 typed code를 확인합니다. CandidateDataView와 실제
 workspace/subprocess 환경은 생성하지 않았으며 Stage C 전체 완료는 주장하지 않습니다.
-최신 검증은 fixture/daily logical-clock focused 27개 통과·Windows symlink 권한 1개 skip,
-전체 `tests/research_harness` 223개 통과·2개 skip, `tests/action_log_generation` 252개 통과였고
+최신 검증은 fixture focused 28개 통과·Windows symlink 권한 1개 skip,
+전체 `tests/research_harness` 226개 통과·2개 skip, `tests/action_log_generation` 252개 통과였고
 changed-file Ruff와 `git diff --check`도 통과했습니다.
 
 ## Portfolio Record — Stage B snapshot builder
@@ -961,8 +969,9 @@ typed contract와 순수 identity helper가 추가됐습니다. Stage B builder�
 artifact(두 label-free slate와 두 sealed labels)와 `manifest.json`을 게시합니다. Stage B 최종 검증에서 `tests/research_harness`와
 `tests/action_log_generation`의 404개 테스트가 통과했고, real local Parquet manual QA는 같은
 입력 재빌드의 `reused=true`, 네 artifact의 1:1 join key, tampered target의 typed conflict,
-staging residue 없음 을 관찰했습니다. 이 결과는 Stage B snapshot 경계에 한정되며 Stage C의
-일일 producer·write-once fixture orchestration, candidate data view와 검증된 Judge handoff는 아직 구현 전입니다.
+staging residue 없음 을 관찰했습니다. 이는 Stage B 완료 시점 기록으로, 당시 미구현이던
+Stage C 일일 producer·write-once fixture·Judge handoff는 현재 구현됐습니다. CandidateDataView와
+독립 two-root 최종 실증은 후속 범위입니다.
 실제 candidate workspace와 Sealed Judge는 각각 Task 3과 P0-2의 후속 과제입니다.
 
 ## 16. 검증 매트릭스
