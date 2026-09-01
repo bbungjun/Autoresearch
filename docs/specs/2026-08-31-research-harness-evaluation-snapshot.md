@@ -726,9 +726,11 @@ candidate view의 exact filesystem interface는 다음뿐이다.
 manifest의 `candidate_history_partitions`에 있는 `dt < T` 파일만 byte-copy하고,
 `slate.parquet`은 validation artifact만 byte-copy한다. 복사 전후 SHA-256과 Parquet row 수를
 receipt와 대조한다. symlink·junction·hardlink와 원천 경로를 가리키는 파일은 허용하지 않는다.
-주입된 `ActionLogSource.opaque_root`와 각 `partition_uri(dt)`는 Judge manifest receipt와
-정확히 같아야 한다. module은 receipt에 없는 날짜를 열지 않고 `open_partition(dt)`에서 읽은
-bytes의 SHA-256·Parquet row 수를 대조한 뒤 candidate view로 복사한다. fixture에서는 같은
+주입된 `ActionLogSource.opaque_root`와 Stage B `source.partitions` 전체의 각
+`partition_uri(dt)`는 Judge manifest receipt와 정확히 같아야 한다. 이 전체 identity 대조는
+source를 열기 전에 끝내되, module은 candidate history receipt의 `dt<T`만
+`open_partition(dt)`으로 열고 읽은 bytes의 SHA-256·Parquet row 수를 대조한 뒤 candidate
+view로 복사한다. fixture에서는 같은
 `FixtureActionLogSource`, production local/GCS에서는 기존 Arrow adapter를 사용한다.
 `CandidateDataViewReceipt.root`는 `<destination_root>/harness_in`이고,
 `CandidateDataManifest.slate.relative_path`는 정확히 `slate.parquet`, history receipt의
@@ -962,8 +964,10 @@ target 재사용을 구분하지 못해 평가 격리를 보장할 수 없었습
 
 `materialize_candidate_data_view(request, *, source)`는 시작 전에 Judge `_SUCCESS`, canonical
 typed manifest와 SHA/fingerprint, validation/final ID, 네 artifact digest·row count를 공통
-handoff validator로 다시 확인합니다. 주입 source의 opaque root와 허용된 `dt<T` receipt URI를
-open 전에 대조하고 실제 Parquet bytes의 SHA-256·행 수를 검증합니다. Candidate에는 validation
+handoff validator의 단일 typed bundle로 다시 확인합니다. Manifest semantic validation 오류도
+`judge_handoff_invalid`로 정제합니다. 주입 source의 opaque root와 전체 Stage B source receipt
+URI를 open 전에 대조하되 `dt<T` history만 열어 실제 Parquet bytes의 SHA-256·행 수를
+검증합니다. Candidate에는 validation
 slate와 history 두 파티션을 새 bytes로만 복사하고 최소 `candidate-data-view-v1` JSON만 남깁니다.
 sibling staging의 exact tree를 검증한 뒤 atomic rename하며, 완전히 동일한 single-link target만
 `reused=true`로 허용합니다. final 선택과 consumption registry는 이 interface에 추가하지
@@ -982,12 +986,15 @@ source는 local identity가 없는 대신 기존 URI·bytes digest·Parquet row 
 
 실제 production fixture를 사용하는 focused 테스트에서 validation slate와 T-2/T-1 history의
 byte identity·행 수, canonical manifest receipt, 허용 날짜만 open하는 동작을 확인했습니다.
-root/URI mismatch는 source open 전에 실패하고 bad bytes, Judge marker·manifest·네 artifact
+root 또는 T/T+1을 포함한 전체 URI mismatch는 history source open 전에 실패하고 bad bytes,
+timezone-naive manifest, Judge marker·manifest·네 artifact
 변조, fixture provenance spoof, destination/source reparse·포함 관계와 hardlink,
 source↔candidate inode alias, partial·extra·tampered target은 sanitized typed error로
 거부됩니다. Receipt와 게시 tree의 파일명·전체 bytes를 탐색해 labels/final ID·path,
 snapshot fingerprint, source URI, fixture seed와 Judge path가 없음을 확인했습니다. 동일 완성
-target만 `reused=true`였고 focused 테스트 29개가 통과했습니다. 독립 두 Judge root의 최종
+target만 `reused=true`였고 focused 테스트 34개가 통과했습니다. Hook 없는 buffer-backed
+source도 전체 URI를 대조한 뒤 history 두 날짜만 열었고, 같은 destination의 동시 두 호출은
+한 번 게시하고 한 번 `reused=true`로 반환했습니다. 독립 두 Judge root의 최종
 프로토콜과 실제 worktree/subprocess/final consumption registry는 여전히 후속 범위입니다.
 
 ## Portfolio Record — Stage B snapshot builder

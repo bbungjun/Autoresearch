@@ -350,6 +350,20 @@ def _validated_judge_handoff(
     *,
     expected_fingerprint: str | None,
 ) -> JudgeSnapshotHandoff:
+    handoff, _ = _validated_judge_snapshot(
+        snapshot_root,
+        expected_fingerprint=expected_fingerprint,
+    )
+    return handoff
+
+
+def _validated_judge_snapshot(
+    snapshot_root: Path,
+    *,
+    expected_fingerprint: str | None,
+) -> tuple[JudgeSnapshotHandoff, EvaluationSnapshotManifest]:
+    """Return one manifest and handoff after a single sanitized validation pass."""
+
     try:
         if not _safe_tree(snapshot_root) or not _tree_is_exact(
             snapshot_root, _SNAPSHOT_FILES, _SNAPSHOT_DIRS
@@ -391,14 +405,24 @@ def _validated_judge_handoff(
                 or pq.read_metadata(io_path).num_rows != artifact.rows
             ):
                 raise ValueError
-    except (OSError, UnicodeError, ValidationError, ValueError, pa.ArrowException):
+    except (
+        OSError,
+        UnicodeError,
+        EvaluationSnapshotError,
+        ValidationError,
+        ValueError,
+        pa.ArrowException,
+    ):
         raise _fixture_error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "judge_handoff_validation")
-    return JudgeSnapshotHandoff(
-        snapshot_fingerprint=manifest.snapshot_fingerprint,
-        snapshot_root=snapshot_root,
-        manifest_sha256=sha256(manifest_bytes).hexdigest(),
-        validation_id=manifest.validation.evaluation_id,
-        final_holdout_id=manifest.final_holdout.evaluation_id,
+    return (
+        JudgeSnapshotHandoff(
+            snapshot_fingerprint=manifest.snapshot_fingerprint,
+            snapshot_root=snapshot_root,
+            manifest_sha256=sha256(manifest_bytes).hexdigest(),
+            validation_id=manifest.validation.evaluation_id,
+            final_holdout_id=manifest.final_holdout.evaluation_id,
+        ),
+        manifest,
     )
 
 

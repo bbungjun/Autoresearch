@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from hashlib import sha256
 import inspect
@@ -319,6 +320,29 @@ class _WrongPartitionUriSource(FixtureActionLogSource):
         return f"{self.opaque_root}/wrong/dt={dt.isoformat()}"
 
 
+class _WrongTailPartitionUriSource(FixtureActionLogSource):
+    def __init__(
+        self,
+        fixture_root: Path,
+        descriptor_digest: str,
+        tampered_date: date,
+    ) -> None:
+        self.opened: list[date] = []
+        self.checked: list[date] = []
+        self._tampered_date = tampered_date
+        super().__init__(
+            fixture_root,
+            descriptor_digest,
+            _opened_dates=self.opened,
+        )
+
+    def partition_uri(self, dt: date) -> str:
+        self.checked.append(dt)
+        if dt == self._tampered_date:
+            return f"{self.opaque_root}/wrong-tail"
+        return super().partition_uri(dt)
+
+
 class _UntrustedFixtureSource(FixtureActionLogSource):
     def __init__(self, fixture_root: Path, descriptor_digest: str) -> None:
         self.opened: list[date] = []
@@ -356,6 +380,45 @@ def test_source_partition_uri_is_checked_before_any_open(
             CandidateDataViewRequest(fixture.judge, tmp_path), source=source
         )
     assert captured.value.code is StageCErrorCode.JUDGE_HANDOFF_INVALID
+    assert source.opened == []
+
+
+@pytest.mark.parametrize(
+    ("tampered_date", "expected_checked"),
+    (
+        (
+            date(2026, 9, 1),
+            [date(2026, 8, 30), date(2026, 8, 31), date(2026, 9, 1)],
+        ),
+        (
+            date(2026, 9, 2),
+            [
+                date(2026, 8, 30),
+                date(2026, 8, 31),
+                date(2026, 9, 1),
+                date(2026, 9, 2),
+            ],
+        ),
+    ),
+)
+def test_all_source_partition_uris_are_checked_before_history_open(
+    candidate_fixture,
+    tmp_path: Path,
+    tampered_date: date,
+    expected_checked: list[date],
+) -> None:
+    _, fixture = candidate_fixture
+    source = _WrongTailPartitionUriSource(
+        fixture.fixture_root,
+        fixture.descriptor_sha256,
+        tampered_date,
+    )
+    with pytest.raises(StageCError) as captured:
+        materialize_candidate_data_view(
+            CandidateDataViewRequest(fixture.judge, tmp_path), source=source
+        )
+    assert captured.value.code is StageCErrorCode.JUDGE_HANDOFF_INVALID
+    assert source.checked == expected_checked
     assert source.opened == []
 
 
@@ -416,6 +479,65 @@ def test_local_arrow_source_root_cannot_contain_destination(
             CandidateDataViewRequest(handoff, action_root), source=source
         )
     assert captured.value.code is StageCErrorCode.FIXTURE_REQUEST_INVALID
+
+
+class _BufferBackedSource:
+    def __init__(self, source: ArrowActionLogSource) -> None:
+        self._source = source
+        self.opaque_root = source.opaque_root
+        self.checked: list[date] = []
+        self.opened: list[date] = []
+
+    def partition_uri(self, dt: date) -> str:
+        self.checked.append(dt)
+        return self._source.partition_uri(dt)
+
+    def open_partition(self, dt: date):
+        self.opened.append(dt)
+        with self._source.open_partition(dt) as handle:
+            return pa.BufferReader(handle.read())
+
+
+def test_buffer_backed_remote_shape_checks_all_uris_but_opens_only_history(
+    arrow_snapshot,
+    tmp_path: Path,
+) -> None:
+    _, genuine, handoff = arrow_snapshot
+    source = _BufferBackedSource(genuine)
+    receipt = materialize_candidate_data_view(
+        CandidateDataViewRequest(handoff, tmp_path), source=source
+    )
+
+    assert receipt.reused is False
+    assert source.checked == [
+        date(2026, 8, 30),
+        date(2026, 8, 31),
+        date(2026, 9, 1),
+        date(2026, 9, 2),
+    ]
+    assert source.opened == [date(2026, 8, 30), date(2026, 8, 31)]
+
+
+def test_concurrent_materialization_publishes_once_and_reuses_once(
+    candidate_fixture,
+    tmp_path: Path,
+) -> None:
+    _, fixture = candidate_fixture
+
+    def materialize() -> bool:
+        source = FixtureActionLogSource(
+            fixture.fixture_root,
+            fixture.descriptor_sha256,
+        )
+        return materialize_candidate_data_view(
+            CandidateDataViewRequest(fixture.judge, tmp_path),
+            source=source,
+        ).reused
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        reused = tuple(executor.map(lambda _: materialize(), range(2)))
+
+    assert sorted(reused) == [False, True]
 
 
 def test_only_manifest_history_dates_are_opened(candidate_fixture, tmp_path: Path) -> None:
@@ -507,6 +629,39 @@ def test_judge_snapshot_marker_manifest_and_all_artifacts_are_revalidated(
         materialize_candidate_data_view(
             CandidateDataViewRequest(handoff, destination), source=source
         )
+    assert captured.value.code is StageCErrorCode.JUDGE_HANDOFF_INVALID
+
+
+def test_manifest_semantic_error_is_sanitized_as_judge_handoff_invalid(
+    candidate_fixture,
+    tmp_path: Path,
+) -> None:
+    _, fixture = candidate_fixture
+    copied_root = (
+        tmp_path
+        / "judge"
+        / "fixtures"
+        / "by-hash"
+        / "copied-fixture"
+        / "evaluation-snapshots"
+        / "by-hash"
+        / str(fixture.judge.snapshot_fingerprint)
+    )
+    _copy_snapshot(fixture.judge.snapshot_root, copied_root)
+    manifest_path = copied_root / "manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["created_at"] = "2026-09-01T00:00:00"
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    handoff = replace(fixture.judge, snapshot_root=copied_root)
+    destination = tmp_path / "candidate"
+    destination.mkdir()
+    source = FixtureActionLogSource(fixture.fixture_root, fixture.descriptor_sha256)
+
+    with pytest.raises(StageCError) as captured:
+        materialize_candidate_data_view(
+            CandidateDataViewRequest(handoff, destination), source=source
+        )
+
     assert captured.value.code is StageCErrorCode.JUDGE_HANDOFF_INVALID
 
 

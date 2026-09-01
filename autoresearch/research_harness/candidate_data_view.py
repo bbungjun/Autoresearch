@@ -30,7 +30,6 @@ from pydantic import ValidationError
 from autoresearch.research_harness.evaluation_artifacts import canonical_json_bytes
 from autoresearch.research_harness.evaluation_snapshot_models import (
     ArtifactReceipt,
-    EvaluationSnapshotManifest,
 )
 from autoresearch.research_harness.evaluation_source import ActionLogSource
 from autoresearch.research_harness.evaluation_source_models import SourcePartitionReceipt
@@ -52,7 +51,7 @@ from autoresearch.research_harness.local_evaluation_fixture import (
     _safe_regular_file_identity,
     _safe_tree,
     _tree_is_exact,
-    _validated_judge_handoff,
+    _validated_judge_snapshot,
 )
 
 
@@ -75,13 +74,12 @@ def materialize_candidate_data_view(
 
     destination_root = request.destination_root
     _require_safe_request(destination_root, request.judge.snapshot_root)
-    handoff = _validated_judge_handoff(
+    handoff, manifest = _validated_judge_snapshot(
         request.judge.snapshot_root,
         expected_fingerprint=str(request.judge.snapshot_fingerprint),
     )
     if handoff != request.judge:
         raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "judge_handoff_identity")
-    manifest = _read_snapshot_manifest(request.judge.snapshot_root)
     history = manifest.window.candidate_history_partitions
     if any(
         receipt.dt >= manifest.window.evaluation_start_date
@@ -89,7 +87,11 @@ def materialize_candidate_data_view(
         for receipt in history
     ):
         raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "candidate_history_identity")
-    if not _source_identity_matches(source, manifest.source.root, history):
+    if not _source_identity_matches(
+        source,
+        manifest.source.root,
+        manifest.source.partitions,
+    ):
         raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "candidate_source_identity")
     _require_source_disjoint(destination_root, source, history)
     _require_fixture_source_provenance(source, handoff)
@@ -392,23 +394,14 @@ def _require_source_disjoint(
 def _source_identity_matches(
     source: ActionLogSource,
     expected_root: str,
-    history: tuple[SourcePartitionReceipt, ...],
+    partitions: tuple[SourcePartitionReceipt, ...],
 ) -> bool:
     try:
         return source.opaque_root == expected_root and all(
-            source.partition_uri(receipt.dt) == receipt.uri for receipt in history
+            source.partition_uri(receipt.dt) == receipt.uri for receipt in partitions
         )
     except (AttributeError, OSError, TypeError, ValueError):
         return False
-
-
-def _read_snapshot_manifest(snapshot_root: Path) -> EvaluationSnapshotManifest:
-    try:
-        return EvaluationSnapshotManifest.model_validate_json(
-            _io_path(snapshot_root / "manifest.json").read_bytes()
-        )
-    except (OSError, ValidationError):
-        raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "judge_manifest_read") from None
 
 
 def _view_is_valid(

@@ -505,7 +505,8 @@ Task 1 전체와 Research Harness MVP는 완료 처리하지 않는다.
       함께 만족하게 한다
 - [x] `CandidateDataView` module의
       `materialize_candidate_data_view(CandidateDataViewRequest, *, source: ActionLogSource)`를
-      구현한다. source root·partition URI를 Judge manifest receipt와 먼저 대조하며 exact
+      구현한다. source root·전체 Stage B partition URI를 Judge manifest receipt와 먼저
+      대조하되 candidate history 날짜만 열며 exact
       output은 `harness_in/candidate-view.json`, validation `slate.parquet`, manifest가 허용한
       `dt < T` history의 물리적 byte-copy뿐이다. fixture는 같은 내부 adapter를 주입한다
 - [x] candidate view에서 labels/final, 전체 snapshot manifest·root·fingerprint, 평가 source
