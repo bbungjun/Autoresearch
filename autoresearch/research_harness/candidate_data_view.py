@@ -3,8 +3,9 @@
 [파이프라인] Stage B 평가 snapshot 게시 뒤와 격리된 candidate 학습·실행 앞에서
 Judge handoff를 재검증하고 validation slate와 과거 action log만 별도 root에 게시한다.
 
-[기능] source identity·Parquet receipt를 fail-closed로 확인하고, candidate-safe canonical
-manifest와 독립 byte copy를 write-once atomic directory로 materialize한다.
+[기능] source provenance·filesystem identity·Parquet receipt를 fail-closed로 확인하고,
+candidate-safe canonical manifest와 독립 byte copy를 write-once atomic directory로
+materialize한다.
 
 [비책임] git worktree·subprocess argv·환경·credential 구성, final holdout 소비 권한과
 소비 registry, metric/Judge 판정은 후속 Task 3/P0-2가 담당한다.
@@ -12,6 +13,8 @@ manifest와 독립 byte copy를 write-once atomic directory로 materialize한다
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import date
 from hashlib import sha256
 import os
 from pathlib import Path
@@ -19,7 +22,6 @@ import shutil
 import stat
 from tempfile import mkdtemp
 from typing import BinaryIO, Final
-from datetime import date
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -45,6 +47,7 @@ from autoresearch.research_harness.local_evaluation_fixture import (
     _open_lock_matches,
     _prepare_descriptor_lock,
     _release_descriptor_lock,
+    _require_fixture_source_provenance,
     _resolved_without_link,
     _safe_regular_file_identity,
     _safe_tree,
@@ -55,6 +58,12 @@ from autoresearch.research_harness.local_evaluation_fixture import (
 
 _MANIFEST_NAME: Final = "candidate-view.json"
 _TARGET_NAME: Final = "harness_in"
+
+
+@dataclass(frozen=True, slots=True)
+class _SourcePayload:
+    payload: bytes
+    identity: tuple[int, int] | None
 
 
 def materialize_candidate_data_view(
@@ -82,9 +91,15 @@ def materialize_candidate_data_view(
         raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "candidate_history_identity")
     if not _source_identity_matches(source, manifest.source.root, history):
         raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "candidate_source_identity")
-    if any(not _source_local_path_is_safe(source, receipt.dt) for receipt in history):
-        raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "candidate_source_alias")
+    _require_source_disjoint(destination_root, source, history)
+    _require_fixture_source_provenance(source, handoff)
     history_payloads = _load_history_payloads(source, history)
+    slate_source = request.judge.snapshot_root.joinpath(
+        *manifest.validation.artifacts.slate.relative_path.split("/")
+    )
+    slate_identity = _safe_regular_file_identity(_io_path(slate_source))
+    if slate_identity is None:
+        raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "candidate_slate_alias")
 
     candidate_manifest = CandidateDataManifest(
         contract_version="candidate-data-view-v1",
@@ -123,7 +138,13 @@ def materialize_candidate_data_view(
             _lock_checked(lock_path, lock_file, lock_identity)
             try:
                 if target.exists() or target.is_symlink():
-                    if not _view_is_valid(target, candidate_manifest, manifest_bytes):
+                    if not _view_is_valid(
+                        target,
+                        candidate_manifest,
+                        manifest_bytes,
+                        slate_identity,
+                        tuple(item.identity for item in history_payloads),
+                    ):
                         raise _error(
                             StageCErrorCode.CANDIDATE_VIEW_CONFLICT,
                             "candidate_existing_view",
@@ -145,8 +166,15 @@ def materialize_candidate_data_view(
                         history,
                         history_payloads,
                         manifest_bytes,
+                        slate_identity,
                     )
-                    if not _view_is_valid(staging, candidate_manifest, manifest_bytes):
+                    if not _view_is_valid(
+                        staging,
+                        candidate_manifest,
+                        manifest_bytes,
+                        slate_identity,
+                        tuple(item.identity for item in history_payloads),
+                    ):
                         raise _error(
                             StageCErrorCode.CANDIDATE_VIEW_CONFLICT,
                             "candidate_staging_validation",
@@ -177,29 +205,44 @@ def _write_staging(
     snapshot_root: Path,
     slate: ArtifactReceipt,
     history: tuple[SourcePartitionReceipt, ...],
-    history_payloads: tuple[bytes, ...],
+    history_payloads: tuple[_SourcePayload, ...],
     manifest_bytes: bytes,
+    slate_identity: tuple[int, int],
 ) -> None:
     source_slate = snapshot_root.joinpath(*slate.relative_path.split("/"))
+    slate_payload = _io_path(source_slate).read_bytes()
+    if _safe_regular_file_identity(_io_path(source_slate)) != slate_identity:
+        raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "candidate_slate_alias")
     _copy_verified_payload(
-        _io_path(source_slate).read_bytes(), staging / "slate.parquet", slate
+        slate_payload,
+        staging / "slate.parquet",
+        slate,
+        source_identity=slate_identity,
     )
-    for receipt, payload in zip(history, history_payloads, strict=True):
+    for receipt, source_payload in zip(history, history_payloads, strict=True):
         target = staging / "history" / "action_log" / f"dt={receipt.dt.isoformat()}" / "part-0.parquet"
-        _copy_verified_payload(payload, target, receipt)
+        _copy_verified_payload(
+            source_payload.payload,
+            target,
+            receipt,
+            source_identity=source_payload.identity,
+        )
     (staging / _MANIFEST_NAME).write_bytes(manifest_bytes)
 
 
 def _load_history_payloads(
     source: ActionLogSource,
     history: tuple[SourcePartitionReceipt, ...],
-) -> tuple[bytes, ...]:
-    payloads: list[bytes] = []
+) -> tuple[_SourcePayload, ...]:
+    payloads: list[_SourcePayload] = []
     for receipt in history:
+        path_identity = _source_local_identity(source, receipt.dt)
         source_error = False
+        handle_identity: tuple[int, int] | None = None
         try:
             with source.open_partition(receipt.dt) as handle:
-                if not _safe_open_local_file(handle):
+                handle_valid, handle_identity = _open_local_identity(handle)
+                if not handle_valid:
                     source_error = True
                     payload = b""
                 else:
@@ -217,7 +260,23 @@ def _load_history_payloads(
                 StageCErrorCode.JUDGE_HANDOFF_INVALID,
                 "candidate_source_integrity",
             )
-        payloads.append(payload)
+        if (
+            path_identity is not None
+            and handle_identity is not None
+            and path_identity != handle_identity
+        ):
+            raise _error(
+                StageCErrorCode.JUDGE_HANDOFF_INVALID,
+                "candidate_source_alias",
+            )
+        if path_identity is not None and _source_local_identity(
+            source, receipt.dt
+        ) != path_identity:
+            raise _error(
+                StageCErrorCode.JUDGE_HANDOFF_INVALID,
+                "candidate_source_alias",
+            )
+        payloads.append(_SourcePayload(payload, path_identity or handle_identity))
     return tuple(payloads)
 
 
@@ -225,6 +284,8 @@ def _copy_verified_payload(
     payload: bytes,
     target: Path,
     receipt: ArtifactReceipt | SourcePartitionReceipt,
+    *,
+    source_identity: tuple[int, int] | None,
 ) -> None:
     expected_digest = receipt.sha256
     expected_rows = receipt.rows
@@ -232,8 +293,10 @@ def _copy_verified_payload(
         raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "candidate_source_integrity")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(payload)
+    target_identity = _safe_regular_file_identity(target)
     if (
-        _safe_regular_file_identity(target) is None
+        target_identity is None
+        or target_identity == source_identity
         or sha256(target.read_bytes()).hexdigest() != expected_digest
         or pq.read_metadata(target).num_rows != expected_rows
     ):
@@ -247,28 +310,83 @@ def _payload_rows(payload: bytes) -> int:
         raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "candidate_source_integrity") from None
 
 
-def _safe_open_local_file(handle: pa.NativeFile) -> bool:
+def _open_local_identity(
+    handle: pa.NativeFile,
+) -> tuple[bool, tuple[int, int] | None]:
     try:
         descriptor = handle.fileno()
     except (AttributeError, OSError, pa.ArrowException):
-        return True
+        return True, None
     try:
         opened = os.fstat(descriptor)
     except OSError:
-        return False
+        return False, None
     reparse = getattr(opened, "st_file_attributes", 0) & 0x400
-    return not reparse and stat.S_ISREG(opened.st_mode) and opened.st_nlink == 1
+    valid = not reparse and stat.S_ISREG(opened.st_mode) and opened.st_nlink == 1
+    return valid, (opened.st_dev, opened.st_ino) if valid else None
 
 
-def _source_local_path_is_safe(source: ActionLogSource, partition_date: date) -> bool:
+def _source_local_identity(
+    source: ActionLogSource,
+    partition_date: date,
+) -> tuple[int, int] | None:
     local_path = getattr(source, "_physical_partition_path", None)
     if local_path is None:
-        return True
+        return None
     try:
         path = local_path(partition_date)
     except (OSError, TypeError):
-        return False
-    return isinstance(path, Path) and _safe_regular_file_identity(path) is not None
+        raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "candidate_source_alias") from None
+    if path is None:
+        return None
+    if not isinstance(path, Path):
+        raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "candidate_source_alias")
+    identity = _safe_regular_file_identity(path)
+    if identity is None:
+        raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "candidate_source_alias")
+    return identity
+
+
+def _require_source_disjoint(
+    destination_root: Path,
+    source: ActionLogSource,
+    history: tuple[SourcePartitionReceipt, ...],
+) -> None:
+    local_paths: list[Path] = []
+    partition_path = getattr(source, "_physical_partition_path", None)
+    if partition_path is not None:
+        try:
+            for receipt in history:
+                path = partition_path(receipt.dt)
+                if path is not None:
+                    if not isinstance(path, Path):
+                        raise TypeError
+                    local_paths.append(path.resolve(strict=True))
+        except (OSError, RuntimeError, TypeError):
+            raise _error(
+                StageCErrorCode.JUDGE_HANDOFF_INVALID,
+                "candidate_source_path",
+            ) from None
+    source_root_method = getattr(source, "_physical_source_root", None)
+    source_roots: list[Path] = []
+    if source_root_method is not None:
+        try:
+            root = source_root_method()
+            if root is not None:
+                if not isinstance(root, Path):
+                    raise TypeError
+                source_roots.append(root.resolve(strict=True))
+        except (OSError, RuntimeError, TypeError):
+            raise _error(
+                StageCErrorCode.JUDGE_HANDOFF_INVALID,
+                "candidate_source_path",
+            ) from None
+    destination = destination_root.resolve(strict=True)
+    if any(path.is_relative_to(destination) for path in local_paths) or any(
+        destination.is_relative_to(root) or root.is_relative_to(destination)
+        for root in source_roots
+    ):
+        raise _error(StageCErrorCode.FIXTURE_REQUEST_INVALID, "candidate_source_relation")
 
 
 def _source_identity_matches(
@@ -297,6 +415,8 @@ def _view_is_valid(
     root: Path,
     expected: CandidateDataManifest,
     expected_manifest_bytes: bytes,
+    slate_source_identity: tuple[int, int],
+    history_source_identities: tuple[tuple[int, int] | None, ...],
 ) -> bool:
     files = {
         _MANIFEST_NAME,
@@ -318,9 +438,18 @@ def _view_is_valid(
         if parsed != expected or manifest_bytes != expected_manifest_bytes:
             return False
         receipts = (expected.slate, *expected.history_partitions)
+        source_identities = (slate_source_identity, *history_source_identities)
         return all(
-            _candidate_file_is_valid(root, receipt.relative_path, receipt.rows, receipt.sha256)
-            for receipt in receipts
+            _candidate_file_is_valid(
+                root,
+                receipt.relative_path,
+                receipt.rows,
+                receipt.sha256,
+                source_identity,
+            )
+            for receipt, source_identity in zip(
+                receipts, source_identities, strict=True
+            )
         )
     except (OSError, ValidationError, StageCError, pa.ArrowException):
         return False
@@ -331,10 +460,13 @@ def _candidate_file_is_valid(
     relative_path: str,
     rows: int,
     digest: str,
+    source_identity: tuple[int, int] | None,
 ) -> bool:
     path = root.joinpath(*relative_path.split("/"))
+    candidate_identity = _safe_regular_file_identity(path)
     return (
-        _safe_regular_file_identity(path) is not None
+        candidate_identity is not None
+        and candidate_identity != source_identity
         and sha256(path.read_bytes()).hexdigest() == digest
         and pq.read_metadata(path).num_rows == rows
     )

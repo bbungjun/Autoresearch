@@ -15,17 +15,21 @@ import pytest
 
 from autoresearch.research_harness import (
     CandidateDataViewRequest,
+    EvaluationSnapshotRequest,
     LocalEvaluationFixtureRequest,
     StageCError,
     StageCErrorCode,
     build_local_evaluation_fixture,
+    build_evaluation_snapshot,
     materialize_candidate_data_view,
 )
 from autoresearch.research_harness.evaluation_snapshot_models import (
     EvaluationSnapshotManifest,
 )
+from autoresearch.research_harness.evaluation_source import ArrowActionLogSource
 from autoresearch.research_harness.local_evaluation_fixture import (
     FixtureActionLogSource,
+    _validated_judge_handoff,
 )
 
 
@@ -107,6 +111,30 @@ def candidate_fixture(tmp_path_factory: pytest.TempPathFactory):
     return state_root, receipt
 
 
+@pytest.fixture(scope="module")
+def arrow_snapshot(candidate_fixture, tmp_path_factory: pytest.TempPathFactory):
+    _, fixture = candidate_fixture
+    output_root = tmp_path_factory.mktemp("candidate-arrow-snapshot")
+    action_root = fixture.fixture_root / "action_log"
+    source = ArrowActionLogSource.from_root(action_root.as_uri())
+    receipt = build_evaluation_snapshot(
+        EvaluationSnapshotRequest(
+            action_log_root=source.opaque_root,
+            history_start_date=date(2026, 8, 30),
+            evaluation_start_date=EVALUATION_DATE,
+            evaluation_end_date=EVALUATION_DATE,
+            slate_id_cutover_date=date(2026, 8, 30),
+            output_root=output_root,
+        ),
+        source=source,
+    )
+    handoff = _validated_judge_handoff(
+        receipt.target_path,
+        expected_fingerprint=str(receipt.snapshot_fingerprint),
+    )
+    return action_root, source, handoff
+
+
 def test_materializes_only_validation_slate_and_candidate_history(
     candidate_fixture,
     tmp_path: Path,
@@ -163,7 +191,57 @@ def test_complete_identical_view_is_reused(candidate_fixture, tmp_path: Path) ->
 
 def test_reuse_still_revalidates_source_bytes(candidate_fixture, tmp_path: Path) -> None:
     _, fixture = candidate_fixture
-    copied_fixture = tmp_path / "copied-fixture"
+    source = FixtureActionLogSource(fixture.fixture_root, fixture.descriptor_sha256)
+    materialize_candidate_data_view(
+        CandidateDataViewRequest(fixture.judge, tmp_path), source=source
+    )
+    tampered = _io_path(
+        fixture.fixture_root / "action_log/dt=2026-08-30/part-0.parquet"
+    )
+    original = tampered.read_bytes()
+    try:
+        tampered.write_bytes(b"tampered")
+        with pytest.raises(StageCError) as captured:
+            materialize_candidate_data_view(
+                CandidateDataViewRequest(fixture.judge, tmp_path), source=source
+            )
+    finally:
+        tampered.write_bytes(original)
+    assert captured.value.code is StageCErrorCode.JUDGE_HANDOFF_INVALID
+
+
+def test_existing_candidate_history_cannot_be_reused_as_its_own_source(
+    candidate_fixture,
+    tmp_path: Path,
+) -> None:
+    _, fixture = candidate_fixture
+    genuine = FixtureActionLogSource(fixture.fixture_root, fixture.descriptor_sha256)
+    receipt = materialize_candidate_data_view(
+        CandidateDataViewRequest(fixture.judge, tmp_path), source=genuine
+    )
+    adversarial = FixtureActionLogSource(
+        receipt.root / "history",
+        fixture.descriptor_sha256,
+    )
+
+    with pytest.raises(StageCError) as captured:
+        materialize_candidate_data_view(
+            CandidateDataViewRequest(fixture.judge, tmp_path), source=adversarial
+        )
+
+    assert captured.value.code in {
+        StageCErrorCode.FIXTURE_REQUEST_INVALID,
+        StageCErrorCode.JUDGE_HANDOFF_INVALID,
+        StageCErrorCode.CANDIDATE_VIEW_CONFLICT,
+    }
+
+
+def test_first_materialization_rejects_source_inside_destination(
+    candidate_fixture,
+    tmp_path: Path,
+) -> None:
+    _, fixture = candidate_fixture
+    adversarial_root = tmp_path / "harness_in" / "history"
     for partition in fixture.action_log_partitions[:2]:
         source_path = (
             fixture.fixture_root
@@ -172,26 +250,21 @@ def test_reuse_still_revalidates_source_bytes(candidate_fixture, tmp_path: Path)
             / "part-0.parquet"
         )
         target_path = (
-            copied_fixture
+            adversarial_root
             / "action_log"
             / f"dt={partition.dt.isoformat()}"
             / "part-0.parquet"
         )
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_bytes(_io_path(source_path).read_bytes())
-    source = FixtureActionLogSource(copied_fixture, fixture.descriptor_sha256)
-    destination = tmp_path / "candidate"
-    destination.mkdir()
-    materialize_candidate_data_view(
-        CandidateDataViewRequest(fixture.judge, destination), source=source
-    )
-    tampered = copied_fixture / "action_log/dt=2026-08-30/part-0.parquet"
-    tampered.write_bytes(b"tampered")
+    source = FixtureActionLogSource(adversarial_root, fixture.descriptor_sha256)
+
     with pytest.raises(StageCError) as captured:
         materialize_candidate_data_view(
-            CandidateDataViewRequest(fixture.judge, destination), source=source
+            CandidateDataViewRequest(fixture.judge, tmp_path), source=source
         )
-    assert captured.value.code is StageCErrorCode.JUDGE_HANDOFF_INVALID
+
+    assert captured.value.code is StageCErrorCode.FIXTURE_REQUEST_INVALID
 
 
 def test_candidate_payload_does_not_disclose_judge_only_values(
@@ -233,22 +306,24 @@ def test_candidate_payload_does_not_disclose_judge_only_values(
     assert all(token not in payload for token in forbidden)
 
 
-class _RecordingSource(FixtureActionLogSource):
+class _WrongPartitionUriSource(FixtureActionLogSource):
     def __init__(self, fixture_root: Path, descriptor_digest: str) -> None:
-        super().__init__(fixture_root, descriptor_digest)
         self.opened: list[date] = []
+        super().__init__(
+            fixture_root,
+            descriptor_digest,
+            _opened_dates=self.opened,
+        )
 
-    def open_partition(self, dt: date):
-        self.opened.append(dt)
-        return super().open_partition(dt)
-
-
-class _WrongPartitionUriSource(_RecordingSource):
     def partition_uri(self, dt: date) -> str:
         return f"{self.opaque_root}/wrong/dt={dt.isoformat()}"
 
 
-class _WrongBytesSource(_RecordingSource):
+class _UntrustedFixtureSource(FixtureActionLogSource):
+    def __init__(self, fixture_root: Path, descriptor_digest: str) -> None:
+        self.opened: list[date] = []
+        super().__init__(fixture_root, descriptor_digest)
+
     def open_partition(self, dt: date):
         self.opened.append(dt)
         return pa.BufferReader(b"not parquet")
@@ -256,13 +331,18 @@ class _WrongBytesSource(_RecordingSource):
 
 def test_source_identity_is_checked_before_any_open(candidate_fixture, tmp_path: Path) -> None:
     _, fixture = candidate_fixture
-    source = _RecordingSource(fixture.fixture_root, "0" * 64)
+    opened: list[date] = []
+    source = FixtureActionLogSource(
+        fixture.fixture_root,
+        "0" * 64,
+        _opened_dates=opened,
+    )
     with pytest.raises(StageCError) as captured:
         materialize_candidate_data_view(
             CandidateDataViewRequest(fixture.judge, tmp_path), source=source
         )
     assert captured.value.code is StageCErrorCode.JUDGE_HANDOFF_INVALID
-    assert source.opened == []
+    assert opened == []
 
 
 def test_source_partition_uri_is_checked_before_any_open(
@@ -279,27 +359,77 @@ def test_source_partition_uri_is_checked_before_any_open(
     assert source.opened == []
 
 
-def test_source_bytes_and_parquet_integrity_are_checked(
+def test_fixture_uri_rejects_untrusted_source_implementation(
     candidate_fixture,
     tmp_path: Path,
 ) -> None:
     _, fixture = candidate_fixture
-    source = _WrongBytesSource(fixture.fixture_root, fixture.descriptor_sha256)
+    source = _UntrustedFixtureSource(fixture.fixture_root, fixture.descriptor_sha256)
     with pytest.raises(StageCError) as captured:
         materialize_candidate_data_view(
             CandidateDataViewRequest(fixture.judge, tmp_path), source=source
         )
     assert captured.value.code is StageCErrorCode.JUDGE_HANDOFF_INVALID
+    assert source.opened == []
+
+
+class _WrongArrowBytesSource:
+    def __init__(self, source: ArrowActionLogSource) -> None:
+        self._source = source
+        self.opaque_root = source.opaque_root
+        self.opened: list[date] = []
+
+    def partition_uri(self, dt: date) -> str:
+        return self._source.partition_uri(dt)
+
+    def open_partition(self, dt: date):
+        self.opened.append(dt)
+        return pa.BufferReader(b"not parquet")
+
+    def _physical_source_root(self) -> Path | None:
+        return self._source._physical_source_root()
+
+    def _physical_partition_path(self, dt: date) -> Path | None:
+        return self._source._physical_partition_path(dt)
+
+
+def test_local_arrow_source_bytes_and_parquet_integrity_are_checked(
+    arrow_snapshot,
+    tmp_path: Path,
+) -> None:
+    _, genuine, handoff = arrow_snapshot
+    source = _WrongArrowBytesSource(genuine)
+    with pytest.raises(StageCError) as captured:
+        materialize_candidate_data_view(
+            CandidateDataViewRequest(handoff, tmp_path), source=source
+        )
+    assert captured.value.code is StageCErrorCode.JUDGE_HANDOFF_INVALID
     assert source.opened == [date(2026, 8, 30)]
+
+
+def test_local_arrow_source_root_cannot_contain_destination(
+    arrow_snapshot,
+) -> None:
+    action_root, source, handoff = arrow_snapshot
+    with pytest.raises(StageCError) as captured:
+        materialize_candidate_data_view(
+            CandidateDataViewRequest(handoff, action_root), source=source
+        )
+    assert captured.value.code is StageCErrorCode.FIXTURE_REQUEST_INVALID
 
 
 def test_only_manifest_history_dates_are_opened(candidate_fixture, tmp_path: Path) -> None:
     _, fixture = candidate_fixture
-    source = _RecordingSource(fixture.fixture_root, fixture.descriptor_sha256)
+    opened: list[date] = []
+    source = FixtureActionLogSource(
+        fixture.fixture_root,
+        fixture.descriptor_sha256,
+        _opened_dates=opened,
+    )
     materialize_candidate_data_view(
         CandidateDataViewRequest(fixture.judge, tmp_path), source=source
     )
-    assert source.opened == [date(2026, 8, 30), date(2026, 8, 31)]
+    assert opened == [date(2026, 8, 30), date(2026, 8, 31)]
 
 
 def test_existing_partial_extra_or_tampered_view_conflicts(
@@ -377,6 +507,32 @@ def test_judge_snapshot_marker_manifest_and_all_artifacts_are_revalidated(
         materialize_candidate_data_view(
             CandidateDataViewRequest(handoff, destination), source=source
         )
+    assert captured.value.code is StageCErrorCode.JUDGE_HANDOFF_INVALID
+
+
+def test_fixture_source_is_bound_to_snapshot_outer_provenance(
+    candidate_fixture,
+    tmp_path: Path,
+) -> None:
+    _, fixture = candidate_fixture
+    spoof_fixture = tmp_path / "spoof-fixture"
+    copied_root = (
+        spoof_fixture
+        / "evaluation-snapshots"
+        / "by-hash"
+        / str(fixture.judge.snapshot_fingerprint)
+    )
+    _copy_snapshot(fixture.judge.snapshot_root, copied_root)
+    spoof_handoff = replace(fixture.judge, snapshot_root=copied_root)
+    source = FixtureActionLogSource(fixture.fixture_root, fixture.descriptor_sha256)
+    destination = tmp_path / "candidate"
+    destination.mkdir()
+
+    with pytest.raises(StageCError) as captured:
+        materialize_candidate_data_view(
+            CandidateDataViewRequest(spoof_handoff, destination), source=source
+        )
+
     assert captured.value.code is StageCErrorCode.JUDGE_HANDOFF_INVALID
 
 
@@ -508,3 +664,15 @@ def test_destination_files_are_independent_single_link_copies(
         target_stat.st_ino,
     )
     assert target_stat.st_nlink == 1
+    snapshot = EvaluationSnapshotManifest.model_validate_json(
+        _io_path(fixture.judge.snapshot_root / "manifest.json").read_bytes()
+    )
+    slate_source = _io_path(
+        fixture.judge.snapshot_root / snapshot.validation.artifacts.slate.relative_path
+    ).stat()
+    slate_target = (receipt.root / "slate.parquet").stat()
+    assert (slate_source.st_dev, slate_source.st_ino) != (
+        slate_target.st_dev,
+        slate_target.st_ino,
+    )
+    assert slate_target.st_nlink == 1

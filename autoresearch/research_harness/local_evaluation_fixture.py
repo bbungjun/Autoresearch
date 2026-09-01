@@ -5,7 +5,7 @@ production 일일 action log 4개를 생성하고 P0-2가 소비할 검증된 Ju
 
 [기능] 물리 Judge 경로를 canonical fixture URI로 가리는 source adapter, coverage 검사,
 derived path·lock alias 검증, content-addressed write-once fixture 게시와 완성 target
-재검증을 제공한다.
+재검증 및 candidate source의 outer fixture provenance 결속을 제공한다.
 
 [비책임] candidate data view·workspace·argv·환경 구성과 metric/Judge 판정은 후속 Stage C 및
 P0-2 모듈이 담당한다. 임의 hostile filesystem actor와의 경쟁 방어도 담당하지 않는다.
@@ -94,9 +94,18 @@ class _FixtureIntegrityReceipt(BaseModel):
 class FixtureActionLogSource(ActionLogSource):
     """Read physical fixture action logs while exposing canonical identity URIs."""
 
-    def __init__(self, fixture_root: Path, descriptor_digest: str) -> None:
+    def __init__(
+        self,
+        fixture_root: Path,
+        descriptor_digest: str,
+        *,
+        _opened_dates: list[date] | None = None,
+    ) -> None:
+        self._fixture_root = fixture_root
+        self._descriptor_digest = descriptor_digest
         self._physical_root = fixture_root / "action_log"
         self._opaque_root = f"fixture://{descriptor_digest}/action-log"
+        self._opened_dates = _opened_dates
 
     @property
     def opaque_root(self) -> str:
@@ -110,7 +119,12 @@ class FixtureActionLogSource(ActionLogSource):
 
         return self._physical_root / f"dt={dt.isoformat()}" / "part-0.parquet"
 
+    def _physical_source_root(self) -> Path:
+        return self._physical_root
+
     def open_partition(self, dt: date) -> AbstractContextManager[pa.NativeFile]:
+        if self._opened_dates is not None:
+            self._opened_dates.append(dt)
         return pa.OSFile(
             str(self._physical_partition_path(dt)),
             "rb",
@@ -449,6 +463,63 @@ def _fixture_is_valid(
         return True
     except (OSError, ValidationError, StageCError, pa.ArrowException):
         return False
+
+
+def _require_fixture_source_provenance(
+    source: ActionLogSource,
+    handoff: JudgeSnapshotHandoff,
+) -> Path | None:
+    """Bind fixture:// identity to one fully validated physical fixture root."""
+
+    try:
+        opaque_root = source.opaque_root
+    except (AttributeError, OSError, TypeError, ValueError):
+        raise _fixture_error(
+            StageCErrorCode.JUDGE_HANDOFF_INVALID,
+            "fixture_source_provenance",
+        ) from None
+    if not isinstance(opaque_root, str):
+        raise _fixture_error(
+            StageCErrorCode.JUDGE_HANDOFF_INVALID,
+            "fixture_source_provenance",
+        )
+    if not opaque_root.startswith("fixture://"):
+        return None
+    if type(source) is not FixtureActionLogSource:
+        raise _fixture_error(
+            StageCErrorCode.JUDGE_HANDOFF_INVALID,
+            "fixture_source_provenance",
+        )
+    fixture_root = source._fixture_root
+    descriptor_digest = source._descriptor_digest
+    expected_root = f"fixture://{descriptor_digest}/action-log"
+    expected_snapshot = (
+        fixture_root
+        / "evaluation-snapshots"
+        / "by-hash"
+        / str(handoff.snapshot_fingerprint)
+    )
+    try:
+        descriptor_bytes = _io_path(fixture_root / "fixture.json").read_bytes()
+        descriptor = FixtureDescriptor.model_validate_json(descriptor_bytes)
+        valid = (
+            opaque_root == expected_root
+            and sha256(descriptor_bytes).hexdigest() == descriptor_digest
+            and _resolved_without_link(source._physical_root)
+            and source._physical_root.resolve(strict=True)
+            == (fixture_root / "action_log").resolve(strict=True)
+            and handoff.snapshot_root.resolve(strict=True)
+            == expected_snapshot.resolve(strict=True)
+            and _fixture_is_valid(fixture_root, descriptor, descriptor_digest)
+        )
+    except (OSError, RuntimeError, ValidationError, StageCError, pa.ArrowException):
+        valid = False
+    if not valid:
+        raise _fixture_error(
+            StageCErrorCode.JUDGE_HANDOFF_INVALID,
+            "fixture_source_provenance",
+        )
+    return fixture_root
 
 
 def _receipt_from_complete_fixture(

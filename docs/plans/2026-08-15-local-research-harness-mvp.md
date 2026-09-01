@@ -510,7 +510,9 @@ Task 1 전체와 Research Harness MVP는 완료 처리하지 않는다.
       `dt < T` history의 물리적 byte-copy뿐이다. fixture는 같은 내부 adapter를 주입한다
 - [x] candidate view에서 labels/final, 전체 snapshot manifest·root·fingerprint, 평가 source
       URI, fixture descriptor·seed·input과 Judge path를 filename·내용·receipt 모두에서
-      배제한다. symlink·junction·hardlink를 거부하고 identical complete target만 reuse한다
+      배제한다. fixture source는 outer integrity와 같은 physical root에 결속하고 source와
+      candidate의 filesystem identity alias, symlink·junction·hardlink를 거부하며 identical
+      complete target만 reuse한다
 - [x] `CandidateDataViewRequest`에 split/final 선택 parameter를 두지 않는다. final slate는
       consumption registry 권한을 요구하는 별도 후속 interface로 남긴다
 - [x] Stage B `_SUCCESS`, typed manifest, manifest SHA와 네 artifact digest·row count를

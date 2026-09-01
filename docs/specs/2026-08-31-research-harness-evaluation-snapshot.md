@@ -969,15 +969,25 @@ sibling staging의 exact tree를 검증한 뒤 atomic rename하며, 완전히 �
 `reused=true`로 허용합니다. final 선택과 consumption registry는 이 interface에 추가하지
 않았습니다.
 
+`fixture://` identity는 문자열 일치만 신뢰하지 않습니다. exact 내부
+`FixtureActionLogSource`의 physical fixture root를 얻어 snapshot이 그 root의
+`evaluation-snapshots/by-hash/<fingerprint>`인지 확인하고, outer `_SUCCESS`, `fixture.json`,
+descriptor digest와 전체 fixture integrity receipt를 다시 검증합니다. Local fixture와 local
+Arrow source는 physical root·partition path가 candidate destination과 서로 포함 관계이면
+거부합니다. Slate와 history source의 가능한 `(st_dev, st_ino)`를 캡처해 최초 게시와 reuse
+모두에서 candidate 파일 identity가 source와 다르고 link count가 1인지 확인하며, remote
+source는 local identity가 없는 대신 기존 URI·bytes digest·Parquet row receipt 경계를 유지합니다.
+
 ### Result
 
 실제 production fixture를 사용하는 focused 테스트에서 validation slate와 T-2/T-1 history의
 byte identity·행 수, canonical manifest receipt, 허용 날짜만 open하는 동작을 확인했습니다.
 root/URI mismatch는 source open 전에 실패하고 bad bytes, Judge marker·manifest·네 artifact
-변조, destination/source reparse와 hardlink, partial·extra·tampered target은 sanitized typed
-error로 거부됩니다. Receipt와 게시 tree의 파일명·전체 bytes를 탐색해 labels/final ID·path,
+변조, fixture provenance spoof, destination/source reparse·포함 관계와 hardlink,
+source↔candidate inode alias, partial·extra·tampered target은 sanitized typed error로
+거부됩니다. Receipt와 게시 tree의 파일명·전체 bytes를 탐색해 labels/final ID·path,
 snapshot fingerprint, source URI, fixture seed와 Judge path가 없음을 확인했습니다. 동일 완성
-target만 `reused=true`였고 focused 테스트 24개가 통과했습니다. 독립 두 Judge root의 최종
+target만 `reused=true`였고 focused 테스트 29개가 통과했습니다. 독립 두 Judge root의 최종
 프로토콜과 실제 worktree/subprocess/final consumption registry는 여전히 후속 범위입니다.
 
 ## Portfolio Record — Stage B snapshot builder
