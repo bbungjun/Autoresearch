@@ -130,11 +130,26 @@ def test_public_surface_exports_only_snapshot_entrypoint_contract() -> None:
     # Given
     expected_exports = {
         "ActionLogSource",
+        "CandidateDataManifest",
+        "CandidateDataViewReceipt",
+        "CandidateDataViewRequest",
+        "CandidateHistoryReceipt",
         "EvaluationSnapshotError",
         "EvaluationSnapshotReceipt",
         "EvaluationSnapshotRequest",
+        "FixtureDescriptor",
+        "FixtureInputReceipt",
+        "FixturePartitionReceipt",
+        "JudgeSnapshotHandoff",
+        "LocalEvaluationFixtureReceipt",
+        "LocalEvaluationFixtureRequest",
         "SnapshotErrorCode",
+        "StageCError",
+        "StageCErrorCode",
         "build_evaluation_snapshot",
+        "canonical_fixture_dates",
+        "descriptor_sha256",
+        "select_fixture_user_ids",
     }
 
     # When
