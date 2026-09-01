@@ -500,8 +500,9 @@ Task 1 전체와 Research Harness MVP는 완료 처리하지 않는다.
       `fixture://<descriptor_sha256>/action-log/...` canonical URI만 보고한다. production
       local/GCS adapter 계약은 바꾸지 않는다
 - [x] canonical fixture는 `T-2..T+1`, 24 candidates, validation user 160명, final user
-      40명을 결정적으로 만들고 양 split이 각각 click-positive slate 30개·20% 이상 및
-      clicked/non-clicked row를 만족하게 한다
+      40명을 결정적으로 만들고 양 split의 모든 evaluation slate가 24행·click-positive
+      (`click_positive_slate_count == slate_count`, ratio `1.0`)이며 clicked/non-clicked row를
+      함께 만족하게 한다
 - [ ] `CandidateDataView` module의
       `materialize_candidate_data_view(CandidateDataViewRequest, *, source: ActionLogSource)`를
       구현한다. source root·partition URI를 Judge manifest receipt와 먼저 대조하며 exact

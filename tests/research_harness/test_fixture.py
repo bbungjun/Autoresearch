@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from concurrent.futures import ProcessPoolExecutor
 from hashlib import sha256
 import inspect
 import json
@@ -8,6 +9,7 @@ import os
 from pathlib import Path
 import subprocess
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
@@ -446,6 +448,49 @@ def test_coverage_requires_exact_split_user_counts(
     assert caught.value.code == StageCErrorCode.FIXTURE_COVERAGE_INSUFFICIENT
 
 
+def test_coverage_rejects_when_only_some_evaluation_slates_are_click_positive(
+    built_fixture, tmp_path: Path
+) -> None:
+    _, receipt = built_fixture
+    copied = tmp_path / receipt.judge.snapshot_fingerprint
+    _copy_snapshot(receipt.judge.snapshot_root, copied)
+    manifest_path = copied / "manifest.json"
+    manifest = EvaluationSnapshotManifest.model_validate_json(manifest_path.read_bytes())
+    labels_path = copied / manifest.validation.artifacts.labels.relative_path
+    labels = pq.read_table(labels_path)
+    rows = labels.to_pylist()
+    positive_slates = sorted({row["slate_id"] for row in rows})[:40]
+    positive_set = set(positive_slates)
+    for row in rows:
+        row["clicked"] = row["clicked"] and row["slate_id"] in positive_set
+    pq.write_table(pa.Table.from_pylist(rows, schema=labels.schema), labels_path)
+    counts = manifest.validation.counts
+    changed_counts = counts.__class__(
+        user_count=counts.user_count,
+        slate_count=counts.slate_count,
+        row_count=counts.row_count,
+        clicked_row_count=40,
+        click_positive_slate_count=40,
+        click_positive_slate_ratio=0.25,
+        mean_slate_size=counts.mean_slate_size,
+    )
+    changed = manifest.model_copy(
+        update={
+            "validation": manifest.validation.__class__(
+                evaluation_id=manifest.validation.evaluation_id,
+                counts=changed_counts,
+                optional_non_null_ratio=manifest.validation.optional_non_null_ratio,
+                artifacts=manifest.validation.artifacts,
+            )
+        }
+    )
+    manifest_path.write_bytes(canonical_json_bytes(changed.model_dump(mode="json")))
+
+    with pytest.raises(StageCError) as caught:
+        _validate_coverage(copied)
+    assert caught.value.code == StageCErrorCode.FIXTURE_COVERAGE_INSUFFICIENT
+
+
 @pytest.mark.parametrize(
     "tamper",
     ("success", "schema", "fingerprint", "manifest_sha", "artifact_digest", "artifact_rows"),
@@ -554,6 +599,66 @@ def test_preexisting_hardlinked_descriptor_lock_is_not_opened_or_modified(
     assert caught.value.code == StageCErrorCode.FIXTURE_STATE_CONFLICT
     assert external_lock.read_bytes() == b"external-content"
     assert not (output_root / receipt.descriptor_sha256).exists()
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO is unavailable")
+def test_extra_fifo_in_complete_fixture_conflicts(built_fixture) -> None:
+    state_root, receipt = built_fixture
+    fifo = receipt.fixture_root / "extra-fifo"
+    os.mkfifo(fifo)
+    try:
+        with pytest.raises(StageCError) as caught:
+            build_local_evaluation_fixture(
+                LocalEvaluationFixtureRequest(state_root, EVALUATION_DATE, 917)
+            )
+        assert caught.value.code == StageCErrorCode.FIXTURE_STATE_CONFLICT
+    finally:
+        fifo.unlink()
+
+
+def test_staging_cleanup_failure_warns_without_replacing_success(
+    built_fixture,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    state_root, _ = built_fixture
+    private_path = "private-cleanup-path"
+
+    def fail_cleanup(_path: Path) -> None:
+        raise OSError(private_path)
+
+    monkeypatch.setattr(fixture_module.shutil, "rmtree", fail_cleanup)
+    with caplog.at_level("WARNING", logger=fixture_module.__name__):
+        receipt = build_local_evaluation_fixture(
+            LocalEvaluationFixtureRequest(state_root, EVALUATION_DATE, 917)
+        )
+
+    assert receipt.reused is True
+    assert "fixture_staging_cleanup_failed" in caplog.text
+    assert private_path not in caplog.text
+
+    receipt.fixture_root.joinpath("_SUCCESS").write_bytes(b"{}")
+    with pytest.raises(StageCError) as caught:
+        build_local_evaluation_fixture(
+            LocalEvaluationFixtureRequest(state_root, EVALUATION_DATE, 917)
+        )
+    assert caught.value.code == StageCErrorCode.FIXTURE_STATE_CONFLICT
+    assert caught.value.stage == "fixture_reuse_validation"
+
+
+def test_concurrent_builders_publish_once_and_reuse_once(tmp_path: Path) -> None:
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    request = LocalEvaluationFixtureRequest(state_root, EVALUATION_DATE, 1234)
+
+    with ProcessPoolExecutor(max_workers=2) as executor:
+        receipts = tuple(executor.map(build_local_evaluation_fixture, (request, request)))
+
+    assert sorted(receipt.reused for receipt in receipts) == [False, True]
+    assert receipts[0].fixture_root == receipts[1].fixture_root
+    by_hash = state_root / "fixtures" / "by-hash"
+    assert not tuple(by_hash.glob(".staging-*"))
+    assert build_local_evaluation_fixture(request).reused is True
 
 
 @pytest.mark.parametrize("boundary", ("producer", "snapshot"))

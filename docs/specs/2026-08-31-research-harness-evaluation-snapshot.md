@@ -668,8 +668,9 @@ click, event/slate ID를 보정하는 것은 금지한다. Seam을 생략한 pro
 기존 `contract_version` 의미이며 golden source projection/hash로 봉인한다.
 
 각 user의 평가 slate는 24행이며 click-positive여야 한다. 따라서 validation/final 각각
-click-positive slate 30개 이상, 유효 slate 비율 20% 이상, clicked/non-clicked row를 모두
-만족해야 한다. 이 조건은 P0-1 structural coverage보다 강하며 P0-2 Judge의 ranking metric
+`click_positive_slate_count == slate_count`, `click_positive_slate_ratio == 1.0`이고
+clicked/non-clicked row를 모두 포함해야 한다. 30개·20%는 최소 기반 조건일 뿐 일부 slate의
+click 누락을 허용하지 않는다. 이 조건은 P0-1 structural coverage보다 강하며 P0-2 Judge의 ranking metric
 성공 경로가 같은 fixture를 재사용하게 한다. 미달이면 `fixture_coverage_insufficient`로
 fixture 전체를 게시하지 않는다.
 
@@ -701,7 +702,10 @@ validation/final evaluation ID, validation/final의 slate·label artifact receip
 Reuse는 이 marker를 먼저 canonical parse한 뒤 descriptor/input/action-log/snapshot을 receipt와
 대조한다. Fixture root와 snapshot root는 위 canonical layout에서 파생한 file·directory
 allowlist와 정확히 같아야 하며 extra file/dir, 게시 root 내부 lock/staging, symlink·junction·
-hardlink alias를 거부한다. Cooperating lock과 staging은 final fixture root 밖에 둔다.
+hardlink alias를 거부한다. 모든 tree entry는 `lstat` 기준 실제 directory 또는 single-link regular
+file이어야 하며 FIFO·socket·device·unknown mode도 거부한다. Cooperating lock과 staging은 final
+fixture root 밖에 둔다. Descriptor lock은 유지되는 1-byte range를 truncate하지 않아 cooperating
+process의 같은 descriptor 게시를 직렬화한다.
 
 이 receipt는 부분 게시와 우발적·비협력 변조를 탐지하는 local integrity anchor이지 신뢰 경계를
 넘는 서명은 아니다. 같은 UID의 hostile actor가 모든 artifact와 manifest, outer marker를
@@ -921,7 +925,7 @@ event 의미와 ID가 같아도 Parquet bytes는 달라졌으며, 이는 독립 
 production writer에 전달해 `generated_at`까지 결정적으로 쓰며, builder의 사후 Parquet rewrite는
 사용하지 않습니다. 내부 `FixtureActionLogSource`는 물리 Parquet를 읽되 Stage B에는
 `fixture://<descriptor-hash>/action-log` identity만 전달합니다. Snapshot의 두 split은 실제
-slate/label artifact를 다시 읽어 user-slate당 24행, click-positive slate 30개·20% 이상,
+slate/label artifact를 다시 읽어 user-slate당 24행, 모든 slate click-positive,
 clicked/non-clicked 공존과 160/40 user 수를 검사합니다. Handoff 생성과 fixture reuse는 canonical
 outer `_SUCCESS` receipt, exact tree, typed manifest, fingerprint, manifest SHA-256, 네 artifact의
 digest·row count, 입력과 action-log receipt를 다시 검증하며 상이하거나 부분인 target을
@@ -933,12 +937,16 @@ digest·row count, 입력과 action-log receipt를 다시 검증하며 상이하
 holdout 40개 slate 모두 24행·click-positive 조건을 충족했습니다. 같은 seed 917·평가일의
 서로 다른 두 Judge root를 사용하는 자동화 테스트는 같은 descriptor, source digest, event ID,
 evaluation ID와 snapshot fingerprint를 만들었고 seed 918은 다른 source digest를 만들었습니다.
-독립 프로세스 두 run의 최종 실증은 CandidateDataView와 함께 남아 있습니다. Focused 테스트는 완성
+서로 다른 Judge root의 독립 최종 비교는 CandidateDataView와 함께 남아 있습니다. 같은 root에서
+동시에 시작한 실제 두 process는 descriptor lock 아래 한 번만 게시되고 다른 한 번은 검증된
+`reused=true`가 됨을 확인했습니다. Focused 테스트는 완성
 target reuse, partial/tamper conflict, handoff marker·schema·fingerprint·manifest bytes·artifact
-digest/row-count·extra tree 변조와 coverage 실패의 typed code를 확인합니다. CandidateDataView와 실제
+digest/row-count·extra tree와 special-entry 변조, 일부만 click-positive인 coverage 실패의 typed
+code를 확인합니다. Staging cleanup 실패는 원문 path나 원인 문자열 없이 warning을 남기고 기존
+성공/실패를 덮지 않습니다. CandidateDataView와 실제
 workspace/subprocess 환경은 생성하지 않았으며 Stage C 전체 완료는 주장하지 않습니다.
-최신 검증은 fixture focused 28개 통과·Windows symlink 권한 1개 skip,
-전체 `tests/research_harness` 226개 통과·2개 skip, `tests/action_log_generation` 252개 통과였고
+최신 검증은 fixture focused 31개 통과·Windows 전용 제약 2개 skip,
+전체 `tests/research_harness` 229개 통과·3개 skip, `tests/action_log_generation` 254개 통과였고
 changed-file Ruff와 `git diff --check`도 통과했습니다.
 
 ## Portfolio Record — Stage B snapshot builder

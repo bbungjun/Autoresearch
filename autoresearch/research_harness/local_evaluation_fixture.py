@@ -15,13 +15,16 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager
 from datetime import UTC, date, datetime
+import errno
 from hashlib import sha256
+import logging
 import os
 from pathlib import Path
 import shutil
 import stat
 from tempfile import mkdtemp
-from typing import Final, Literal
+from time import sleep
+from typing import BinaryIO, Final, Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -56,11 +59,7 @@ from autoresearch.research_harness.fixture_models import (
     LocalEvaluationFixtureRequest,
 )
 from autoresearch.research_harness.slate import build_evaluation_snapshot
-from autoresearch.research_harness.snapshot_publisher import (
-    _acquire_lock,
-    _release_lock,
-)
-
+logger = logging.getLogger(__name__)
 
 _FIXTURES_PATH: Final = Path("fixtures") / "by-hash"
 _ARTIFACT_COUNT: Final = 4
@@ -139,7 +138,7 @@ def build_local_evaluation_fixture(
                     StageCErrorCode.FIXTURE_STATE_CONFLICT,
                     "fixture_lock_validation",
                 )
-            _acquire_lock(lock_file)
+            _acquire_descriptor_lock(lock_file)
             try:
                 if target.exists():
                     if not _fixture_is_valid(target, descriptor, descriptor_digest):
@@ -184,7 +183,7 @@ def build_local_evaluation_fixture(
                     reused=False,
                 )
             finally:
-                _release_lock(lock_file)
+                _release_descriptor_lock(lock_file)
     except StageCError:
         raise
     except (
@@ -200,7 +199,10 @@ def build_local_evaluation_fixture(
             try:
                 shutil.rmtree(staging)
             except OSError:
-                pass
+                logger.warning(
+                    "fixture_staging_cleanup_failed",
+                    extra={"stage": "fixture_staging_cleanup"},
+                )
 
 
 def _build_staged_fixture(
@@ -255,7 +257,7 @@ def _build_staged_fixture(
 def _validate_coverage(snapshot_root: Path) -> None:
     try:
         manifest = EvaluationSnapshotManifest.model_validate_json(
-            (snapshot_root / "manifest.json").read_bytes()
+            _io_path(snapshot_root / "manifest.json").read_bytes()
         )
     except (OSError, ValidationError):
         raise _fixture_error(
@@ -300,8 +302,9 @@ def _validate_coverage(snapshot_root: Path) -> None:
             or counts.clicked_row_count != clicked_rows
             or counts.click_positive_slate_count != len(positive_slates)
             or abs(counts.click_positive_slate_ratio - positive_ratio) > 1e-12
-            or counts.click_positive_slate_count < 30
-            or counts.click_positive_slate_ratio < 0.2
+            or counts.click_positive_slate_count != slate_count
+            or len(positive_slates) != slate_count
+            or counts.click_positive_slate_ratio != 1.0
             or counts.clicked_row_count <= 0
             or counts.clicked_row_count >= counts.row_count
             or counts.mean_slate_size != 24.0
@@ -333,7 +336,7 @@ def _validated_judge_handoff(
             snapshot_root, _SNAPSHOT_FILES, _SNAPSHOT_DIRS
         ):
             raise ValueError
-        manifest_bytes = (snapshot_root / "manifest.json").read_bytes()
+        manifest_bytes = _io_path(snapshot_root / "manifest.json").read_bytes()
         manifest = EvaluationSnapshotManifest.model_validate_json(manifest_bytes)
         fingerprint = str(manifest.snapshot_fingerprint)
         if (
@@ -341,7 +344,7 @@ def _validated_judge_handoff(
             or snapshot_root.name != fingerprint
             or expected_fingerprint not in {None, fingerprint}
             or calculate_snapshot_fingerprint(manifest) != manifest.snapshot_fingerprint
-            or (snapshot_root / "_SUCCESS").read_text(encoding="utf-8")
+            or _io_path(snapshot_root / "_SUCCESS").read_text(encoding="utf-8")
             != f"{fingerprint}\n"
         ):
             raise ValueError
@@ -471,7 +474,11 @@ def _receipt_from_complete_fixture(
 
 def _single_snapshot_root(root: Path) -> Path:
     snapshot_parent = root / "evaluation-snapshots" / "by-hash"
-    roots = tuple(path for path in snapshot_parent.iterdir() if path.is_dir())
+    roots = tuple(
+        snapshot_parent / path.name
+        for path in _io_path(snapshot_parent).iterdir()
+        if path.is_dir()
+    )
     if len(roots) != 1:
         raise _fixture_error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "judge_snapshot_lookup")
     return roots[0]
@@ -480,7 +487,7 @@ def _single_snapshot_root(root: Path) -> Path:
 def _manifest_partitions(snapshot_root: Path) -> tuple[SourcePartitionReceipt, ...]:
     try:
         manifest = EvaluationSnapshotManifest.model_validate_json(
-            (snapshot_root / "manifest.json").read_bytes()
+            _io_path(snapshot_root / "manifest.json").read_bytes()
         )
     except (OSError, ValidationError):
         raise _fixture_error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "judge_manifest_read")
@@ -490,7 +497,7 @@ def _manifest_partitions(snapshot_root: Path) -> tuple[SourcePartitionReceipt, .
 def _snapshot_artifacts(snapshot_root: Path) -> tuple[ArtifactReceipt, ...]:
     try:
         manifest = EvaluationSnapshotManifest.model_validate_json(
-            (snapshot_root / "manifest.json").read_bytes()
+            _io_path(snapshot_root / "manifest.json").read_bytes()
         )
     except (OSError, ValidationError):
         raise _fixture_error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "judge_manifest_read")
@@ -562,16 +569,17 @@ def _tree_is_exact(
 ) -> bool:
     try:
         io_root = _io_path(root)
-        actual_files = {
-            path.relative_to(io_root).as_posix()
-            for path in io_root.rglob("*")
-            if path.is_file()
-        }
-        actual_directories = {
-            path.relative_to(io_root).as_posix()
-            for path in io_root.rglob("*")
-            if path.is_dir()
-        }
+        actual_files: set[str] = set()
+        actual_directories: set[str] = set()
+        for path in io_root.rglob("*"):
+            entry_stat = path.lstat()
+            relative_path = path.relative_to(io_root).as_posix()
+            if stat.S_ISREG(entry_stat.st_mode):
+                actual_files.add(relative_path)
+            elif stat.S_ISDIR(entry_stat.st_mode):
+                actual_directories.add(relative_path)
+            else:
+                return False
     except OSError:
         return False
     return actual_files == expected_files and actual_directories == expected_directories
@@ -626,17 +634,41 @@ def _safe_derived_directory(path: Path, root_resolved: Path) -> bool:
 
 
 def _prepare_descriptor_lock(lock_path: Path) -> tuple[int, int]:
+    created = False
     try:
         descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
     except FileExistsError:
-        pass
+        if _safe_regular_file_identity(lock_path) is None:
+            raise _fixture_error(
+                StageCErrorCode.FIXTURE_STATE_CONFLICT,
+                "fixture_lock_validation",
+            ) from None
     except OSError:
         raise _fixture_error(
             StageCErrorCode.FIXTURE_STATE_CONFLICT,
             "fixture_lock_prepare",
         ) from None
     else:
-        os.close(descriptor)
+        created = True
+        try:
+            os.write(descriptor, b"\0")
+        except OSError:
+            raise _fixture_error(
+                StageCErrorCode.FIXTURE_STATE_CONFLICT,
+                "fixture_lock_prepare",
+            ) from None
+        finally:
+            os.close(descriptor)
+    try:
+        if not created and lock_path.stat().st_size == 0:
+            with lock_path.open("r+b") as lock_file:
+                lock_file.write(b"\0")
+                lock_file.flush()
+    except OSError:
+        raise _fixture_error(
+            StageCErrorCode.FIXTURE_STATE_CONFLICT,
+            "fixture_lock_prepare",
+        ) from None
     identity = _safe_regular_file_identity(lock_path)
     if identity is None:
         raise _fixture_error(
@@ -644,6 +676,43 @@ def _prepare_descriptor_lock(lock_path: Path) -> tuple[int, int]:
             "fixture_lock_validation",
         )
     return identity
+
+
+def _acquire_descriptor_lock(lock_file: BinaryIO) -> None:
+    """Acquire the descriptor lock without truncating its locked byte range."""
+
+    lock_file.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        while True:
+            try:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as error:
+                if error.winerror not in {33, 36} and error.errno not in {
+                    errno.EACCES,
+                    errno.EDEADLK,
+                }:
+                    raise
+                sleep(0)
+            else:
+                return
+    else:
+        import fcntl
+
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+
+def _release_descriptor_lock(lock_file: BinaryIO) -> None:
+    lock_file.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _open_lock_matches(
@@ -681,13 +750,18 @@ def _safe_regular_file_identity(path: Path) -> tuple[int, int] | None:
 
 
 def _safe_tree(root: Path) -> bool:
-    if not _resolved_without_link(root) or not root.is_dir():
+    io_root = _io_path(root)
+    if not _resolved_without_link(io_root) or not io_root.is_dir():
         return False
     try:
-        for path in _io_path(root).rglob("*"):
+        for path in io_root.rglob("*"):
             if not _resolved_without_link(path):
                 return False
-            if path.is_file() and path.stat().st_nlink != 1:
+            entry_stat = path.lstat()
+            if stat.S_ISREG(entry_stat.st_mode):
+                if entry_stat.st_nlink != 1:
+                    return False
+            elif not stat.S_ISDIR(entry_stat.st_mode):
                 return False
     except OSError:
         return False

@@ -1678,6 +1678,8 @@ def expand_action_log_drafts(
     request: EventGenerationRequest,
     drafts: list[ImpressionDraft],
     quarantine: list[QuarantineRecord] | None = None,
+    *,
+    completion_timestamp: datetime | None = None,
 ) -> EventGenerationResult:
     """전체 draft에 유저별 커트라인 클릭 선정과 long event 확장을 적용한다."""
 
@@ -1692,11 +1694,17 @@ def expand_action_log_drafts(
         slate_registry=slate_registry,
     )
 
+    normalized_completion = _normalize_completion_timestamp(completion_timestamp)
     batch = EventLogBatch(
         schema_version=ACTION_LOG_SCHEMA_VERSION,
         prompt_version=PROMPT_VERSION,
         request=request,
         events=events,
+        **(
+            {"generated_at": normalized_completion.isoformat()}
+            if normalized_completion is not None
+            else {}
+        ),
     )
     result = EventGenerationResult(batch=batch, quarantine=quarantine or [])
     logger.info("Generated action log batch", extra=result.summary)
@@ -1712,6 +1720,7 @@ def generate_action_log_batch(
     *,
     candidate_provider: CandidateProvider | None = None,
     exposure_metadata: Mapping[tuple[str, str], ExposureMetadata] | None = None,
+    completion_timestamp: datetime | None = None,
 ) -> EventGenerationResult:
     """유저 단위 격리 생성 → per-slate click_threshold 클릭 선정 → 조립 →
     파일 저장을 실행한다.
@@ -1735,6 +1744,7 @@ def generate_action_log_batch(
         request,
         drafts,
         draft_result.quarantine,
+        completion_timestamp=completion_timestamp,
     )
 
     output_path = Path(request.output_path)
@@ -1767,6 +1777,16 @@ def _single_result_from_legacy(
     )
 
 
+def _normalize_completion_timestamp(value: datetime | None) -> datetime | None:
+    """Validate an explicit logical completion clock and canonicalize it to UTC."""
+
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("completion_timestamp must be timezone-aware")
+    return value.astimezone(UTC).replace(microsecond=0)
+
+
 def generate_action_log_single(
     request: EventGenerationRequest,
     virtual_users: list[dict],
@@ -1794,6 +1814,7 @@ def generate_action_log_single(
     None이면 기존 production 완료 시각을 그대로 사용한다.
     """
 
+    normalized_completion = _normalize_completion_timestamp(completion_timestamp)
     if (
         any("user_id" not in virtual_user for virtual_user in virtual_users)
         or _has_duplicate_user_ids(virtual_users)
@@ -1809,6 +1830,7 @@ def generate_action_log_single(
             generator,
             candidate_provider=candidate_provider,
             exposure_metadata=exposure_metadata,
+            completion_timestamp=normalized_completion,
         )
         return _single_result_from_legacy(legacy)
 
@@ -2163,10 +2185,8 @@ def generate_action_log_single(
             writer.finalize_quarantine_failure()
             _observe(phase="finalizing", finish=True)
             raise
-        completed_at = completion_timestamp or datetime.now(UTC)
-        if completed_at.tzinfo is None or completed_at.utcoffset() is None:
-            raise ValueError("completion_timestamp must be timezone-aware")
-        generated_at = completed_at.astimezone(UTC).replace(microsecond=0).isoformat()
+        completed_at = normalized_completion or datetime.now(UTC).replace(microsecond=0)
+        generated_at = completed_at.isoformat()
         _observe(phase="finalizing")
         writer.finalize_success(
             generated_at,
