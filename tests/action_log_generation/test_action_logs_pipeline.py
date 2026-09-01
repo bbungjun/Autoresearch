@@ -5,7 +5,7 @@ import random
 import re
 import weakref
 from concurrent.futures import Future
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event, Thread
 from types import MappingProxyType, TracebackType
@@ -2182,6 +2182,51 @@ def test_single_falls_back_to_legacy_for_duplicate_user_id(tmp_path) -> None:
     assert provider_calls == [users[0]["user_id"], users[1]["user_id"]]
 
 
+def test_legacy_fallback_writes_explicit_completion_timestamp_in_utc(
+    tmp_path: Path,
+) -> None:
+    users = _fixture_users(2)
+    users[1]["user_id"] = users[0]["user_id"]
+    request = _request(tmp_path)
+
+    result = pipeline_module.generate_action_log_single(
+        request,
+        users,
+        build_fixture_video_records(1),
+        RuleBasedActionLogGenerator(),
+        completion_timestamp=datetime(
+            2026, 7, 1, 9, 30, tzinfo=timezone(timedelta(hours=9))
+        ),
+    )
+
+    assert result.execution_mode == "legacy"
+    assert {
+        row["generated_at"]
+        for row in pq.read_table(
+            request.output_path, columns=["generated_at"]
+        ).to_pylist()
+    } == {"2026-07-01T00:30:00+00:00"}
+
+
+def test_single_rejects_naive_completion_timestamp_before_fallback_output(
+    tmp_path: Path,
+) -> None:
+    users = _fixture_users(2)
+    users[1]["user_id"] = users[0]["user_id"]
+    request = _request(tmp_path)
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        pipeline_module.generate_action_log_single(
+            request,
+            users,
+            build_fixture_video_records(1),
+            RuleBasedActionLogGenerator(),
+            completion_timestamp=datetime(2026, 7, 1, 0, 0),
+        )
+
+    assert not Path(request.output_path).exists()
+
+
 def test_single_falls_back_to_legacy_for_missing_user_id(tmp_path) -> None:
     users = _fixture_users(1)
     users[0].pop("user_id")
@@ -2284,15 +2329,24 @@ def test_single_falls_back_to_legacy_for_read_only_exposure_metadata(
         RuleBasedActionLogGenerator(),
         candidate_provider=provider,
         exposure_metadata=metadata,
+        completion_timestamp=datetime(
+            2026, 7, 1, 9, 30, tzinfo=timezone(timedelta(hours=9))
+        ),
     )
 
     assert result.execution_mode == "legacy"
     assert set(
         pq.read_table(
             request.output_path,
-            columns=["exposure_source"],
+            columns=["exposure_source", "generated_at"],
         ).column("exposure_source").to_pylist()
     ) == {"model"}
+    assert {
+        row["generated_at"]
+        for row in pq.read_table(
+            request.output_path, columns=["generated_at"]
+        ).to_pylist()
+    } == {"2026-07-01T00:30:00+00:00"}
 
 
 def test_streaming_single_preserves_quarantine_order_counts_and_file(

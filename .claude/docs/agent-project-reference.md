@@ -43,7 +43,7 @@ docs/
 | **Agent Orchestration** | FastAPI 채팅 저장 API, Codex CLI/OpenAI 호출, PostgreSQL 저장 | `applications/experiment_platform/` |
 | **Reranking Serving** | 리랭킹 API | `applications/reranking_api/` |
 | **Recommendation** | 정책 라운드, 일일 추천 폐루프 | `autoresearch/recommendation/` |
-| **Research Harness snapshot (Stage B)** | action log 평가 snapshot 조립, label 분리, attribution, user split, local write-once 게시 | `autoresearch/research_harness/` |
+| **Research Harness snapshot·fixture foundation (Stage B/C)** | action log 평가 snapshot 조립·게시, Stage C fixture/candidate handoff 계약과 결정적 입력 기반 | `autoresearch/research_harness/` |
 
 ## Responsibility Boundaries
 
@@ -64,12 +64,20 @@ docs/
 - **경계:** `jobs/`는 입력을 검증하고 도메인 모듈을 호출하지만 schedule,
   retry, timeout, Pool과 KubernetesPodOperator 설정은 소유하지 않습니다.
 
-### `autoresearch/research_harness/` (Stage B)
+### `autoresearch/research_harness/` (Stage B + Stage C foundation)
 - **책임:** 검증된 action log 파티션에서 source 검증 → slate identity 검증 → 다일
   click attribution → user split/구조 coverage → artifact/manifest → local publisher를
-  조립합니다. 공개 API는 `ActionLogSource`, `EvaluationSnapshotError`,
+  조립합니다. Stage C foundation은 fixture/candidate handoff의 frozen typed contract,
+  안전한 실패 code, canonical 날짜·user split·descriptor identity helper를 제공하고,
+  production consumer schema와 호환되는 versioned virtual-user/YouTube 입력을 생성합니다.
+- **공개 facade:** Stage B의 `ActionLogSource`, `EvaluationSnapshotError`,
   `EvaluationSnapshotReceipt`, `EvaluationSnapshotRequest`, `SnapshotErrorCode`,
-  `build_evaluation_snapshot` 여섯 항목이며, builder의 typed signature는
+  `build_evaluation_snapshot`과 Stage C의 `LocalEvaluationFixtureRequest`,
+  `FixtureInputReceipt`, `FixturePartitionReceipt`, `FixtureDescriptor`,
+  `JudgeSnapshotHandoff`, `LocalEvaluationFixtureReceipt`, `CandidateHistoryReceipt`,
+  `CandidateDataManifest`, `CandidateDataViewRequest`, `CandidateDataViewReceipt`,
+  `StageCError`, `StageCErrorCode`, `canonical_fixture_dates`,
+  `select_fixture_user_ids`, `descriptor_sha256`를 재수출합니다. Stage B builder의 typed signature는
   `build_evaluation_snapshot(request: EvaluationSnapshotRequest, *, source: ActionLogSource | None = None) -> EvaluationSnapshotReceipt`입니다.
 - **데이터 계약:** click은 같은 `(user_id, video_id)`의 엄격히 앞선 30분 안 최근
   impression에만 귀속합니다. 유저는 `user-hash-80-20-v1`의 SHA-256 고정 salt/bucket으로
@@ -80,9 +88,10 @@ docs/
 - **게시 경계:** local content-addressed target은 같은 lock protocol을 따르는 cooperating
   publisher에게만 write-once 의미를 보장합니다. 완성·동일 target만 재사용하며 부분 target이나
   manifest/artifact digest 불일치는 `snapshot_write_conflict`로 거부하고 덮어쓰지 않습니다.
-- **비책임:** action log producer, RuleBased fixture 및 seed custody, candidate workspace
-  주입 검사, Sealed Judge·지표·승격, Judge artifact handoff는 소유하지 않습니다. 이들은
-  Stage C 또는 P0-2 이후의 명시적 후속 범위입니다.
+- **비책임:** Stage C foundation은 일일 action log producer 실행, fixture/snapshot
+  write-once orchestration, canonical source adapter, Judge handoff artifact 재검증,
+  candidate view 게시를 아직 수행하지 않습니다. candidate workspace 주입 검사와 Sealed
+  Judge·지표·승격도 Task 3 또는 P0-2 이후의 명시적 후속 범위입니다.
 
 ### `autoresearch/`의 학습·평가 단계 패키지
 - **책임:** 피처 조립(`feature_engineering/`), 모델 정의·학습·학습 데이터셋·

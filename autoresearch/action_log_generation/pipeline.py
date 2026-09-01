@@ -5,7 +5,8 @@ LLM 판정·클릭 선정·이벤트 확장·로컬 산출물 기록을 담당�
 
 [기능] shard/checkpoint가 사용하는 legacy draft/batch 계약, 일일 slate identity
 전파·충돌 검증, bounded active-user 스트리밍, Parquet row-group 및 JSONL
-기록, completion-time publish 실패 시 기존 산출물 복구를 제공한다.
+기록, 기본 실제 완료 시각과 선택적 logical completion 시각 기록, completion-time
+publish 실패 시 기존 산출물 복구를 제공한다.
 
 [비책임] 일일 partition 검증·publish는 autoresearch/action_logs/daily.py,
 공개 CLI dispatch는 autoresearch/jobs/action_log.py, KPO resource 설정은
@@ -1677,6 +1678,8 @@ def expand_action_log_drafts(
     request: EventGenerationRequest,
     drafts: list[ImpressionDraft],
     quarantine: list[QuarantineRecord] | None = None,
+    *,
+    completion_timestamp: datetime | None = None,
 ) -> EventGenerationResult:
     """전체 draft에 유저별 커트라인 클릭 선정과 long event 확장을 적용한다."""
 
@@ -1691,11 +1694,17 @@ def expand_action_log_drafts(
         slate_registry=slate_registry,
     )
 
+    normalized_completion = _normalize_completion_timestamp(completion_timestamp)
     batch = EventLogBatch(
         schema_version=ACTION_LOG_SCHEMA_VERSION,
         prompt_version=PROMPT_VERSION,
         request=request,
         events=events,
+        **(
+            {"generated_at": normalized_completion.isoformat()}
+            if normalized_completion is not None
+            else {}
+        ),
     )
     result = EventGenerationResult(batch=batch, quarantine=quarantine or [])
     logger.info("Generated action log batch", extra=result.summary)
@@ -1711,6 +1720,7 @@ def generate_action_log_batch(
     *,
     candidate_provider: CandidateProvider | None = None,
     exposure_metadata: Mapping[tuple[str, str], ExposureMetadata] | None = None,
+    completion_timestamp: datetime | None = None,
 ) -> EventGenerationResult:
     """유저 단위 격리 생성 → per-slate click_threshold 클릭 선정 → 조립 →
     파일 저장을 실행한다.
@@ -1734,6 +1744,7 @@ def generate_action_log_batch(
         request,
         drafts,
         draft_result.quarantine,
+        completion_timestamp=completion_timestamp,
     )
 
     output_path = Path(request.output_path)
@@ -1766,6 +1777,16 @@ def _single_result_from_legacy(
     )
 
 
+def _normalize_completion_timestamp(value: datetime | None) -> datetime | None:
+    """Validate an explicit logical completion clock and canonicalize it to UTC."""
+
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("completion_timestamp must be timezone-aware")
+    return value.astimezone(UTC).replace(microsecond=0)
+
+
 def generate_action_log_single(
     request: EventGenerationRequest,
     virtual_users: list[dict],
@@ -1776,6 +1797,7 @@ def generate_action_log_single(
     exposure_metadata: (
         MutableMapping[tuple[str, str], ExposureMetadata] | None
     ) = None,
+    completion_timestamp: datetime | None = None,
     _retention_observer: Callable[[_StreamingRetentionSnapshot], None] | None = None,
 ) -> ActionLogSingleResult:
     """active user 수를 제한해 action log를 사용자 순서대로 증분 기록한다.
@@ -1788,8 +1810,11 @@ def generate_action_log_single(
     read-only mapping은 변경하지 않고 legacy batch 경로로 위임한다.
     `_retention_observer`는 회귀 검증용 private hook이며, 동일 snapshot은 DAG
     structured telemetry에도 기록된다.
+    `completion_timestamp`는 fixture 같은 결정적 producer 호출을 위한 logical clock이며,
+    None이면 기존 production 완료 시각을 그대로 사용한다.
     """
 
+    normalized_completion = _normalize_completion_timestamp(completion_timestamp)
     if (
         any("user_id" not in virtual_user for virtual_user in virtual_users)
         or _has_duplicate_user_ids(virtual_users)
@@ -1805,6 +1830,7 @@ def generate_action_log_single(
             generator,
             candidate_provider=candidate_provider,
             exposure_metadata=exposure_metadata,
+            completion_timestamp=normalized_completion,
         )
         return _single_result_from_legacy(legacy)
 
@@ -2159,7 +2185,8 @@ def generate_action_log_single(
             writer.finalize_quarantine_failure()
             _observe(phase="finalizing", finish=True)
             raise
-        generated_at = datetime.now(UTC).replace(microsecond=0).isoformat()
+        completed_at = normalized_completion or datetime.now(UTC).replace(microsecond=0)
+        generated_at = completed_at.isoformat()
         _observe(phase="finalizing")
         writer.finalize_success(
             generated_at,

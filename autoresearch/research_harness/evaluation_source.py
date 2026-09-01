@@ -17,6 +17,7 @@ import re
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Final, Protocol, Self
 from zoneinfo import ZoneInfo
 
@@ -76,6 +77,17 @@ class ArrowActionLogSource:
 
     def open_partition(self, dt: date) -> AbstractContextManager[pa.NativeFile]:
         return self._filesystem.open_input_file(_partition_path(self._resolved_root, dt))
+
+    def _physical_source_root(self) -> Path | None:
+        if isinstance(self._filesystem, pafs.LocalFileSystem):
+            return Path(self._resolved_root)
+        return None
+
+    def _physical_partition_path(self, dt: date) -> Path | None:
+        root = self._physical_source_root()
+        if root is None:
+            return None
+        return root / f"dt={dt.isoformat()}" / "part-0.parquet"
 
 
 def load_required_partitions(
