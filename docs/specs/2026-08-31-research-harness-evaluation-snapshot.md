@@ -652,6 +652,14 @@ canonical fixture는 `T=evaluation_start_date`를 기준으로 다음을 고정�
 - 네 날짜 모두 production `run_daily_action_log`와 최종
   `dt=D/part-0.parquet` 경로를 사용한다
 
+`youtube-ctr-local-fixture-v1`은 각 partition `D`의 logical completion timestamp를
+`D 00:00:00+00:00`으로 고정한다. Builder는 이 값을 production daily API의 additive
+`completion_timestamp` seam에 전달하며, production action-log writer가 `generated_at`을 포함한
+최종 Parquet를 직접 기록한다. Builder가 게시 후 Parquet를 다시 쓰거나 event timestamp,
+click, event/slate ID를 보정하는 것은 금지한다. Seam을 생략한 production 호출은 기존처럼 실제
+완료 시각을 기록한다. 이 logical clock과 production writer 사용은 새 descriptor field가 아니라
+기존 `contract_version` 의미이며 golden source projection/hash로 봉인한다.
+
 각 user의 평가 slate는 24행이며 click-positive여야 한다. 따라서 validation/final 각각
 click-positive slate 30개 이상, 유효 slate 비율 20% 이상, clicked/non-clicked row를 모두
 만족해야 한다. 이 조건은 P0-1 structural coverage보다 강하며 P0-2 Judge의 ranking metric
@@ -678,6 +686,19 @@ path는 fixture root 기준 POSIX relative path이며 absolute Judge path는 ide
 `FixtureActionLogSource`의 canonical `fixture://` URI를 사용한다. cooperating builder lock
 아래 descriptor hash의 새 root만 만들고 `_SUCCESS`를 마지막에 기록한다. 완성된 동일 root만
 digest 검증 후 멱등 재사용하며 partial·상이한 내용은 `fixture_state_conflict`로 거부한다.
+
+Fixture root의 `_SUCCESS`는 빈 marker가 아니라 canonical JSON
+`local-fixture-integrity-v1`이다. `extra="forbid"`, frozen typed model로 descriptor SHA-256,
+날짜순 action-log partition receipt 4개, snapshot fingerprint와 manifest SHA-256,
+validation/final evaluation ID, validation/final의 slate·label artifact receipt 4개를 봉인한다.
+Reuse는 이 marker를 먼저 canonical parse한 뒤 descriptor/input/action-log/snapshot을 receipt와
+대조한다. Fixture root와 snapshot root는 위 canonical layout에서 파생한 file·directory
+allowlist와 정확히 같아야 하며 extra file/dir, 게시 root 내부 lock/staging, symlink·junction·
+hardlink alias를 거부한다. Cooperating lock과 staging은 final fixture root 밖에 둔다.
+
+이 receipt는 부분 게시와 우발적·비협력 변조를 탐지하는 local integrity anchor이지 신뢰 경계를
+넘는 서명은 아니다. 같은 UID의 hostile actor가 모든 artifact와 manifest, outer marker를
+일관되게 다시 쓰는 공격은 §4 위협 모델 밖이며 이 구현이 방어한다고 주장하지 않는다.
 
 ### 13.3 CandidateDataView
 
@@ -888,24 +909,29 @@ event 의미와 ID가 같아도 Parquet bytes는 달라졌으며, 이는 독립 
 
 `build_local_evaluation_fixture()`가 descriptor hash별 sibling staging에서 production
 `run_daily_action_log`을 T-2부터 T+1까지 네 번 실행하고, 각 요청의 공식 `seed` 인자로
-`fixture_seed`를 전달하도록 구현했습니다. Producer가 만든 schema와 event를 유지하면서
-`generated_at` audit column만 partition 날짜 기반 값으로 정규화해 fixture source bytes를
-결정적으로 만들었습니다. 내부 `FixtureActionLogSource`는 물리 Parquet를 읽되 Stage B에는
+`fixture_seed`를 전달하도록 구현했습니다. Additive logical completion seam으로 partition 날짜를
+production writer에 전달해 `generated_at`까지 결정적으로 쓰며, builder의 사후 Parquet rewrite는
+사용하지 않습니다. 내부 `FixtureActionLogSource`는 물리 Parquet를 읽되 Stage B에는
 `fixture://<descriptor-hash>/action-log` identity만 전달합니다. Snapshot의 두 split은 실제
 slate/label artifact를 다시 읽어 user-slate당 24행, click-positive slate 30개·20% 이상,
-clicked/non-clicked 공존을 검사합니다. Handoff 생성과 fixture reuse는 `_SUCCESS`, typed canonical
-manifest, fingerprint, manifest SHA-256, 네 artifact의 digest·row count, 입력과 action-log
-receipt를 다시 검증하며 상이하거나 부분인 target을 덮어쓰지 않습니다.
+clicked/non-clicked 공존과 160/40 user 수를 검사합니다. Handoff 생성과 fixture reuse는 canonical
+outer `_SUCCESS` receipt, exact tree, typed manifest, fingerprint, manifest SHA-256, 네 artifact의
+digest·row count, 입력과 action-log receipt를 다시 검증하며 상이하거나 부분인 target을
+덮어쓰지 않습니다.
 
 ### Result
 
 실제 200-user fixture는 날짜별 action log 5,400행을 생성하고 validation 160개 및 final
 holdout 40개 slate 모두 24행·click-positive 조건을 충족했습니다. 같은 seed 917·평가일의
-서로 다른 두 Judge root는 같은 descriptor, source digest, event ID, evaluation ID와 snapshot
-fingerprint를 만들었고 seed 918은 다른 source digest를 만들었습니다. Focused 테스트는 완성
+서로 다른 두 Judge root를 사용하는 자동화 테스트는 같은 descriptor, source digest, event ID,
+evaluation ID와 snapshot fingerprint를 만들었고 seed 918은 다른 source digest를 만들었습니다.
+독립 프로세스 두 run의 최종 실증은 CandidateDataView와 함께 남아 있습니다. Focused 테스트는 완성
 target reuse, partial/tamper conflict, handoff marker·schema·fingerprint·manifest bytes·artifact
-digest/row-count 변조와 coverage 실패의 typed code를 확인합니다. CandidateDataView와 실제
+digest/row-count·extra tree 변조와 coverage 실패의 typed code를 확인합니다. CandidateDataView와 실제
 workspace/subprocess 환경은 생성하지 않았으며 Stage C 전체 완료는 주장하지 않습니다.
+최신 검증은 fixture/daily logical-clock focused 27개 통과·Windows symlink 권한 1개 skip,
+전체 `tests/research_harness` 223개 통과·2개 skip, `tests/action_log_generation` 252개 통과였고
+changed-file Ruff와 `git diff --check`도 통과했습니다.
 
 ## Portfolio Record — Stage B snapshot builder
 

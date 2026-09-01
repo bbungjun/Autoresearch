@@ -417,6 +417,52 @@ def test_single_daily_publishes_completion_generated_at_without_full_materializa
     } == {completed_at}
 
 
+def test_daily_explicit_completion_timestamp_is_written_by_production_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    partition_date = date(2026, 7, 1)
+    virtual_users_path = tmp_path / "virtual_users.parquet"
+    youtube_base = tmp_path / "youtube"
+    first_output = tmp_path / "first"
+    second_output = tmp_path / "second"
+    _write_virtual_users(virtual_users_path, count=2)
+    _write_youtube_partition(youtube_base, partition_date)
+    completion_timestamp = datetime(2026, 7, 1, tzinfo=UTC)
+
+    class _FrozenCompletionDatetime(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            return completion_timestamp
+
+    monkeypatch.setattr(pipeline_module, "datetime", _FrozenCompletionDatetime)
+    common = {
+        "partition_date": partition_date,
+        "youtube_base_path": str(youtube_base),
+        "virtual_users_path": str(virtual_users_path),
+        "candidates_per_user": 3,
+        "click_threshold": 0.2,
+        "seed": 81,
+        "max_concurrency": 1,
+        "generator_name": "rule_based",
+    }
+
+    run_daily_action_log(output_base_path=str(first_output), **common)
+    run_daily_action_log(
+        output_base_path=str(second_output),
+        completion_timestamp=completion_timestamp,
+        **common,
+    )
+
+    first_path = first_output / "dt=2026-07-01" / "part-0.parquet"
+    second_path = second_output / "dt=2026-07-01" / "part-0.parquet"
+    assert first_path.read_bytes() == second_path.read_bytes()
+    assert {
+        row["generated_at"]
+        for row in pq.read_table(first_path, columns=["generated_at"]).to_pylist()
+    } == {"2026-07-01T00:00:00+00:00"}
+
+
 def test_validate_staged_event_parquet_reads_row_groups_without_read_table(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

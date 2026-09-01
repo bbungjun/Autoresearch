@@ -10,12 +10,18 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pytest
 
+from autoresearch.action_log_generation.pipeline import ActionLogGenerationError
 from autoresearch.research_harness import (
     LocalEvaluationFixtureRequest,
     StageCError,
     StageCErrorCode,
     build_local_evaluation_fixture,
 )
+from autoresearch.research_harness.evaluation_errors import (
+    EvaluationSnapshotError,
+    SnapshotErrorCode,
+)
+import autoresearch.research_harness.local_evaluation_fixture as fixture_module
 from autoresearch.research_harness.evaluation_artifacts import (
     calculate_snapshot_fingerprint,
     canonical_json_bytes,
@@ -93,10 +99,22 @@ def test_builder_runs_production_daily_and_publishes_canonical_fixture(
     )
     assert receipt.descriptor_path == receipt.fixture_root / "fixture.json"
     assert sha256(receipt.descriptor_path.read_bytes()).hexdigest() == receipt.descriptor_sha256
-    assert (receipt.fixture_root / "_SUCCESS").read_text(encoding="utf-8") == (
-        f"{receipt.descriptor_sha256}\n"
+    integrity = json.loads(
+        (receipt.fixture_root / "_SUCCESS").read_text(encoding="utf-8")
     )
+    assert integrity["contract_version"] == "local-fixture-integrity-v1"
+    assert integrity["descriptor_sha256"] == receipt.descriptor_sha256
+    assert integrity["snapshot_fingerprint"] == receipt.judge.snapshot_fingerprint
+    assert integrity["manifest_sha256"] == receipt.judge.manifest_sha256
+    assert len(integrity["action_log_partitions"]) == 4
+    assert len(integrity["snapshot_artifacts"]) == 4
     assert [partition.rows for partition in receipt.action_log_partitions] == [5400] * 4
+    assert [partition.sha256 for partition in receipt.action_log_partitions] == [
+        "e894c158e3f4b758de76eca8b82d33145f95769482ee9137f2e7ccfac373399d",
+        "129f18f22d18b0da7cd57c000ae856438c598306806651068ac9c395d879ddcd",
+        "ff79a1cd65d41846eb66e95e1de030ee2b4c6561b0c5c7853a9a6c176cd0d012",
+        "1293c632f840e0015ebb1cd0c86ae51528629fb4f650e4d480912b1358778504",
+    ]
     assert [partition.uri for partition in receipt.action_log_partitions] == [
         f"fixture://{receipt.descriptor_sha256}/action-log/dt={day}/part-0.parquet"
         for day in ("2026-08-30", "2026-08-31", "2026-09-01", "2026-09-02")
@@ -112,6 +130,8 @@ def test_builder_runs_production_daily_and_publishes_canonical_fixture(
     assert manifest.source.root == f"fixture://{receipt.descriptor_sha256}/action-log"
     assert manifest.snapshot_fingerprint == receipt.judge.snapshot_fingerprint
     assert calculate_snapshot_fingerprint(manifest) == receipt.judge.snapshot_fingerprint
+    assert manifest.validation.counts.user_count == 160
+    assert manifest.final_holdout.counts.user_count == 40
     for split in (manifest.validation, manifest.final_holdout):
         assert split.counts.click_positive_slate_count >= 30
         assert split.counts.click_positive_slate_ratio >= 0.2
@@ -279,6 +299,62 @@ def test_hardlink_alias_in_complete_fixture_conflicts(built_fixture) -> None:
         alias.unlink()
 
 
+@pytest.mark.parametrize("kind", ("file", "directory"))
+def test_extra_fixture_entry_conflicts(built_fixture, kind: str) -> None:
+    state_root, receipt = built_fixture
+    extra = receipt.fixture_root / f"extra-{kind}"
+    extra.write_text("extra", encoding="utf-8") if kind == "file" else extra.mkdir()
+    try:
+        with pytest.raises(StageCError) as caught:
+            build_local_evaluation_fixture(
+                LocalEvaluationFixtureRequest(state_root, EVALUATION_DATE, 917)
+            )
+        assert caught.value.code == StageCErrorCode.FIXTURE_STATE_CONFLICT
+    finally:
+        extra.unlink() if kind == "file" else extra.rmdir()
+
+
+@pytest.mark.parametrize("kind", ("file", "directory"))
+def test_extra_snapshot_entry_is_invalid_handoff_and_fixture_conflict(
+    built_fixture, kind: str
+) -> None:
+    state_root, receipt = built_fixture
+    extra = receipt.judge.snapshot_root / f"extra-{kind}"
+    io_extra = _long_path(extra)
+    io_extra.write_text("extra", encoding="utf-8") if kind == "file" else io_extra.mkdir()
+    try:
+        with pytest.raises(StageCError) as handoff_error:
+            _validated_judge_handoff(
+                receipt.judge.snapshot_root,
+                expected_fingerprint=str(receipt.judge.snapshot_fingerprint),
+            )
+        assert handoff_error.value.code == StageCErrorCode.JUDGE_HANDOFF_INVALID
+        with pytest.raises(StageCError) as fixture_error:
+            build_local_evaluation_fixture(
+                LocalEvaluationFixtureRequest(state_root, EVALUATION_DATE, 917)
+            )
+        assert fixture_error.value.code == StageCErrorCode.FIXTURE_STATE_CONFLICT
+    finally:
+        io_extra.unlink() if kind == "file" else io_extra.rmdir()
+
+
+def test_outer_integrity_marker_extra_field_conflicts(built_fixture) -> None:
+    state_root, receipt = built_fixture
+    marker = receipt.fixture_root / "_SUCCESS"
+    original = marker.read_bytes()
+    payload = json.loads(original)
+    payload["unexpected"] = True
+    marker.write_text(json.dumps(payload), encoding="utf-8")
+    try:
+        with pytest.raises(StageCError) as caught:
+            build_local_evaluation_fixture(
+                LocalEvaluationFixtureRequest(state_root, EVALUATION_DATE, 917)
+            )
+        assert caught.value.code == StageCErrorCode.FIXTURE_STATE_CONFLICT
+    finally:
+        marker.write_bytes(original)
+
+
 def test_coverage_insufficient_is_typed_and_does_not_publish(
     built_fixture, tmp_path: Path
 ) -> None:
@@ -311,6 +387,41 @@ def test_coverage_insufficient_is_typed_and_does_not_publish(
         _validate_coverage(copied)
     assert caught.value.code == StageCErrorCode.FIXTURE_COVERAGE_INSUFFICIENT
     assert not (tmp_path / "_SUCCESS").exists()
+
+
+def test_coverage_requires_exact_split_user_counts(
+    built_fixture, tmp_path: Path
+) -> None:
+    _, receipt = built_fixture
+    copied = tmp_path / receipt.judge.snapshot_fingerprint
+    _copy_snapshot(receipt.judge.snapshot_root, copied)
+    manifest_path = copied / "manifest.json"
+    manifest = EvaluationSnapshotManifest.model_validate_json(manifest_path.read_bytes())
+    counts = manifest.validation.counts
+    changed_counts = counts.__class__(
+        user_count=159,
+        slate_count=counts.slate_count,
+        row_count=counts.row_count,
+        clicked_row_count=counts.clicked_row_count,
+        click_positive_slate_count=counts.click_positive_slate_count,
+        click_positive_slate_ratio=counts.click_positive_slate_ratio,
+        mean_slate_size=counts.mean_slate_size,
+    )
+    changed = manifest.model_copy(
+        update={
+            "validation": manifest.validation.__class__(
+                evaluation_id=manifest.validation.evaluation_id,
+                counts=changed_counts,
+                optional_non_null_ratio=manifest.validation.optional_non_null_ratio,
+                artifacts=manifest.validation.artifacts,
+            )
+        }
+    )
+    manifest_path.write_bytes(canonical_json_bytes(changed.model_dump(mode="json")))
+
+    with pytest.raises(StageCError) as caught:
+        _validate_coverage(copied)
+    assert caught.value.code == StageCErrorCode.FIXTURE_COVERAGE_INSUFFICIENT
 
 
 @pytest.mark.parametrize(
@@ -371,3 +482,34 @@ def test_reparse_state_root_is_rejected_without_path_disclosure(tmp_path: Path) 
         )
     assert caught.value.code == StageCErrorCode.FIXTURE_REQUEST_INVALID
     assert str(linked) not in str(caught.value)
+
+
+@pytest.mark.parametrize("boundary", ("producer", "snapshot"))
+def test_domain_failures_are_mapped_without_original_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    secret_context = str(tmp_path / "private-user-input")
+    state_root = tmp_path / boundary
+    state_root.mkdir()
+    if boundary == "producer":
+        def fail_producer(**_kwargs):
+            raise ActionLogGenerationError(secret_context)
+
+        monkeypatch.setattr(fixture_module, "run_daily_action_log", fail_producer)
+    else:
+        monkeypatch.setattr(fixture_module, "run_daily_action_log", lambda **_kwargs: {})
+
+        def fail_snapshot(*_args, **_kwargs):
+            raise EvaluationSnapshotError(
+                SnapshotErrorCode.SOURCE_PARTITION_MISSING,
+                secret_context,
+            )
+
+        monkeypatch.setattr(fixture_module, "build_evaluation_snapshot", fail_snapshot)
+
+    with pytest.raises(StageCError) as caught:
+        build_local_evaluation_fixture(
+            LocalEvaluationFixtureRequest(state_root, EVALUATION_DATE, 917)
+        )
+    assert caught.value.code == StageCErrorCode.FIXTURE_STATE_CONFLICT
+    assert secret_context not in str(caught.value)

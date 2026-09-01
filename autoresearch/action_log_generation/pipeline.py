@@ -5,7 +5,8 @@ LLM 판정·클릭 선정·이벤트 확장·로컬 산출물 기록을 담당�
 
 [기능] shard/checkpoint가 사용하는 legacy draft/batch 계약, 일일 slate identity
 전파·충돌 검증, bounded active-user 스트리밍, Parquet row-group 및 JSONL
-기록, completion-time publish 실패 시 기존 산출물 복구를 제공한다.
+기록, 기본 실제 완료 시각과 선택적 logical completion 시각 기록, completion-time
+publish 실패 시 기존 산출물 복구를 제공한다.
 
 [비책임] 일일 partition 검증·publish는 autoresearch/action_logs/daily.py,
 공개 CLI dispatch는 autoresearch/jobs/action_log.py, KPO resource 설정은
@@ -1776,6 +1777,7 @@ def generate_action_log_single(
     exposure_metadata: (
         MutableMapping[tuple[str, str], ExposureMetadata] | None
     ) = None,
+    completion_timestamp: datetime | None = None,
     _retention_observer: Callable[[_StreamingRetentionSnapshot], None] | None = None,
 ) -> ActionLogSingleResult:
     """active user 수를 제한해 action log를 사용자 순서대로 증분 기록한다.
@@ -1788,6 +1790,8 @@ def generate_action_log_single(
     read-only mapping은 변경하지 않고 legacy batch 경로로 위임한다.
     `_retention_observer`는 회귀 검증용 private hook이며, 동일 snapshot은 DAG
     structured telemetry에도 기록된다.
+    `completion_timestamp`는 fixture 같은 결정적 producer 호출을 위한 logical clock이며,
+    None이면 기존 production 완료 시각을 그대로 사용한다.
     """
 
     if (
@@ -2159,7 +2163,10 @@ def generate_action_log_single(
             writer.finalize_quarantine_failure()
             _observe(phase="finalizing", finish=True)
             raise
-        generated_at = datetime.now(UTC).replace(microsecond=0).isoformat()
+        completed_at = completion_timestamp or datetime.now(UTC)
+        if completed_at.tzinfo is None or completed_at.utcoffset() is None:
+            raise ValueError("completion_timestamp must be timezone-aware")
+        generated_at = completed_at.astimezone(UTC).replace(microsecond=0).isoformat()
         _observe(phase="finalizing")
         writer.finalize_success(
             generated_at,

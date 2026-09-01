@@ -5,7 +5,8 @@ partition을 읽고 single 또는 shard 실행을 선택한 뒤 final partition�
 
 [기능] 단일 coordinator가 daily slate context·fingerprint를 single/shard/merge에
 일관되게 전달하고, temporary directory에 completion-time Parquet/JSONL을 최종
-commit한 뒤 row-group staging 검증과 last-known-good publish를 수행한다. 객체
+commit하되 결정적 fixture에는 명시적 logical completion 시각을 전달하고, row-group
+staging 검증과 last-known-good publish를 수행한다. 객체
 저장소 publish는 임시 객체를 파티션 밖
 prefix에 만든 뒤 서버측 복사로 최종 경로를 바꾼다(#515) — 정리가 실패해도 적재가 읽는
 파티션은 오염되지 않는다.
@@ -930,6 +931,7 @@ def run_daily_action_log(
     history_end: datetime | None = None,
     candidate_provider_factory: CandidateProviderFactory | None = None,
     overwrite: bool = True,
+    completion_timestamp: datetime | None = None,
 ) -> dict[str, object]:
     """하루치 YouTube partition과 virtual user parquet으로 action log를 생성한다.
 
@@ -945,6 +947,8 @@ def run_daily_action_log(
             태그(#222)를 최종 로그에 실어 보낸다.
         overwrite: 기존 Python DAG 호출은 하위 호환을 위해 기본 재생성한다. 공개
             CLI는 `--overwrite` 여부를 항상 명시적으로 전달한다.
+        completion_timestamp: None이면 기존처럼 producer 완료 시각을 기록한다. 명시하면
+            production writer가 모든 row의 `generated_at`에 같은 UTC 시각을 기록한다.
     """
 
     youtube_path = _dt_path(
@@ -1015,6 +1019,7 @@ def run_daily_action_log(
                     generator,
                     candidate_provider=candidate_provider,
                     exposure_metadata=exposure_metadata,
+                    completion_timestamp=completion_timestamp,
                 )
             finally:
                 _close_generator(generator)

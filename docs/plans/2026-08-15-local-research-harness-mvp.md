@@ -480,21 +480,12 @@ Task 1 전체와 Research Harness MVP는 완료 처리하지 않는다.
 `docs/specs/2026-08-31-research-harness-evaluation-snapshot.md` §13의 exact contract를
 구현해 P0-1을 닫는다. 실제 git worktree와 subprocess 환경은 만들지 않는다.
 
-> **2026-09-01 foundation 구현 기록:** 아래 체크리스트는 Stage C 전체 완료 전까지
-> 미완료로 유지합니다. 현재는 exact typed model/error, canonical T-2..T+1 입력,
-> Stage B bucket 기준 validation 160명/final 40명 선택, versioned production-compatible
-> Parquet schema와 descriptor identity 기반까지만 구현했습니다. 일일 producer 실행,
-> source adapter, snapshot build, write-once fixture 게시, Judge handoff 검증과 candidate view
-> materialization은 남아 있습니다. 문제·해결·검증 근거는 연결 spec의
-> `Portfolio Record — Stage C fixture input foundation`에 기록합니다.
-
-> **2026-09-01 fixture builder 구현 기록:** canonical 입력에서 실제 production daily
-> producer를 네 날짜 실행하고, 물리 Judge root를 숨기는 `fixture://` source adapter로 Stage B
-> snapshot을 생성하는 외부 builder를 구현했습니다. P0-2 coverage와 snapshot handoff 전체
-> digest/row count를 재검증하고 descriptor hash별 write-once 게시·reuse/conflict를 고정했습니다.
-> CandidateDataView materialization은 여전히 후속 작업이므로 이 Task와 Stage C 전체 체크박스는
-> 완료 처리하지 않습니다. 검증 근거는 연결 spec의
-> `Portfolio Record — Stage C fixture builder and Judge handoff`에 기록합니다.
+> **2026-09-01 현재 상태:** exact typed model/error와 canonical 입력, production daily 4-run
+> fixture builder, canonical `fixture://` source adapter, Stage B snapshot build, P0-2 coverage,
+> outer integrity marker 기반 write-once 게시와 Judge handoff 재검증까지 구현했습니다.
+> CandidateDataView materialization과 독립 두 run의 최종 실증은 남아 있으므로 이 Task와 Stage C
+> 전체 체크박스는 완료 처리하지 않습니다. 문제·해결·검증 근거는 연결 spec의 두 Stage C
+> Portfolio Record에 기록합니다.
 
 - [ ] `LocalEvaluationFixture` module의 작은 interface
       `build_local_evaluation_fixture(LocalEvaluationFixtureRequest)`를 구현한다. 필수

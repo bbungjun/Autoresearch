@@ -19,21 +19,25 @@ import os
 from pathlib import Path
 import shutil
 from tempfile import mkdtemp
-from typing import Final
+from typing import Final, Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from autoresearch.action_log_generation.daily import run_daily_action_log
+from autoresearch.action_log_generation.pipeline import ActionLogGenerationError
 from autoresearch.research_harness.evaluation_artifacts import (
     calculate_snapshot_fingerprint,
     canonical_json_bytes,
-    _write_table,
 )
+from autoresearch.research_harness.evaluation_errors import EvaluationSnapshotError
 from autoresearch.research_harness.evaluation_snapshot_models import (
+    ArtifactReceipt,
+    EvaluationId,
     EvaluationSnapshotManifest,
     EvaluationSnapshotRequest,
+    SnapshotFingerprint,
 )
 from autoresearch.research_harness.evaluation_source import ActionLogSource
 from autoresearch.research_harness.evaluation_source_models import SourcePartitionReceipt
@@ -58,6 +62,32 @@ from autoresearch.research_harness.snapshot_publisher import (
 
 _FIXTURES_PATH: Final = Path("fixtures") / "by-hash"
 _ARTIFACT_COUNT: Final = 4
+_SNAPSHOT_FILES: Final = frozenset(
+    {
+        "_SUCCESS",
+        "manifest.json",
+        "validation/slate.parquet",
+        "validation/labels.parquet",
+        "final_holdout/slate.parquet",
+        "final_holdout/labels.parquet",
+    }
+)
+_SNAPSHOT_DIRS: Final = frozenset({"validation", "final_holdout"})
+
+
+class _FixtureIntegrityReceipt(BaseModel):
+    """Canonical outer marker anchoring every published fixture output."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    contract_version: Literal["local-fixture-integrity-v1"]
+    descriptor_sha256: str
+    action_log_partitions: tuple[SourcePartitionReceipt, ...]
+    snapshot_fingerprint: SnapshotFingerprint
+    manifest_sha256: str
+    validation_id: EvaluationId
+    final_holdout_id: EvaluationId
+    snapshot_artifacts: tuple[ArtifactReceipt, ...]
 
 
 class FixtureActionLogSource(ActionLogSource):
@@ -118,8 +148,11 @@ def build_local_evaluation_fixture(
                     expected_fingerprint=None,
                 )
                 action_receipts = _manifest_partitions(handoff.snapshot_root)
-                (staging / "_SUCCESS").write_text(
-                    f"{descriptor_digest}\n", encoding="utf-8"
+                integrity = _integrity_receipt(
+                    descriptor_digest, action_receipts, handoff
+                )
+                (staging / "_SUCCESS").write_bytes(
+                    canonical_json_bytes(integrity.model_dump(mode="json"))
                 )
                 if not _fixture_is_valid(staging, descriptor, descriptor_digest):
                     raise _fixture_error(
@@ -146,7 +179,13 @@ def build_local_evaluation_fixture(
                 _release_lock(lock_file)
     except StageCError:
         raise
-    except (OSError, pa.ArrowException, ValidationError):
+    except (
+        ActionLogGenerationError,
+        EvaluationSnapshotError,
+        OSError,
+        pa.ArrowException,
+        ValidationError,
+    ):
         raise _fixture_error(StageCErrorCode.FIXTURE_STATE_CONFLICT, "fixture_build")
     finally:
         if staging.exists():
@@ -179,8 +218,10 @@ def _build_staged_fixture(
             generator_name="rule_based",
             model_name="fixture-rule-action-log",
             overwrite=False,
+            completion_timestamp=datetime.combine(
+                partition_date, datetime.min.time(), tzinfo=UTC
+            ),
         )
-        _normalize_generated_at(staging, partition_date)
     source = FixtureActionLogSource(staging, descriptor_digest)
     snapshot = build_evaluation_snapshot(
         EvaluationSnapshotRequest(
@@ -194,6 +235,13 @@ def _build_staged_fixture(
         source=source,
     )
     _validate_coverage(snapshot.target_path)
+    snapshot_lock = (
+        staging
+        / "evaluation-snapshots"
+        / "by-hash"
+        / f".{snapshot.snapshot_fingerprint}.lock"
+    )
+    snapshot_lock.unlink()
 
 
 def _validate_coverage(snapshot_root: Path) -> None:
@@ -206,7 +254,10 @@ def _validate_coverage(snapshot_root: Path) -> None:
             StageCErrorCode.FIXTURE_COVERAGE_INSUFFICIENT,
             "fixture_coverage_validation",
         )
-    for split in (manifest.validation, manifest.final_holdout):
+    for split, expected_user_count in (
+        (manifest.validation, 160),
+        (manifest.final_holdout, 40),
+    ):
         counts = split.counts
         try:
             slate = pq.read_table(
@@ -235,6 +286,8 @@ def _validate_coverage(snapshot_root: Path) -> None:
             slate.num_rows != labels.num_rows
             or any(size != 24 for size in slate_groups.values())
             or counts.row_count != slate.num_rows
+            or counts.user_count != expected_user_count
+            or len({key[0] for key in slate_groups}) != expected_user_count
             or counts.slate_count != slate_count
             or counts.clicked_row_count != clicked_rows
             or counts.click_positive_slate_count != len(positive_slates)
@@ -268,7 +321,9 @@ def _validated_judge_handoff(
     expected_fingerprint: str | None,
 ) -> JudgeSnapshotHandoff:
     try:
-        if not _safe_tree(snapshot_root):
+        if not _safe_tree(snapshot_root) or not _tree_is_exact(
+            snapshot_root, _SNAPSHOT_FILES, _SNAPSHOT_DIRS
+        ):
             raise ValueError
         manifest_bytes = (snapshot_root / "manifest.json").read_bytes()
         manifest = EvaluationSnapshotManifest.model_validate_json(manifest_bytes)
@@ -288,7 +343,14 @@ def _validated_judge_handoff(
             manifest.final_holdout.artifacts.slate,
             manifest.final_holdout.artifacts.labels,
         )
-        if len(artifacts) != _ARTIFACT_COUNT:
+        if len(artifacts) != _ARTIFACT_COUNT or tuple(
+            artifact.relative_path for artifact in artifacts
+        ) != (
+            "validation/slate.parquet",
+            "validation/labels.parquet",
+            "final_holdout/slate.parquet",
+            "final_holdout/labels.parquet",
+        ):
             raise ValueError
         for artifact in artifacts:
             path = snapshot_root.joinpath(*artifact.relative_path.split("/"))
@@ -310,25 +372,6 @@ def _validated_judge_handoff(
     )
 
 
-def _normalize_generated_at(staging: Path, partition_date: date) -> None:
-    """Pin producer audit time after a real daily run so fixture bytes are reproducible."""
-
-    path = staging / "action_log" / f"dt={partition_date.isoformat()}" / "part-0.parquet"
-    table = pq.read_table(path)
-    column_index = table.schema.get_field_index("generated_at")
-    generated_at = datetime.combine(
-        partition_date, datetime.min.time(), tzinfo=UTC
-    ).isoformat()
-    normalized = table.set_column(
-        column_index,
-        "generated_at",
-        pa.array([generated_at] * table.num_rows, type=pa.string()),
-    )
-    temporary = path.with_suffix(".normalized.parquet")
-    _write_table(normalized, temporary)
-    temporary.replace(path)
-
-
 def _fixture_is_valid(
     root: Path,
     expected_descriptor: FixtureDescriptor,
@@ -339,11 +382,15 @@ def _fixture_is_valid(
             return False
         descriptor_bytes = (root / "fixture.json").read_bytes()
         parsed = FixtureDescriptor.model_validate_json(descriptor_bytes)
+        integrity_bytes = (root / "_SUCCESS").read_bytes()
+        integrity = _FixtureIntegrityReceipt.model_validate_json(integrity_bytes)
         if (
             parsed != expected_descriptor
             or sha256(descriptor_bytes).hexdigest() != descriptor_digest
-            or (root / "_SUCCESS").read_text(encoding="utf-8")
-            != f"{descriptor_digest}\n"
+            or integrity_bytes
+            != canonical_json_bytes(integrity.model_dump(mode="json"))
+            or integrity.contract_version != "local-fixture-integrity-v1"
+            or integrity.descriptor_sha256 != descriptor_digest
         ):
             return False
         input_receipts = (parsed.virtual_users, *parsed.youtube_partitions)
@@ -356,10 +403,21 @@ def _fixture_is_valid(
             ):
                 return False
         snapshot_root = _single_snapshot_root(root)
-        handoff = _validated_judge_handoff(snapshot_root, expected_fingerprint=None)
+        handoff = _validated_judge_handoff(
+            snapshot_root,
+            expected_fingerprint=str(integrity.snapshot_fingerprint),
+        )
         partitions = _manifest_partitions(handoff.snapshot_root)
         expected_dates = canonical_fixture_dates(parsed.evaluation_start_date)
-        if tuple(receipt.dt for receipt in partitions) != expected_dates:
+        if (
+            tuple(receipt.dt for receipt in partitions) != expected_dates
+            or partitions != integrity.action_log_partitions
+            or handoff.manifest_sha256 != integrity.manifest_sha256
+            or handoff.validation_id != integrity.validation_id
+            or handoff.final_holdout_id != integrity.final_holdout_id
+            or _snapshot_artifacts(snapshot_root) != integrity.snapshot_artifacts
+            or not _fixture_tree_is_exact(root, parsed, handoff)
+        ):
             return False
         for receipt in partitions:
             path = root / "action_log" / f"dt={receipt.dt.isoformat()}" / "part-0.parquet"
@@ -384,7 +442,15 @@ def _receipt_from_complete_fixture(
     reused: bool,
 ) -> LocalEvaluationFixtureReceipt:
     snapshot_root = _single_snapshot_root(target)
-    handoff = _validated_judge_handoff(snapshot_root, expected_fingerprint=None)
+    try:
+        integrity = _FixtureIntegrityReceipt.model_validate_json(
+            (target / "_SUCCESS").read_bytes()
+        )
+    except (OSError, ValidationError):
+        raise _fixture_error(StageCErrorCode.FIXTURE_STATE_CONFLICT, "fixture_marker_read")
+    handoff = _validated_judge_handoff(
+        snapshot_root, expected_fingerprint=str(integrity.snapshot_fingerprint)
+    )
     return LocalEvaluationFixtureReceipt(
         fixture_root=target,
         descriptor_path=target / "fixture.json",
@@ -413,6 +479,96 @@ def _manifest_partitions(snapshot_root: Path) -> tuple[SourcePartitionReceipt, .
     return manifest.source.partitions
 
 
+def _snapshot_artifacts(snapshot_root: Path) -> tuple[ArtifactReceipt, ...]:
+    try:
+        manifest = EvaluationSnapshotManifest.model_validate_json(
+            (snapshot_root / "manifest.json").read_bytes()
+        )
+    except (OSError, ValidationError):
+        raise _fixture_error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "judge_manifest_read")
+    return (
+        manifest.validation.artifacts.slate,
+        manifest.validation.artifacts.labels,
+        manifest.final_holdout.artifacts.slate,
+        manifest.final_holdout.artifacts.labels,
+    )
+
+
+def _integrity_receipt(
+    descriptor_digest: str,
+    action_receipts: tuple[SourcePartitionReceipt, ...],
+    handoff: JudgeSnapshotHandoff,
+) -> _FixtureIntegrityReceipt:
+    return _FixtureIntegrityReceipt(
+        contract_version="local-fixture-integrity-v1",
+        descriptor_sha256=descriptor_digest,
+        action_log_partitions=action_receipts,
+        snapshot_fingerprint=handoff.snapshot_fingerprint,
+        manifest_sha256=handoff.manifest_sha256,
+        validation_id=handoff.validation_id,
+        final_holdout_id=handoff.final_holdout_id,
+        snapshot_artifacts=_snapshot_artifacts(handoff.snapshot_root),
+    )
+
+
+def _fixture_tree_is_exact(
+    root: Path,
+    descriptor: FixtureDescriptor,
+    handoff: JudgeSnapshotHandoff,
+) -> bool:
+    files = {
+        "fixture.json",
+        "_SUCCESS",
+        descriptor.virtual_users.relative_path,
+        *(receipt.relative_path for receipt in descriptor.youtube_partitions),
+        *(
+            f"action_log/dt={partition_date.isoformat()}/part-0.parquet"
+            for partition_date in canonical_fixture_dates(descriptor.evaluation_start_date)
+        ),
+        *(
+            f"evaluation-snapshots/by-hash/{handoff.snapshot_fingerprint}/{path}"
+            for path in _SNAPSHOT_FILES
+        ),
+    }
+    directories = {
+        "inputs",
+        "inputs/youtube_trending_kr",
+        "action_log",
+        "evaluation-snapshots",
+        "evaluation-snapshots/by-hash",
+        *(f"inputs/youtube_trending_kr/dt={receipt.dt.isoformat()}" for receipt in descriptor.youtube_partitions),
+        *(f"action_log/dt={partition_date.isoformat()}" for partition_date in canonical_fixture_dates(descriptor.evaluation_start_date)),
+        f"evaluation-snapshots/by-hash/{handoff.snapshot_fingerprint}",
+        *(
+            f"evaluation-snapshots/by-hash/{handoff.snapshot_fingerprint}/{path}"
+            for path in _SNAPSHOT_DIRS
+        ),
+    }
+    return _tree_is_exact(root, frozenset(files), frozenset(directories))
+
+
+def _tree_is_exact(
+    root: Path,
+    expected_files: frozenset[str],
+    expected_directories: frozenset[str],
+) -> bool:
+    try:
+        io_root = _io_path(root)
+        actual_files = {
+            path.relative_to(io_root).as_posix()
+            for path in io_root.rglob("*")
+            if path.is_file()
+        }
+        actual_directories = {
+            path.relative_to(io_root).as_posix()
+            for path in io_root.rglob("*")
+            if path.is_dir()
+        }
+    except OSError:
+        return False
+    return actual_files == expected_files and actual_directories == expected_directories
+
+
 def _require_safe_state_root(root: Path) -> None:
     if not root.is_absolute() or not _resolved_without_link(root) or not root.is_dir():
         raise _fixture_error(
@@ -425,7 +581,7 @@ def _safe_tree(root: Path) -> bool:
     if not _resolved_without_link(root) or not root.is_dir():
         return False
     try:
-        for path in root.rglob("*"):
+        for path in _io_path(root).rglob("*"):
             if not _resolved_without_link(path):
                 return False
             if path.is_file() and path.stat().st_nlink != 1:
