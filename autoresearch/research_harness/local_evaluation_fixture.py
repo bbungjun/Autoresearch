@@ -5,7 +5,8 @@ production 일일 action log 4개를 생성하고 P0-2가 소비할 검증된 Ju
 
 [기능] 물리 Judge 경로를 canonical fixture URI로 가리는 source adapter, coverage 검사,
 derived path·lock alias 검증, content-addressed write-once fixture 게시와 완성 target
-재검증 및 candidate source의 outer fixture provenance 결속을 제공한다.
+재검증 및 candidate source의 outer fixture provenance·canonical Judge state root 결속을
+제공한다. 알려진 하위 오류의 public Stage C 번역에서는 원래 exception context를 숨긴다.
 
 [비책임] candidate data view·workspace·argv·환경 구성과 metric/Judge 판정은 후속 Stage C 및
 P0-2 모듈이 담당한다. 임의 hostile filesystem actor와의 경쟁 방어도 담당하지 않는다.
@@ -141,7 +142,10 @@ def build_local_evaluation_fixture(
     try:
         staging = Path(mkdtemp(prefix=".staging-", dir=output_root))
     except OSError:
-        raise _fixture_error(StageCErrorCode.FIXTURE_REQUEST_INVALID, "fixture_root_prepare")
+        raise _fixture_error(
+            StageCErrorCode.FIXTURE_REQUEST_INVALID,
+            "fixture_root_prepare",
+        ) from None
 
     try:
         descriptor = write_canonical_fixture_inputs(staging, request)
@@ -156,7 +160,7 @@ def build_local_evaluation_fixture(
                 raise _fixture_error(
                     StageCErrorCode.FIXTURE_STATE_CONFLICT,
                     "fixture_lock_validation",
-                )
+                ) from None
             _acquire_descriptor_lock(lock_file)
             try:
                 if target.exists():
@@ -164,7 +168,7 @@ def build_local_evaluation_fixture(
                         raise _fixture_error(
                             StageCErrorCode.FIXTURE_STATE_CONFLICT,
                             "fixture_reuse_validation",
-                        )
+                        ) from None
                     return _receipt_from_complete_fixture(
                         target, descriptor_digest, reused=True
                     )
@@ -184,7 +188,7 @@ def build_local_evaluation_fixture(
                     raise _fixture_error(
                         StageCErrorCode.FIXTURE_STATE_CONFLICT,
                         "fixture_staging_validation",
-                    )
+                    ) from None
                 staging.rename(target)
                 return LocalEvaluationFixtureReceipt(
                     fixture_root=target,
@@ -212,7 +216,10 @@ def build_local_evaluation_fixture(
         pa.ArrowException,
         ValidationError,
     ):
-        raise _fixture_error(StageCErrorCode.FIXTURE_STATE_CONFLICT, "fixture_build")
+        raise _fixture_error(
+            StageCErrorCode.FIXTURE_STATE_CONFLICT,
+            "fixture_build",
+        ) from None
     finally:
         if staging.exists():
             try:
@@ -287,7 +294,7 @@ def _validate_coverage(snapshot_root: Path) -> None:
         raise _fixture_error(
             StageCErrorCode.FIXTURE_COVERAGE_INSUFFICIENT,
             "fixture_coverage_validation",
-        )
+        ) from None
     for split, expected_user_count in (
         (manifest.validation, 160),
         (manifest.final_holdout, 40),
@@ -304,7 +311,7 @@ def _validate_coverage(snapshot_root: Path) -> None:
             raise _fixture_error(
                 StageCErrorCode.FIXTURE_COVERAGE_INSUFFICIENT,
                 "fixture_coverage_artifact_read",
-            )
+            ) from None
         slate_groups: dict[tuple[str, str], int] = {}
         for row in slate.select(["user_id", "slate_id"]).to_pylist():
             key = (row["user_id"], row["slate_id"])
@@ -418,7 +425,10 @@ def _validated_judge_snapshot(
         ValueError,
         pa.ArrowException,
     ):
-        raise _fixture_error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "judge_handoff_validation")
+        raise _fixture_error(
+            StageCErrorCode.JUDGE_HANDOFF_INVALID,
+            "judge_handoff_validation",
+        ) from None
     return (
         JudgeSnapshotHandoff(
             snapshot_fingerprint=manifest.snapshot_fingerprint,
@@ -529,10 +539,23 @@ def _require_fixture_source_provenance(
         / str(handoff.snapshot_fingerprint)
     )
     try:
+        if (
+            fixture_root.name != descriptor_digest
+            or fixture_root.parent.name != "by-hash"
+            or fixture_root.parent.parent.name != "fixtures"
+        ):
+            raise ValueError
+        judge_state_root = fixture_root.parents[2]
+        canonical_fixture_root = (
+            judge_state_root / "fixtures" / "by-hash" / descriptor_digest
+        )
         descriptor_bytes = _io_path(fixture_root / "fixture.json").read_bytes()
         descriptor = FixtureDescriptor.model_validate_json(descriptor_bytes)
         valid = (
             opaque_root == expected_root
+            and _resolved_without_link(judge_state_root)
+            and fixture_root.resolve(strict=True)
+            == canonical_fixture_root.resolve(strict=True)
             and sha256(descriptor_bytes).hexdigest() == descriptor_digest
             and _resolved_without_link(source._physical_root)
             and source._physical_root.resolve(strict=True)
@@ -541,14 +564,22 @@ def _require_fixture_source_provenance(
             == expected_snapshot.resolve(strict=True)
             and _fixture_is_valid(fixture_root, descriptor, descriptor_digest)
         )
-    except (OSError, RuntimeError, ValidationError, StageCError, pa.ArrowException):
+    except (
+        IndexError,
+        OSError,
+        RuntimeError,
+        ValidationError,
+        StageCError,
+        ValueError,
+        pa.ArrowException,
+    ):
         valid = False
     if not valid:
         raise _fixture_error(
             StageCErrorCode.JUDGE_HANDOFF_INVALID,
             "fixture_source_provenance",
-        )
-    return fixture_root
+        ) from None
+    return judge_state_root
 
 
 def _receipt_from_complete_fixture(
@@ -563,7 +594,10 @@ def _receipt_from_complete_fixture(
             (target / "_SUCCESS").read_bytes()
         )
     except (OSError, ValidationError):
-        raise _fixture_error(StageCErrorCode.FIXTURE_STATE_CONFLICT, "fixture_marker_read")
+        raise _fixture_error(
+            StageCErrorCode.FIXTURE_STATE_CONFLICT,
+            "fixture_marker_read",
+        ) from None
     handoff = _validated_judge_handoff(
         snapshot_root, expected_fingerprint=str(integrity.snapshot_fingerprint)
     )
@@ -595,7 +629,10 @@ def _manifest_partitions(snapshot_root: Path) -> tuple[SourcePartitionReceipt, .
             _io_path(snapshot_root / "manifest.json").read_bytes()
         )
     except (OSError, ValidationError):
-        raise _fixture_error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "judge_manifest_read")
+        raise _fixture_error(
+            StageCErrorCode.JUDGE_HANDOFF_INVALID,
+            "judge_manifest_read",
+        ) from None
     return manifest.source.partitions
 
 
@@ -605,7 +642,10 @@ def _snapshot_artifacts(snapshot_root: Path) -> tuple[ArtifactReceipt, ...]:
             _io_path(snapshot_root / "manifest.json").read_bytes()
         )
     except (OSError, ValidationError):
-        raise _fixture_error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "judge_manifest_read")
+        raise _fixture_error(
+            StageCErrorCode.JUDGE_HANDOFF_INVALID,
+            "judge_manifest_read",
+        ) from None
     return (
         manifest.validation.artifacts.slate,
         manifest.validation.artifacts.labels,

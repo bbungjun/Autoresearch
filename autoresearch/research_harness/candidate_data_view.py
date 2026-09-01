@@ -3,9 +3,9 @@
 [파이프라인] Stage B 평가 snapshot 게시 뒤와 격리된 candidate 학습·실행 앞에서
 Judge handoff를 재검증하고 validation slate와 과거 action log만 별도 root에 게시한다.
 
-[기능] source provenance·filesystem identity·Parquet receipt를 fail-closed로 확인하고,
-candidate-safe canonical manifest와 독립 byte copy를 write-once atomic directory로
-materialize한다.
+[기능] source provenance·Judge state/source와 destination의 격리·filesystem identity·
+Parquet receipt를 fail-closed로 확인하고, candidate-safe canonical manifest와 독립 byte
+copy를 write-once atomic directory로 materialize한다.
 
 [비책임] git worktree·subprocess argv·환경·credential 구성, final holdout 소비 권한과
 소비 registry, metric/Judge 판정은 후속 Task 3/P0-2가 담당한다.
@@ -92,9 +92,14 @@ def materialize_candidate_data_view(
         manifest.source.root,
         manifest.source.partitions,
     ):
-        raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "candidate_source_identity")
+        raise _error(
+            StageCErrorCode.JUDGE_HANDOFF_INVALID,
+            "candidate_source_identity",
+        ) from None
     _require_source_disjoint(destination_root, source, history)
-    _require_fixture_source_provenance(source, handoff)
+    judge_state_root = _require_fixture_source_provenance(source, handoff)
+    if judge_state_root is not None:
+        _require_disjoint_root(destination_root, judge_state_root)
     history_payloads = _load_history_payloads(source, history)
     slate_source = request.judge.snapshot_root.joinpath(
         *manifest.validation.artifacts.slate.relative_path.split("/")
@@ -150,7 +155,7 @@ def materialize_candidate_data_view(
                         raise _error(
                             StageCErrorCode.CANDIDATE_VIEW_CONFLICT,
                             "candidate_existing_view",
-                        )
+                        ) from None
                     return CandidateDataViewReceipt(
                         root=target,
                         manifest=candidate_manifest,
@@ -180,7 +185,7 @@ def materialize_candidate_data_view(
                         raise _error(
                             StageCErrorCode.CANDIDATE_VIEW_CONFLICT,
                             "candidate_staging_validation",
-                        )
+                        ) from None
                     staging.rename(target)
                 finally:
                     if staging.exists():
@@ -389,6 +394,22 @@ def _require_source_disjoint(
         for root in source_roots
     ):
         raise _error(StageCErrorCode.FIXTURE_REQUEST_INVALID, "candidate_source_relation")
+
+
+def _require_disjoint_root(destination_root: Path, protected_root: Path) -> None:
+    try:
+        destination = destination_root.resolve(strict=True)
+        protected = protected_root.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise _error(
+            StageCErrorCode.JUDGE_HANDOFF_INVALID,
+            "judge_state_root_validation",
+        ) from None
+    if destination.is_relative_to(protected) or protected.is_relative_to(destination):
+        raise _error(
+            StageCErrorCode.FIXTURE_REQUEST_INVALID,
+            "candidate_judge_state_relation",
+        )
 
 
 def _source_identity_matches(

@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import traceback
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -813,3 +814,5 @@ def test_domain_failures_are_mapped_without_original_context(
         )
     assert caught.value.code == StageCErrorCode.FIXTURE_STATE_CONFLICT
     assert secret_context not in str(caught.value)
+    assert caught.value.__suppress_context__ is True
+    assert secret_context not in "".join(traceback.format_exception(caught.value))

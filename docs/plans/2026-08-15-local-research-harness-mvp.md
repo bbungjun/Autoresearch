@@ -513,7 +513,8 @@ worktree·argv·환경 주입 검사는 Task 3 책임입니다.
       URI, fixture descriptor·seed·input과 Judge path를 filename·내용·receipt 모두에서
       배제한다. fixture source는 outer integrity와 같은 physical root에 결속하고 source와
       candidate의 filesystem identity alias, symlink·junction·hardlink를 거부하며 identical
-      complete target만 reuse한다
+      complete target만 reuse한다. canonical fixture layout에서 Judge state root를 역산해
+      candidate destination과의 양방향 포함 관계도 거부한다
 - [x] `CandidateDataViewRequest`에 split/final 선택 parameter를 두지 않는다. final slate는
       consumption registry 권한을 요구하는 별도 후속 interface로 남긴다
 - [x] Stage B `_SUCCESS`, typed manifest, manifest SHA와 네 artifact digest·row count를
@@ -522,7 +523,7 @@ worktree·argv·환경 주입 검사는 Task 3 책임입니다.
       `reused=false`이고 source SHA·slate ID·evaluation ID·네 artifact SHA·snapshot
       fingerprint가 같은지 확인한다. 같은 target 재호출의 `reused=true`는 별도 테스트다
 - [x] spec의 실패 code를 typed error로 구현하고, 오류에 user/input/path 원문을 노출하지
-      않는다
+      않는다. public Stage C 경계의 알려진 하위 오류 번역은 exception chaining도 억제한다
 - [x] Problem/Solution/Result에 candidate/Judge interface 분리, canonical source adapter,
       독립 재생성 증거와 남은 same-UID 한계를 기록한다
 

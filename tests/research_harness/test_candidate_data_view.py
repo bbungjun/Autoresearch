@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import traceback
 
 import pyarrow.parquet as pq
 import pyarrow as pa
@@ -498,6 +499,25 @@ class _BufferBackedSource:
             return pa.BufferReader(handle.read())
 
 
+class _FailingBufferSource(_BufferBackedSource):
+    def __init__(self, source: ArrowActionLogSource, secret: str) -> None:
+        super().__init__(source)
+        self._secret = secret
+
+    def open_partition(self, dt: date):
+        self.opened.append(dt)
+        raise OSError(self._secret)
+
+
+class _IdentityFailingBufferSource(_BufferBackedSource):
+    def __init__(self, source: ArrowActionLogSource, secret: str) -> None:
+        super().__init__(source)
+        self._secret = secret
+
+    def partition_uri(self, dt: date) -> str:
+        raise OSError(self._secret)
+
+
 def test_buffer_backed_remote_shape_checks_all_uris_but_opens_only_history(
     arrow_snapshot,
     tmp_path: Path,
@@ -516,6 +536,43 @@ def test_buffer_backed_remote_shape_checks_all_uris_but_opens_only_history(
         date(2026, 9, 2),
     ]
     assert source.opened == [date(2026, 8, 30), date(2026, 8, 31)]
+
+
+def test_candidate_source_oserror_traceback_is_sanitized(
+    arrow_snapshot,
+    tmp_path: Path,
+) -> None:
+    _, genuine, handoff = arrow_snapshot
+    secret = str(tmp_path / "SECRET-SOURCE-PATH")
+    source = _FailingBufferSource(genuine, secret)
+
+    with pytest.raises(StageCError) as captured:
+        materialize_candidate_data_view(
+            CandidateDataViewRequest(handoff, tmp_path), source=source
+        )
+
+    assert captured.value.code is StageCErrorCode.JUDGE_HANDOFF_INVALID
+    assert captured.value.__suppress_context__ is True
+    assert secret not in "".join(traceback.format_exception(captured.value))
+
+
+def test_candidate_source_identity_oserror_traceback_is_sanitized(
+    arrow_snapshot,
+    tmp_path: Path,
+) -> None:
+    _, genuine, handoff = arrow_snapshot
+    secret = str(tmp_path / "SECRET-SOURCE-IDENTITY-PATH")
+    source = _IdentityFailingBufferSource(genuine, secret)
+
+    with pytest.raises(StageCError) as captured:
+        materialize_candidate_data_view(
+            CandidateDataViewRequest(handoff, tmp_path), source=source
+        )
+
+    assert captured.value.code is StageCErrorCode.JUDGE_HANDOFF_INVALID
+    assert captured.value.__suppress_context__ is True
+    assert secret not in "".join(traceback.format_exception(captured.value))
+    assert source.opened == []
 
 
 def test_concurrent_materialization_publishes_once_and_reuses_once(
@@ -650,7 +707,8 @@ def test_manifest_semantic_error_is_sanitized_as_judge_handoff_invalid(
     _copy_snapshot(fixture.judge.snapshot_root, copied_root)
     manifest_path = copied_root / "manifest.json"
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    payload["created_at"] = "2026-09-01T00:00:00"
+    secret = str(tmp_path / "SECRET-ABS-PATH")
+    payload["created_at"] = secret
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
     handoff = replace(fixture.judge, snapshot_root=copied_root)
     destination = tmp_path / "candidate"
@@ -663,6 +721,8 @@ def test_manifest_semantic_error_is_sanitized_as_judge_handoff_invalid(
         )
 
     assert captured.value.code is StageCErrorCode.JUDGE_HANDOFF_INVALID
+    assert captured.value.__suppress_context__ is True
+    assert secret not in "".join(traceback.format_exception(captured.value))
 
 
 def test_fixture_source_is_bound_to_snapshot_outer_provenance(
@@ -701,6 +761,34 @@ def test_destination_must_be_safe_and_disjoint_from_judge(candidate_fixture, tmp
                 CandidateDataViewRequest(fixture.judge, root), source=source
             )
         assert captured.value.code is StageCErrorCode.FIXTURE_REQUEST_INVALID
+
+
+def test_destination_inside_judge_state_root_is_rejected(candidate_fixture) -> None:
+    state_root, fixture = candidate_fixture
+    destination = state_root / "candidate"
+    destination.mkdir(exist_ok=True)
+    source = FixtureActionLogSource(fixture.fixture_root, fixture.descriptor_sha256)
+
+    with pytest.raises(StageCError) as captured:
+        materialize_candidate_data_view(
+            CandidateDataViewRequest(fixture.judge, destination), source=source
+        )
+
+    assert captured.value.code is StageCErrorCode.FIXTURE_REQUEST_INVALID
+    assert not (destination / "harness_in").exists()
+
+
+def test_destination_containing_judge_state_root_is_rejected(candidate_fixture) -> None:
+    state_root, fixture = candidate_fixture
+    destination = state_root.parent
+    source = FixtureActionLogSource(fixture.fixture_root, fixture.descriptor_sha256)
+
+    with pytest.raises(StageCError) as captured:
+        materialize_candidate_data_view(
+            CandidateDataViewRequest(fixture.judge, destination), source=source
+        )
+
+    assert captured.value.code is StageCErrorCode.FIXTURE_REQUEST_INVALID
 
 
 def test_destination_reparse_component_is_rejected(candidate_fixture, tmp_path: Path) -> None:

@@ -733,6 +733,11 @@ source를 열기 전에 끝내되, module은 candidate history receipt의 `dt<T`
 `open_partition(dt)`으로 열고 읽은 bytes의 SHA-256·Parquet row 수를 대조한 뒤 candidate
 view로 복사한다. fixture에서는 같은
 `FixtureActionLogSource`, production local/GCS에서는 기존 Arrow adapter를 사용한다.
+검증된 `fixture://` source에서는 descriptor digest와 component 이름까지 대조한 canonical
+`<judge_state_root>/fixtures/by-hash/<descriptor_sha256>/...` layout에서 Judge state root를
+역산하고, candidate destination과 이 root의 양방향 포함 관계를 거부한다. 신뢰할 physical
+Judge state root를 제공하지 않는 non-fixture local/GCS source에는 이 보장을 과장하지 않고,
+snapshot·physical source root/path와 destination 사이의 기존 포함 관계 경계를 적용한다.
 `CandidateDataViewReceipt.root`는 `<destination_root>/harness_in`이고,
 `CandidateDataManifest.slate.relative_path`는 정확히 `slate.parquet`, history receipt의
 `relative_path`는 정확히 `history/action_log/dt=D/part-0.parquet`다. 모든 relative path는
@@ -804,7 +809,10 @@ temp path를 그대로 보고하면 독립 run의 ID가 달라지는 것이 정�
 | `fixture_reproducibility_mismatch` | 독립 두 run의 source·ID·artifact·fingerprint 불일치 |
 
 오류에는 row 원문·user ID·경로 전체를 넣지 않는다. stage, reason code, dt, count와
-제한된 식별자 prefix만 기록한다.
+제한된 식별자 prefix만 기록한다. Stage C public builder·materializer·reproducibility verifier가
+예상 가능한 producer, filesystem, Arrow, Pydantic 또는 domain 오류를 typed `StageCError`로
+번역할 때는 exception chaining도 억제한다. 따라서 `traceback.format_exception`을 포함한
+호출자 관찰 surface에도 원래 예외의 경로·입력 원문이 남지 않는다.
 
 ## 15. 구현 단계
 
@@ -981,9 +989,13 @@ sibling staging의 exact tree를 검증한 뒤 atomic rename하며, 완전히 �
 `evaluation-snapshots/by-hash/<fingerprint>`인지 확인하고, outer `_SUCCESS`, `fixture.json`,
 descriptor digest와 전체 fixture integrity receipt를 다시 검증합니다. Local fixture와 local
 Arrow source는 physical root·partition path가 candidate destination과 서로 포함 관계이면
-거부합니다. Slate와 history source의 가능한 `(st_dev, st_ino)`를 캡처해 최초 게시와 reuse
+거부합니다. 또한 canonical fixture layout에서 검증해 역산한 Judge state root와 destination의
+양방향 포함 관계도 거부하며, non-fixture source에는 알 수 없는 state root까지 보호한다고
+주장하지 않습니다. Slate와 history source의 가능한 `(st_dev, st_ino)`를 캡처해 최초 게시와 reuse
 모두에서 candidate 파일 identity가 source와 다르고 link count가 1인지 확인하며, remote
 source는 local identity가 없는 대신 기존 URI·bytes digest·Parquet row receipt 경계를 유지합니다.
+예상 가능한 하위 계층 오류를 `StageCError`로 번역하는 모든 public 경계는 exception chaining을
+억제해 formatted traceback에도 producer 메시지나 local path가 노출되지 않게 합니다.
 
 ### Result
 
@@ -995,7 +1007,9 @@ timezone-naive manifest, Judge marker·manifest·네 artifact
 source↔candidate inode alias, partial·extra·tampered target은 sanitized typed error로
 거부됩니다. Receipt와 게시 tree의 파일명·전체 bytes를 탐색해 labels/final ID·path,
 snapshot fingerprint, source URI, fixture seed와 Judge path가 없음을 확인했습니다. 동일 완성
-target만 `reused=true`였고 focused 테스트 34개가 통과했습니다. Hook 없는 buffer-backed
+target만 `reused=true`였습니다. Judge state root 내부와 그 parent destination 반례 및 producer,
+malformed manifest, candidate source 오류의 formatted traceback 비노출도 회귀 테스트로
+고정했습니다. Hook 없는 buffer-backed
 source도 전체 URI를 대조한 뒤 history 두 날짜만 열었고, 같은 destination의 동시 두 호출은
 한 번 게시하고 한 번 `reused=true`로 반환했습니다. 독립 두 Judge root의 최종
 프로토콜은 아래 최종 기록에서 완료했습니다. 실제 worktree/subprocess/final consumption
