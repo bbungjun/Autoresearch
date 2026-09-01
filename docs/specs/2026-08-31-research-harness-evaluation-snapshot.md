@@ -1,6 +1,6 @@
 # Research Harness P0-1 — 재현 가능한 평가 데이터와 split
 
-> 작성: 2026-08-31 | 상태: Stage A producer 계약 및 Stage B snapshot builder 구현 완료, Stage C 대기 | 추적: #17
+> 작성: 2026-08-31 | 상태: Stage A·B 구현 완료, Stage C 계약 확정·구현 대기 | 추적: #17, #22
 >
 > 상위 계약:
 > `docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md`
@@ -8,12 +8,13 @@
 > 구현 순서:
 > `docs/plans/2026-08-15-local-research-harness-mvp.md` Task 1-0, Task 1
 
-## Stage B 부분 완료, Stage C 대기
+## Stage B 완료, Stage C 계약 확정·구현 대기
 
 Stage B는 원천 파티션 검증, canonical slate 검증, 다일 click attribution, 고정 user
 split·구조 coverage, label 분리 artifact·typed manifest, local write-once publisher와 공개
-snapshot builder까지 구현했습니다. Stage C의 RuleBased fixture·seed custody, candidate
-workspace 주입 검증, Sealed Judge 및 validation/final artifact handoff는 구현 대기 상태입니다.
+snapshot builder까지 구현했습니다. Stage C는 RuleBased fixture·seed custody, data-only
+candidate view와 P0-2용 Judge snapshot handoff를 구현합니다. 실제 disposable worktree,
+subprocess argv·환경과 Sealed Judge의 지표·판정은 각각 후속 Task 3과 P0-2 책임입니다.
 
 ## 1. 목적
 
@@ -49,6 +50,8 @@ P0-1의 산출물은 다음 두 가지다.
 - `promote|revise|discard` 판정
 - candidate `predictions.csv` 검증
 - final holdout 소비 registry
+- disposable candidate git worktree와 subprocess argv·환경 구성
+- GCS·BigQuery credential 제거와 candidate 프로세스 격리
 - Kubernetes executor·Workbench·MLflow 배선
 - 과거 action log의 `slate_id` 소급 생성
 - timestamp나 rank를 이용한 legacy slate 추론
@@ -68,6 +71,12 @@ action log producer
                            ├─ final_holdout/slate.parquet    반복 중 미공개
                            ├─ final_holdout/labels.parquet   Judge 전용
                            └─ manifest.json
+                                ├─ CandidateDataView
+                                │    ├─ candidate-view.json
+                                │    ├─ slate.parquet
+                                │    └─ history/action_log/dt=D/part-0.parquet
+                                └─ JudgeSnapshotHandoff
+                                     └─ 전체 snapshot root + 검증 digest
 ```
 
 ## 5. Action log `slate_id` 계약
@@ -286,7 +295,9 @@ P0-1 manifest는 그 판정에 필요한 모든 count를 제공한다.
 ```
 
 `labels.parquet`와 final holdout 전체 경로는 Judge 소유 상태에만 전달한다. 반복 trial의
-candidate workspace에는 validation `slate.parquet`만 주입한다.
+candidate 쪽에는 §13.3의 `CandidateDataView`만 전달한다. Stage B의
+`EvaluationSnapshotReceipt.target_path`나 전체 `manifest.json`은 source root·평가 파티션
+URI·final artifact 상대 경로를 포함하므로 candidate interface가 아니다.
 
 ### 9.2 `slate.parquet`
 
@@ -558,16 +569,180 @@ manifest의 `snapshot_fingerprint`의 정본이다.
 GCS 게시를 추가할 때도 generation precondition을 사용해 같은 write-once 의미를
 유지한다. local과 GCS 구현은 동일 manifest를 생산해야 한다.
 
-## 13. Local fixture
+## 13. Stage C local fixture와 handoff
 
-개발·CI fixture는 `RuleBasedActionLogGenerator`를 사용한다.
+Stage C에는 두 개의 외부 seam만 둔다.
 
-- 최소 history 구간, 평가 `[T, T_end]`, scan용 `T_end+1`을 모두 생성한다.
-- virtual user·video 입력과 생성 seed는 Judge 소유 fixture state에 둔다.
-- candidate에는 생성된 `dt < T` history와 validation slate만 전달한다.
-- 평가 구간을 재생성할 수 있는 fixture 입력·seed는 candidate argv·환경·workspace에
-  전달하지 않는다.
-- fixture도 production과 같은 parquet·cutover·attribution·split·manifest 경로를 탄다.
+1. `LocalEvaluationFixture` module은 Judge 소유 입력에서 일일 action log와 Stage B
+   snapshot을 만들고 `JudgeSnapshotHandoff`를 반환한다.
+2. `CandidateDataView` module은 검증된 Judge handoff에서 candidate에게 허용된 파일만
+   별도 목적지에 게시한다.
+
+두 module의 interface가 fixture 입력 생성, daily runner 반복, source 검증, artifact 경로
+해석과 digest 재검증을 숨긴다. 실제 git worktree 생성, subprocess argv·환경, credential
+allowlist는 `docs/plans/2026-08-15-local-research-harness-mvp.md` Task 3이 이 interface를
+소비해 구현한다. Stage C 테스트는 임시 빈 디렉터리를 candidate 목적지로 사용하며 Task 3을
+선행 구현하지 않는다.
+
+`FixtureActionLogSource`는 Stage B의 기존 `ActionLogSource` seam에 놓는 **내부 adapter**다.
+외부 interface에 새 source port를 추가하지 않는다. adapter의 `open_partition(dt)`는 Judge
+fixture root의 물리 Parquet를 열지만, `opaque_root`와 `partition_uri(dt)`는 각각
+`fixture://<descriptor_sha256>/action-log`와
+`fixture://<descriptor_sha256>/action-log/dt=D/part-0.parquet`를 반환한다. 이 canonical URI만
+Stage B identity에 들어가므로 Judge root의 물리 위치는 evaluation ID에 참여하지 않는다.
+
+### 13.1 공개 interface와 exact typed contract
+
+```text
+build_local_evaluation_fixture(
+  request: LocalEvaluationFixtureRequest,
+) -> LocalEvaluationFixtureReceipt
+
+materialize_candidate_data_view(
+  request: CandidateDataViewRequest,
+  *,
+  source: ActionLogSource,
+) -> CandidateDataViewReceipt
+```
+
+모든 dataclass는 `frozen=True, slots=True`, JSON model은 `extra="forbid", frozen=True`다.
+`Path`가 포함된 receipt는 trusted Harness 프로세스 내부 값이며 candidate로 직렬화하지 않는다.
+
+| Type | Exact fields |
+| --- | --- |
+| `LocalEvaluationFixtureRequest` | `judge_state_root: Path`, `evaluation_start_date: date`, `fixture_seed: int` |
+| `FixtureInputReceipt` | `relative_path: str`, `rows: int`, `sha256: str` |
+| `FixturePartitionReceipt` | `dt: date`, `relative_path: str`, `rows: int`, `sha256: str` |
+| `FixtureDescriptor` | `contract_version: Literal['youtube-ctr-local-fixture-v1']`, `input_generator_version: Literal['youtube-ctr-input-v1']`, `input_writer: WriterIdentity`, `fixture_seed: int`, `generator: Literal['rule_based']`, `generator_model: Literal['fixture-rule-action-log']`, `history_start_date: date`, `evaluation_start_date: date`, `evaluation_end_date: date`, `slate_id_cutover_date: date`, `candidates_per_user: Literal[24]`, `video_count_per_partition: Literal[48]`, `click_threshold: Literal[0.0]`, `personalized_ratio: Literal[0.7]`, `popular_ratio: Literal[0.2]`, `exploration_ratio: Literal[0.1]`, `history_days_per_run: Literal[1]`, `max_events_per_user_per_day: Literal[24]`, `max_concurrency: Literal[1]`, `chunk_size: Literal[0]`, `max_quarantine_ratio: Literal[0.0]`, `overwrite: Literal[False]`, `validation_user_count: Literal[160]`, `final_holdout_user_count: Literal[40]`, `virtual_users: FixtureInputReceipt`, `youtube_partitions: tuple[FixturePartitionReceipt, ...]` |
+| `JudgeSnapshotHandoff` | `snapshot_fingerprint: SnapshotFingerprint`, `snapshot_root: Path`, `manifest_sha256: str`, `validation_id: EvaluationId`, `final_holdout_id: EvaluationId` |
+| `LocalEvaluationFixtureReceipt` | `fixture_root: Path`, `descriptor_path: Path`, `descriptor_sha256: str`, `action_log_partitions: tuple[SourcePartitionReceipt, ...]`, `judge: JudgeSnapshotHandoff`, `reused: bool` |
+| `CandidateHistoryReceipt` | `dt: date`, `relative_path: str`, `rows: int`, `sha256: str` |
+| `CandidateDataManifest` | `contract_version: Literal['candidate-data-view-v1']`, `evaluation_id: EvaluationId`, `evaluation_start_date: date`, `complete_history_label_end_date: date`, `slate: ArtifactReceipt`, `history_partitions: tuple[CandidateHistoryReceipt, ...]` |
+| `CandidateDataViewRequest` | `judge: JudgeSnapshotHandoff`, `destination_root: Path` |
+| `CandidateDataViewReceipt` | `root: Path`, `manifest: CandidateDataManifest`, `manifest_sha256: str`, `reused: bool` |
+
+`fixture_seed`는 default가 없는 필수 non-negative integer다. 실제 action log randomness에는
+`RuleBasedActionLogGenerator` 생성자 인자가 아니라 각 일일
+`EventGenerationRequest.seed`로 전달한다. seed와 이를 이용해 만든 virtual user·video 입력은
+Judge 소유 `fixture.json`에만 남긴다.
+`input_generator_version`은 user/video field derivation과 row order를 버전으로 잠그고,
+`input_writer`는 §10.1과 같은 pinned PyArrow identity·options를 사용한다. 이 둘 중 하나가
+바뀌면 descriptor hash도 바뀐다. 일일 producer는 `overwrite=false`로만 호출한다.
+
+`judge_state_root`는 존재하는 absolute local directory여야 한다. symlink·junction/reparse
+point를 포함하거나 `destination_root`와 서로 포함 관계인 경로는
+`fixture_request_invalid`로 거부한다. 같은 UID가 다른 절대 경로를 추측해 읽는 공격까지
+막는 보안 sandbox가 아니라는 §4 상위 위협 모델은 유지한다.
+
+### 13.2 canonical fixture와 P0-2-ready coverage
+
+canonical fixture는 `T=evaluation_start_date`를 기준으로 다음을 고정한다.
+
+- history: `T-2`, `T-1`; evaluation output: `T`; scan tail: `T+1`
+- `history_start_date=slate_id_cutover_date=T-2`, `evaluation_end_date=T`
+- `candidates_per_user=24`, video 48개/partition, `click_threshold=0.0`,
+  candidate ratio=`0.7/0.2/0.1`, generator=`rule_based`
+- 일일 run은 `history_days=1`, `max_events_per_user_per_day=24`, `max_concurrency=1`,
+  `chunk_size=0`, `max_quarantine_ratio=0.0`을 사용한다
+- user ID 후보를 `fixture_seed`에서 결정적으로 만들고 §8 bucket을 계산해 validation user
+  160명과 final holdout user 40명을 정확히 선택한다
+- 같은 seed·날짜는 같은 virtual user·video input bytes를 만든다
+- 네 날짜 모두 production `run_daily_action_log`와 최종
+  `dt=D/part-0.parquet` 경로를 사용한다
+
+각 user의 평가 slate는 24행이며 click-positive여야 한다. 따라서 validation/final 각각
+click-positive slate 30개 이상, 유효 slate 비율 20% 이상, clicked/non-clicked row를 모두
+만족해야 한다. 이 조건은 P0-1 structural coverage보다 강하며 P0-2 Judge의 ranking metric
+성공 경로가 같은 fixture를 재사용하게 한다. 미달이면 `fixture_coverage_insufficient`로
+fixture 전체를 게시하지 않는다.
+
+Judge fixture state의 canonical layout은 다음과 같다.
+
+```text
+<judge_state_root>/fixtures/by-hash/<descriptor_sha256>/
+  fixture.json
+  inputs/
+    virtual_users.parquet
+    youtube_trending_kr/dt=D/part-0.parquet
+  action_log/dt=D/part-0.parquet
+  evaluation-snapshots/by-hash/<snapshot_fingerprint>/
+    ... Stage B exact artifact tree ...
+  _SUCCESS
+```
+
+`descriptor_sha256`는 `FixtureDescriptor`의 canonical JSON SHA-256이다. descriptor의 모든
+path는 fixture root 기준 POSIX relative path이며 absolute Judge path는 identity에 넣지
+않는다. snapshot request의 `action_log_root`와 Stage B receipt URI에는 위
+`FixtureActionLogSource`의 canonical `fixture://` URI를 사용한다. cooperating builder lock
+아래 descriptor hash의 새 root만 만들고 `_SUCCESS`를 마지막에 기록한다. 완성된 동일 root만
+digest 검증 후 멱등 재사용하며 partial·상이한 내용은 `fixture_state_conflict`로 거부한다.
+
+### 13.3 CandidateDataView
+
+candidate view의 exact filesystem interface는 다음뿐이다.
+
+```text
+<destination_root>/harness_in/
+  candidate-view.json
+  slate.parquet
+  history/action_log/dt=D/part-0.parquet
+```
+
+`candidate-view.json`은 `CandidateDataManifest`의 canonical JSON이다. history는 Judge
+manifest의 `candidate_history_partitions`에 있는 `dt < T` 파일만 byte-copy하고,
+`slate.parquet`은 validation artifact만 byte-copy한다. 복사 전후 SHA-256과 Parquet row 수를
+receipt와 대조한다. symlink·junction·hardlink와 원천 경로를 가리키는 파일은 허용하지 않는다.
+주입된 `ActionLogSource.opaque_root`와 각 `partition_uri(dt)`는 Judge manifest receipt와
+정확히 같아야 한다. module은 receipt에 없는 날짜를 열지 않고 `open_partition(dt)`에서 읽은
+bytes의 SHA-256·Parquet row 수를 대조한 뒤 candidate view로 복사한다. fixture에서는 같은
+`FixtureActionLogSource`, production local/GCS에서는 기존 Arrow adapter를 사용한다.
+`CandidateDataViewReceipt.root`는 `<destination_root>/harness_in`이고,
+`CandidateDataManifest.slate.relative_path`는 정확히 `slate.parquet`, history receipt의
+`relative_path`는 정확히 `history/action_log/dt=D/part-0.parquet`다. 모든 relative path는
+POSIX separator를 사용하며 absolute path, drive, `..`와 backslash를 거부한다.
+`CandidateDataViewRequest`에는 `split_name`이나 final 선택 flag를 두지 않는다. final slate
+materialization은 final 소비 registry가 발급한 권한을 요구하는 별도 후속 interface가
+소유하며, Stage C validation interface를 parameter로 넓혀 재사용하지 않는다.
+
+다음 값은 candidate view의 파일명·내용·typed receipt 어디에도 없어야 한다.
+
+- validation/final `labels.parquet`과 그 digest·상대/절대 경로
+- final holdout slate, evaluation ID, count, digest와 상대/절대 경로
+- 전체 Stage B manifest, snapshot root/fingerprint, 평가 source partition URI
+- `FixtureDescriptor`, fixture seed, virtual user·video input과 Judge root
+
+destination sibling staging에 모두 쓴 뒤 `harness_in`을 atomic rename한다. 기존 완성 view는
+manifest와 모든 digest가 같을 때만 `reused=true`로 반환하고, partial·상이한 view는
+`candidate_view_conflict`로 거부한다.
+
+### 13.4 JudgeSnapshotHandoff
+
+Judge handoff는 Stage B receipt의 target을 다시 열어 `_SUCCESS`, typed manifest
+fingerprint, manifest SHA-256과 네 artifact digest·row count를 모두 검증한 뒤 만든다.
+P0-2 Judge는 `snapshot_root/manifest.json`을 typed model로 읽어 validation/final artifact를
+찾으며 candidate 경로나 candidate code를 참조하지 않는다. handoff를 candidate argv·환경·
+prompt·feedback 또는 candidate view에 직렬화하지 않는다.
+
+이 handoff는 final holdout 소비를 허가하지 않는다. final slate 주입 시점과 write-once 소비
+registry는 각각 후속 Controller와 P0-2/P1 계약이 소유한다.
+
+### 13.5 독립 재생성 검증 프로토콜
+
+write-once `reused=true`는 게시 멱등성 증거이지 fixture 재생성 증거가 아니다. Stage C의
+재현성 검증은 다음 두 경로를 분리한다.
+
+1. **독립 재생성:** 같은 `fixture_seed`와 날짜로 서로 다른 두 Judge state root에 source와
+   snapshot을 각각 처음부터 생성한다. 두 run의 `FixtureActionLogSource`는 같은 descriptor
+   hash에서 같은 canonical `fixture://` root·URI를 보고하고, 두 receipt 모두
+   `reused=false`여야 한다. source partition SHA, slate ID projection, validation/final
+   evaluation ID, 네 artifact SHA와 snapshot fingerprint를 전부 비교한다.
+2. **게시 멱등성:** 같은 완성 fixture/snapshot root를 다시 호출해 digest 검증 뒤
+   `reused=true`인지 별도로 확인한다.
+
+`EvaluationIdPayload.source.root`와 partition `uri`는 identity에 참여한다. 따라서 physical
+temp path를 그대로 보고하면 독립 run의 ID가 달라지는 것이 정상이다. Stage C fixture만
+내부 adapter의 canonical `fixture://` URI를 사용하고, production local/GCS source의 URI
+계약은 바꾸지 않는다. 어느 비교든 다르면 `fixture_reproducibility_mismatch`다.
 
 ## 14. 실패 코드
 
@@ -584,6 +759,12 @@ GCS 게시를 추가할 때도 generation precondition을 사용해 같은 write
 | `slate_attribution_mismatch` | click과 귀속 impression의 slate 불일치 |
 | `split_coverage_insufficient` | validation/final 최소 구조 미달 |
 | `snapshot_write_conflict` | write-once target 불완전·digest 불일치 |
+| `fixture_request_invalid` | Judge/candidate root·seed·날짜 또는 path containment 위반 |
+| `fixture_coverage_insufficient` | canonical fixture가 P0-2-ready split coverage 미달 |
+| `fixture_state_conflict` | Judge fixture root가 partial이거나 같은 descriptor 아래 내용 불일치 |
+| `candidate_view_conflict` | candidate view가 partial이거나 기존 내용·digest 불일치 |
+| `judge_handoff_invalid` | `_SUCCESS`·manifest·artifact 검증 실패 |
+| `fixture_reproducibility_mismatch` | 독립 두 run의 source·ID·artifact·fingerprint 불일치 |
 
 오류에는 row 원문·user ID·경로 전체를 넣지 않는다. stage, reason code, dt, count와
 제한된 식별자 prefix만 기록한다.
@@ -621,10 +802,41 @@ Stage C fixture·Judge handoff는 완료로 표시하지 않는다.
 
 ### Stage C — fixture와 실증
 
-1. rule-based 일일 파티션 fixture 생성
-2. 동일 입력 재생성의 ID·fingerprint 일치 확인
-3. candidate view에 label·final holdout·fixture seed가 없는지 확인
-4. P0-2 Judge가 소비할 수 있는 validation/final artifact handoff
+1. [ ] versioned fixture descriptor와 Judge 소유 write-once state 구현
+2. [ ] P0-2-ready rule-based 일일 파티션 fixture 생성
+3. [ ] data-only `CandidateDataView`와 safe manifest 구현
+4. [ ] 검증된 `JudgeSnapshotHandoff` 구현
+5. [ ] 독립 2-run 재생성 및 별도 reuse 경로 실증
+6. [ ] candidate view에 label·final·source URI·fixture seed·Judge path가 없는지 확인
+
+## Portfolio Record — Stage C contract review
+
+### Problem
+
+초기 Stage C 문구는 candidate workspace·argv·환경 검증을 P0-1에 포함해 후속 Task 3의
+책임과 겹쳤습니다. 또한 Stage B receipt나 전체 manifest를 그대로 candidate에 넘기면 final
+artifact와 평가 source URI를 함께 노출할 수 있었고, 같은 output을 두 번 호출해
+`reused=true`를 보는 검증은 fixture 원천 재생성을 증명하지 못했습니다. physical source
+root가 evaluation identity에 포함되므로 서로 다른 temp root의 진짜 독립 run은 같은
+입력이어도 다른 ID가 되는 제약도 있었습니다.
+
+### Solution
+
+실제 worktree와 subprocess 환경을 Task 3에 남기고, Stage C를
+`LocalEvaluationFixture`와 validation 전용 `CandidateDataView` 두 module의 작은 interface로
+제한했습니다. Judge handoff와 candidate-safe manifest의 field·filesystem 계약을 분리하고,
+candidate interface에는 final 선택 parameter 자체를 두지 않았습니다. 물리 Judge root에서
+읽되 canonical `fixture://` URI를 보고하는 내부 `FixtureActionLogSource` adapter를 기존
+Stage B source seam에 배치해 production local/GCS 계약을 바꾸지 않고 독립 run identity를
+고정했습니다.
+
+### Result
+
+Stage C 구현자는 fixture 규모·coverage, seed custody, 두 handoff의 exact fields, 게시 충돌,
+금지 파일·경로와 독립 재생성 증거를 하나의 정본에서 확인할 수 있습니다. P0-2는 같은
+fixture로 성공 metric 경로를 시작할 수 있고 Task 3은 snapshot manifest 해석과 복사 규칙을
+중복 구현하지 않습니다. 이 기록은 계약 검토 결과이며 Stage C runtime 구현·성능·테스트
+통과를 주장하지 않습니다.
 
 ## Portfolio Record — Stage B snapshot builder
 
@@ -654,8 +866,8 @@ fixture/Judge/candidate workspace는 이 단계의 범위에서 제외했습니�
 `tests/action_log_generation`의 404개 테스트가 통과했고, real local Parquet manual QA는 같은
 입력 재빌드의 `reused=true`, 네 artifact의 1:1 join key, tampered target의 typed conflict,
 staging residue 없음 을 관찰했습니다. 이 결과는 Stage B snapshot 경계에 한정되며 Stage C의
-RuleBased fixture·seed custody, candidate workspace isolation, Sealed Judge 및 artifact handoff는
-여전히 후속 과제입니다.
+RuleBased fixture·seed custody, candidate data view와 Judge handoff는 아직 구현 전입니다.
+실제 candidate workspace와 Sealed Judge는 각각 Task 3과 P0-2의 후속 과제입니다.
 
 ## 16. 검증 매트릭스
 
@@ -666,16 +878,17 @@ RuleBased fixture·seed custody, candidate workspace isolation, Sealed Judge 및
 | 파티션 | dt와 KST timestamp 일치, `T_end+1` 누락 실패 |
 | attribution | 30분 경계, 다음 날 더 최근 impression, timestamp tie-break, slate mismatch 실패 |
 | split | 같은 user가 한쪽에만 존재, 동일 입력 동일 split, 빈 split 실패 |
-| label 봉인 | slate에 `clicked` 없음, candidate 경로에 labels/final 없음 |
+| label 봉인 | slate에 `clicked` 없음, candidate view에 labels/final/source URI/fixture seed/Judge path 없음 |
 | lineage | slate-label 1:1, source event 추적, evaluation ID 재현 |
 | 게시 | 동일 snapshot 멱등, partial·digest conflict 거부 |
-| 전체 | rule-based fixture에서 동일 snapshot 두 번 생성해 fingerprint 일치 |
+| 전체 | rule-based fixture의 독립 두 run은 source·ID·artifact·fingerprint 일치, 같은 target 재호출은 reuse |
 
 좁은 검증은 다음 순서로 실행한다.
 
 ```bash
 uv run python -m pytest tests/action_log_generation/ -v
 uv run python -m pytest tests/research_harness/test_slate.py -v
+uv run python -m pytest tests/research_harness/test_fixture.py -v
 uv run --no-sync ruff check autoresearch tests
 git diff --check
 ```
@@ -690,3 +903,6 @@ git diff --check
 - 같은 입력에서 같은 `evaluation_id`와 `snapshot_fingerprint`가 나온다.
 - write-once snapshot이 부분 결과나 다른 내용을 같은 ID로 받아들이지 않는다.
 - RuleBasedActionLogGenerator fixture로 GCP 없이 P0-1 전체가 재현된다.
+- candidate view는 safe manifest·validation slate·`dt < T` history의 물리적 복사본만 가진다.
+- P0-2-ready coverage를 만족하고 검증된 Judge handoff가 전체 snapshot을 정확히 가리킨다.
+- 독립 두 run 재생성과 동일 target reuse가 서로 다른 검증으로 통과한다.

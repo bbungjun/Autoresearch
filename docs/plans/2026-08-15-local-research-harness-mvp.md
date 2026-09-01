@@ -405,7 +405,7 @@ action log parquet에서 평가 slate를 조립하고 정답을 분리 봉인한
 Stage B Task 0은 §10~§12의 exact `EvaluationIdPayload`, canonical JSON bytes, writer
 identity, typed nested manifest와 fingerprint exclusion을 잠근다.
 
-### Stage B 부분 완료, Stage C 대기
+### Stage B 완료, Stage C 계약 확정·구현 대기
 
 이 계획에서 Stage A의 producer 계약과 Stage B snapshot builder 구현은 완료되었다. Task 1
 전체와 후속 Research Harness MVP를 완료 처리하지 않으며, Stage C fixture·Judge handoff는
@@ -420,8 +420,8 @@ identity, typed nested manifest와 fingerprint exclusion을 잠근다.
 - [x] 파티션 선택을 통과한 `dt >= slate_id_cutover_date` 행에서 `slate_id`가 null이면
       **오류로 거부**한다. 조용히 건너뛰거나 추론으로 채우지 않는다 (D6)
 - [ ] 개발·검증용 입력은 `RuleBasedActionLogGenerator`로 로컬 생성한다 (D7 — LLM·API 키
-      불필요). 평가 구간을 생성한 입력과 seed는 Judge 소유 경로에만 두고 candidate
-      workspace·argv·환경에 넣지 않는다
+      불필요). 평가 구간을 생성한 입력과 seed는 Judge 소유 경로에만 두고 Stage C
+      `CandidateDataView`에 넣지 않는다. 실제 workspace·argv·환경 검증은 Task 3이 소유한다
 - [x] click과 귀속 후보 impression은 **`dt BETWEEN T AND T_end + 1`**로 스캔하고,
       slate·labels 출력은 impression `dt`가 **`[T, T_end]`**인 행으로 제한한다.
       `T_end + 1` 파티션이 없거나 읽을 수 없으면 snapshot 생성을 fail-closed한다
@@ -449,7 +449,7 @@ identity, typed nested manifest와 fingerprint exclusion을 잠근다.
       - `validation/labels.parquet` — `evaluation_id`, `slate_id`, `user_id`, `video_id`,
         `source_event_id`, `clicked`. **봉인**
       - `final_holdout/slate.parquet`과 `final_holdout/labels.parquet` — 각각 대응하는 validation artifact schema와 일치하며, final slate는 label-free이고 final labels는 봉인. 반복
-        loop의 candidate 주입 차단은 Stage C candidate workspace 범위로 남김
+        loop의 candidate 노출 차단은 Stage C `CandidateDataView` 범위로 남김
       - `manifest.json` — split별 `evaluation_id`(content hash), 유저 분할 규칙, 행 수,
         출력일 `[T, T_end]`, candidate history의 `dt < T` 파티션 목록과 완전 라벨 출력일
         상한 `T-2`, 평가 스캔의 `[T, T_end + 1]` 원천 파티션, slate 수, slate당 평균 크기,
@@ -464,12 +464,64 @@ identity, typed nested manifest와 fingerprint exclusion을 잠근다.
       write-once 위반 시 실패
 
 Stage C fixture·Judge handoff는 구현 대기 상태다. `RuleBasedActionLogGenerator` fixture,
-fixture seed custody, candidate workspace·argv·환경 주입 검사와 Judge handoff는 위 Stage B
-체크의 완료 범위에 포함하지 않는다.
+fixture seed custody, data-only candidate view와 Judge handoff는 위 Stage B 체크의 완료 범위에
+포함하지 않는다. 실제 candidate worktree·argv·환경 주입 검사는 Task 3 책임이다.
 
 Task 1 전체와 Research Harness MVP는 완료 처리하지 않는다.
 
 **검증:** `uv run python -m pytest tests/research_harness/test_slate.py -v`
+
+---
+
+## Task 1-C: 결정적 local fixture와 candidate/Judge handoff
+
+이 Task는 #22와
+`docs/specs/2026-08-31-research-harness-evaluation-snapshot.md` §13의 exact contract를
+구현해 P0-1을 닫는다. 실제 git worktree와 subprocess 환경은 만들지 않는다.
+
+- [ ] `LocalEvaluationFixture` module의 작은 interface
+      `build_local_evaluation_fixture(LocalEvaluationFixtureRequest)`를 구현한다. 필수
+      `judge_state_root`, `evaluation_start_date`, default 없는 `fixture_seed`만 받고, 내부에서
+      canonical input 생성·4개 일일 producer 실행·Stage B snapshot build를 완주한다
+- [ ] frozen/extra-forbid `FixtureDescriptor`와 exact receipt를 구현하고, descriptor hash의
+      Judge-owned root에 input·action log·snapshot을 write-once 게시한다. seed와 input은 이
+      root 밖이나 candidate-safe model에 직렬화하지 않는다
+- [ ] Stage B `ActionLogSource` seam의 내부 `FixtureActionLogSource` adapter를 구현한다.
+      물리 Judge root에서 Parquet를 읽되 identity에는
+      `fixture://<descriptor_sha256>/action-log/...` canonical URI만 보고한다. production
+      local/GCS adapter 계약은 바꾸지 않는다
+- [ ] canonical fixture는 `T-2..T+1`, 24 candidates, validation user 160명, final user
+      40명을 결정적으로 만들고 양 split이 각각 click-positive slate 30개·20% 이상 및
+      clicked/non-clicked row를 만족하게 한다
+- [ ] `CandidateDataView` module의
+      `materialize_candidate_data_view(CandidateDataViewRequest, *, source: ActionLogSource)`를
+      구현한다. source root·partition URI를 Judge manifest receipt와 먼저 대조하며 exact
+      output은 `harness_in/candidate-view.json`, validation `slate.parquet`, manifest가 허용한
+      `dt < T` history의 물리적 byte-copy뿐이다. fixture는 같은 내부 adapter를 주입한다
+- [ ] candidate view에서 labels/final, 전체 snapshot manifest·root·fingerprint, 평가 source
+      URI, fixture descriptor·seed·input과 Judge path를 filename·내용·receipt 모두에서
+      배제한다. symlink·junction·hardlink를 거부하고 identical complete target만 reuse한다
+- [ ] `CandidateDataViewRequest`에 split/final 선택 parameter를 두지 않는다. final slate는
+      consumption registry 권한을 요구하는 별도 후속 interface로 남긴다
+- [ ] Stage B `_SUCCESS`, typed manifest, manifest SHA와 네 artifact digest·row count를
+      재검증한 최소 `JudgeSnapshotHandoff`를 만든다. P0-2는 이 handoff만 소비한다
+- [ ] 서로 다른 두 Judge root에서 같은 seed·날짜를 독립 생성해 두 receipt가 모두
+      `reused=false`이고 source SHA·slate ID·evaluation ID·네 artifact SHA·snapshot
+      fingerprint가 같은지 확인한다. 같은 target 재호출의 `reused=true`는 별도 테스트다
+- [ ] spec의 실패 code를 typed error로 구현하고, 오류에 user/input/path 원문을 노출하지
+      않는다
+- [ ] Problem/Solution/Result에 candidate/Judge interface 분리, canonical source adapter,
+      독립 재생성 증거와 남은 same-UID 한계를 기록한다
+
+**검증:**
+
+```bash
+uv run python -m pytest tests/research_harness/test_fixture.py -v
+uv run python -m pytest tests/research_harness/test_slate.py -v
+uv run python -m pytest tests/action_log_generation/ -v
+uv run --no-sync ruff check autoresearch tests
+git diff --check
+```
 
 ---
 
@@ -565,12 +617,16 @@ Task 1(slate), Task 2a(지표), Task 2b(Judge)가 완료된 뒤 시작하고, Ta
 현행 executor를 건드리지 않고 정적 allowlist 없는 독립 로컬 workspace를 만드는 지점이다.
 
 - [ ] `workspace.py` — 기준 SHA에서 disposable git worktree 생성, 종료 시 회수
-- [ ] 반복 중에는 validation `harness_in/slate.parquet`만 주입한다. final holdout slate는
-      Controller가 loop를 닫은 뒤 한 번만 주입한다. **labels, ledger, judge 체크아웃은
-      worktree 바깥 경로에 두고 경로도 candidate에 전달하지 않는다**
-- [ ] `harness_in/history/action_log/`에는 manifest가 허용한 `dt < T` 로컬 파티션만
-      주입한다. `dt >= T`가 하나라도 있으면 workspace 생성을 거부한다. 평가 fixture를 만든
-      `RuleBasedActionLogGenerator` 입력과 seed도 주입하지 않고 argv·환경에 넣지 않는다
+- [ ] 반복 중에는 Task 1-C의 `CandidateDataView`를 새 worktree root에 materialize한다.
+      `harness_in/slate.parquet`, `candidate-view.json`과 `dt < T` history 이외의 데이터가
+      있으면 workspace 생성을 거부한다. Task 3이 snapshot manifest를 다시 해석하거나 파일
+      복사 규칙을 중복 구현하지 않는다
+- [ ] final holdout slate는 Controller가 loop를 닫고 consumption registry 권한을 얻은 뒤
+      별도 final interface로 한 번만 주입한다. validation `CandidateDataView`에 split flag를
+      추가해 final을 우회 노출하지 않는다. **labels, ledger, judge 체크아웃은 worktree 바깥
+      경로에 두고 경로도 candidate에 전달하지 않는다**
+- [ ] 실제 candidate argv·환경에서 fixture input·seed와 Judge handoff를 제외한다. 이
+      subprocess 환경 검증은 Task 1-C가 아니라 Task 3이 소유한다
 - [ ] candidate 환경은 명시적 allowlist로 새로 만들고 GCS·BigQuery credential env와
       credential 파일을 주입하지 않는다. 원격 데이터 접근 없이 Harness의 로컬 history만
       읽는 계약을 테스트한다
