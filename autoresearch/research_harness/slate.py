@@ -4,7 +4,8 @@
 source·slate·attribution·split·artifact·publisher 단계를 순서대로 연결한다.
 
 [기능] typed 요청과 선택적 source adapter를 받아 cutover 이후 partition의 canonical
-slate identity를 검증하고 content-addressed local snapshot receipt를 반환한다.
+slate identity를 검증하고 content-addressed local snapshot receipt를 반환한다. Stage C의
+결정적 fixture에 한해 생성 시각을 주입하는 내부 조립 helper도 제공한다.
 
 [비책임] 각 단계의 검증·귀속·분할·identity·게시 알고리즘과 Stage C fixture/Judge
 handoff는 인접 모듈 및 후속 단계가 담당한다.
@@ -35,6 +36,19 @@ def build_evaluation_snapshot(
     request: EvaluationSnapshotRequest,
     *,
     source: ActionLogSource | None = None,
+) -> EvaluationSnapshotReceipt:
+    return _build_evaluation_snapshot(
+        request,
+        source=source,
+        created_at=datetime.now(UTC),
+    )
+
+
+def _build_evaluation_snapshot(
+    request: EvaluationSnapshotRequest,
+    *,
+    source: ActionLogSource | None,
+    created_at: datetime,
 ) -> EvaluationSnapshotReceipt:
     partitions = load_required_partitions(request, source)
     validate_slate_identities(
@@ -72,7 +86,7 @@ def build_evaluation_snapshot(
                 partitions=receipts,
                 validation=validation,
                 final_holdout=final_holdout,
-                created_at=datetime.now(UTC),
+                created_at=created_at,
             ),
         )
         return publish_snapshot(staging_dir, snapshot_root / "by-hash", manifest)

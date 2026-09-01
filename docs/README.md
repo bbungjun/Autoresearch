@@ -95,8 +95,8 @@
 - [Spec — 가설 수신부터 `[AR]` 이슈 발행까지](specs/2026-08-04-hypothesis-to-auto-research-issue.md) — 필드 소유권 3분할, 시드 고정, `gh` 발행 경계, 멱등성 (#516)
 - [Plan — 가설 수신부터 `[AR]` 이슈 발행까지 구현](plans/2026-08-04-hypothesis-to-auto-research-issue.md) (#516)
 - [Spec — 자율 ML 연구 Harness 기반 MVP와 논문 로드맵](specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md) — 저장소 전체 수정·외부 Sealed Judge·σ 기반 판정·local-first 반복 연구 계약 (#769)
-- [Plan — 로컬 Research Harness MVP](plans/2026-08-15-local-research-harness-mvp.md) — 현행 executor와 분리된 로컬 경로에서 사람이 준 가설·ExperimentCard부터 Sealed Judge·반복 실행·ledger·REPORT까지의 구현 순서 (#769). Stage C fixture·Judge handoff·CandidateDataView는 구현했지만 독립 두 run 최종 실증이 대기 중이므로 archive하지 않는다.
-- [Spec — Research Harness P0-1 평가 snapshot](specs/2026-08-31-research-harness-evaluation-snapshot.md) — P0-1 구현 정본: `slate_id`, 평가 기간·click 귀속, label 봉인, split·fingerprint와 candidate-safe data view (#17, #22). 독립 두 run 최종 실증이 남아 있어 살아있는 계약으로 유지한다.
+- [Plan — 로컬 Research Harness MVP](plans/2026-08-15-local-research-harness-mvp.md) — 현행 executor와 분리된 로컬 경로에서 사람이 준 가설·ExperimentCard부터 Sealed Judge·반복 실행·ledger·REPORT까지의 구현 순서 (#769). Task 1/P0-1은 완료됐지만 Task 2+와 전체 MVP가 진행 중이므로 archive하지 않는다.
+- [Spec — Research Harness P0-1 평가 snapshot](specs/2026-08-31-research-harness-evaluation-snapshot.md) — 완료된 P0-1 구현의 현재 유효 계약: `slate_id`, 평가 기간·click 귀속, label 봉인, split·fingerprint, 독립 재생성과 candidate-safe data view (#17, #22). 후속 Judge/Controller가 계속 소비하는 정본이므로 archive하지 않는다.
 - `applications/experiment_platform/` (FastAPI + Codex CLI/OpenAI + PostgreSQL 실험 API)
 - [Spec — Agent Orchestration GKE 내부 배포](specs/2026-07-30-agent-orchestration-gke-internal-deployment.md)
 - [Plan — Agent Orchestration GKE 내부 배포](plans/2026-07-30-agent-orchestration-gke-internal-deployment.md)
@@ -168,10 +168,10 @@
   local-first 반복 연구 계약 (#769)
 - [Research Harness P0-1 평가 snapshot](specs/2026-08-31-research-harness-evaluation-snapshot.md) —
   원천 `slate_id`, multi-day click 귀속, validation/final 분리, label 봉인과
-  content-addressed write-once snapshot과 candidate-safe data view 계약 (#17, #22; 독립 두 run 최종 실증 대기)
+  content-addressed write-once snapshot, 독립 두 root 재생성과 candidate-safe data view 계약 (#17, #22; P0-1 완료, 현재 유효 계약)
 - [로컬 Research Harness MVP 구현 계획](plans/2026-08-15-local-research-harness-mvp.md) —
   사람이 준 가설·ExperimentCard부터 봉인 평가·반복 실행·ledger·REPORT까지의 구현 순서
-  (#769, CandidateDataView 구현 완료·독립 두 run 최종 실증 대기라 archive하지 않음)
+  (#769, Task 1/P0-1 완료·Task 2+와 전체 MVP 진행 중이라 archive하지 않음)
 
 ## 가이드
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import replace
 from hashlib import sha256
 import inspect
 import json
@@ -15,10 +16,12 @@ import pytest
 
 from autoresearch.action_log_generation.pipeline import ActionLogGenerationError
 from autoresearch.research_harness import (
+    CandidateDataViewRequest,
     LocalEvaluationFixtureRequest,
     StageCError,
     StageCErrorCode,
     build_local_evaluation_fixture,
+    materialize_candidate_data_view,
 )
 from autoresearch.research_harness.evaluation_errors import (
     EvaluationSnapshotError,
@@ -36,6 +39,9 @@ from autoresearch.research_harness.local_evaluation_fixture import (
     FixtureActionLogSource,
     _validate_coverage,
     _validated_judge_handoff,
+)
+from autoresearch.research_harness.fixture_reproducibility import (
+    _verify_independent_fixture_reproduction,
 )
 
 
@@ -111,6 +117,16 @@ def built_fixture(tmp_path_factory: pytest.TempPathFactory):
         )
     )
     return state_root, receipt
+
+
+@pytest.fixture(scope="module")
+def independent_fixture_pair(built_fixture, tmp_path_factory: pytest.TempPathFactory):
+    _, first = built_fixture
+    second_root = tmp_path_factory.mktemp("fixture-second")
+    second = build_local_evaluation_fixture(
+        LocalEvaluationFixtureRequest(second_root, EVALUATION_DATE, 917)
+    )
+    return first, second
 
 
 def test_builder_runs_production_daily_and_publishes_canonical_fixture(
@@ -250,38 +266,17 @@ def test_fixture_contains_no_candidate_or_workspace_side_effects(built_fixture) 
     ).num_rows == 200
 
 
-def test_independent_roots_are_identical_and_seed_changes_source_bytes(
-    built_fixture, tmp_path: Path
+def test_independent_roots_and_candidate_views_are_reproducible(
+    independent_fixture_pair, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
-    _, first = built_fixture
-    same_root = tmp_path / "same"
-    different_root = tmp_path / "different"
-    same_root.mkdir()
-    different_root.mkdir()
-    same = build_local_evaluation_fixture(
-        LocalEvaluationFixtureRequest(same_root, EVALUATION_DATE, 917)
-    )
-    different = build_local_evaluation_fixture(
-        LocalEvaluationFixtureRequest(different_root, EVALUATION_DATE, 918)
-    )
+    first, same = independent_fixture_pair
+    first_destination = tmp_path_factory.mktemp("candidate-first")
+    second_destination = tmp_path_factory.mktemp("candidate-second")
 
+    _verify_independent_fixture_reproduction(first, same)
+    assert first.reused is False
     assert same.reused is False
-    assert same.descriptor_sha256 == first.descriptor_sha256
-    assert same.action_log_partitions == first.action_log_partitions
-    assert same.judge.snapshot_fingerprint == first.judge.snapshot_fingerprint
-    assert same.judge.validation_id == first.judge.validation_id
-    assert same.judge.final_holdout_id == first.judge.final_holdout_id
-    assert different.descriptor_sha256 != first.descriptor_sha256
-    assert [item.sha256 for item in different.action_log_partitions] != [
-        item.sha256 for item in first.action_log_partitions
-    ]
-    assert pq.read_table(
-        same.fixture_root / "action_log" / "dt=2026-09-01" / "part-0.parquet",
-        columns=["event_id"],
-    ).column("event_id").to_pylist() == pq.read_table(
-        first.fixture_root / "action_log" / "dt=2026-09-01" / "part-0.parquet",
-        columns=["event_id"],
-    ).column("event_id").to_pylist()
+    assert first.fixture_root.resolve() != same.fixture_root.resolve()
 
     first_source = FixtureActionLogSource(first.fixture_root, first.descriptor_sha256)
     same_source = FixtureActionLogSource(same.fixture_root, same.descriptor_sha256)
@@ -289,6 +284,77 @@ def test_independent_roots_are_identical_and_seed_changes_source_bytes(
     assert first_source.partition_uri(EVALUATION_DATE) == same_source.partition_uri(
         EVALUATION_DATE
     )
+
+    first_view = materialize_candidate_data_view(
+        CandidateDataViewRequest(first.judge, first_destination),
+        source=first_source,
+    )
+    second_view = materialize_candidate_data_view(
+        CandidateDataViewRequest(same.judge, second_destination),
+        source=same_source,
+    )
+    assert first_view.reused is False
+    assert second_view.reused is False
+    assert first_view.manifest == second_view.manifest
+    assert first_view.manifest_sha256 == second_view.manifest_sha256
+    first_tree = {
+        path.relative_to(first_view.root).as_posix(): path.read_bytes()
+        for path in first_view.root.rglob("*")
+        if path.is_file()
+    }
+    second_tree = {
+        path.relative_to(second_view.root).as_posix(): path.read_bytes()
+        for path in second_view.root.rglob("*")
+        if path.is_file()
+    }
+    assert first_tree == second_tree
+    assert set(first_tree) == {
+        "candidate-view.json",
+        "history/action_log/dt=2026-08-30/part-0.parquet",
+        "history/action_log/dt=2026-08-31/part-0.parquet",
+        "slate.parquet",
+    }
+    candidate_payload = "\n".join(
+        (
+            repr(first_view),
+            *(path for path in first_tree),
+            *(payload.decode("latin-1") for payload in first_tree.values()),
+        )
+    )
+    snapshot = EvaluationSnapshotManifest.model_validate_json(
+        _long_path(first.judge.snapshot_root / "manifest.json").read_bytes()
+    )
+    forbidden = (
+        "labels.parquet",
+        "final_holdout",
+        str(first.judge.final_holdout_id),
+        str(first.judge.snapshot_fingerprint),
+        snapshot.source.root,
+        "fixture_seed",
+        "virtual_users",
+        str(first.fixture_root),
+        str(same.fixture_root),
+    )
+    assert all(value not in candidate_payload for value in forbidden)
+
+
+def test_reproducibility_verifier_reports_sanitized_typed_mismatch(
+    independent_fixture_pair,
+) -> None:
+    first, second = independent_fixture_pair
+    controlled_difference = replace(
+        second,
+        descriptor_sha256="0" * 64,
+    )
+
+    with pytest.raises(StageCError) as caught:
+        _verify_independent_fixture_reproduction(first, controlled_difference)
+
+    assert caught.value.code == StageCErrorCode.FIXTURE_REPRODUCIBILITY_MISMATCH
+    assert str(first.fixture_root) not in str(caught.value)
+    assert str(second.fixture_root) not in str(caught.value)
+    assert "917" not in str(caught.value)
+    assert "user" not in str(caught.value).lower()
 
 
 def test_missing_success_marker_is_partial_target_conflict(built_fixture) -> None:
@@ -682,7 +748,7 @@ def test_domain_failures_are_mapped_without_original_context(
                 secret_context,
             )
 
-        monkeypatch.setattr(fixture_module, "build_evaluation_snapshot", fail_snapshot)
+        monkeypatch.setattr(fixture_module, "_build_evaluation_snapshot", fail_snapshot)
 
     with pytest.raises(StageCError) as caught:
         build_local_evaluation_fixture(

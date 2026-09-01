@@ -393,7 +393,8 @@ Task 1의 선행 작업이다. **이 저장소의 데이터 계약을 바꾸는 
 > Stage A 구현 기록(2026-08-31): direct·1-shard·2-shard merge와 legacy/policy null
 > 경계를 검증했다. Stage A 당시 snapshot builder와 cutover·label validation은 Stage B로
 > 이관되었다. 이관 항목은 아래 Stage B checklist에서 현재 완료로 기록한다. 다만 위 Stage A
-> checklist는 소급해 완료로 표시하지 않으며, P0-1 전체와 Stage C는 여전히 미완료다.
+> checklist는 소급해 완료로 표시하지 않습니다. 이 문장은 Stage A 완료 시점 기록이며,
+> 현재 P0-1과 Stage C는 아래 Task 1-C에서 완료됐습니다.
 
 ---
 
@@ -405,12 +406,11 @@ action log parquet에서 평가 slate를 조립하고 정답을 분리 봉인한
 Stage B Task 0은 §10~§12의 exact `EvaluationIdPayload`, canonical JSON bytes, writer
 identity, typed nested manifest와 fingerprint exclusion을 잠근다.
 
-### Stage B 및 Stage C data-only 경계 구현, 독립 최종 실증 대기
+### Task 1 및 P0-1 완료, 후속 Research Harness MVP 진행 중
 
-이 계획에서 Stage A의 producer 계약과 Stage B snapshot builder 구현은 완료되었다. Task 1
-전체와 후속 Research Harness MVP를 완료 처리하지 않습니다. Stage C의 model/input, production
-daily fixture builder, canonical source adapter, Judge handoff와 CandidateDataView는 구현됐고
-독립 two-root 최종 실증은 대기 상태입니다.
+이 계획에서 Stage A producer 계약, Stage B snapshot builder와 Stage C data-only 경계 및
+독립 two-root 최종 실증이 완료되어 Task 1과 P0-1을 완료 처리합니다. Task 2 이후 지표,
+실제 worktree·subprocess, final consumption과 전체 Research Harness MVP는 완료 처리하지 않습니다.
 
 - [x] `slate.py` 작성 (Stage B builder/public facade 범위). 입력은 action log parquet 경로(로컬/GCS), 평가 **출력일** 범위
       `[T, T_end]`, 필수 `slate_id_cutover_date`. `T`는 첫 출력일이고
@@ -469,7 +469,7 @@ fixture seed custody, canonical adapter와 Judge handoff는 구현됐습니다. 
 독립 two-root 최종 실증은 위 Stage B 체크의 완료 범위에 포함하지 않습니다. 실제 candidate
 worktree·argv·환경 주입 검사는 Task 3 책임입니다.
 
-Task 1 전체와 Research Harness MVP는 완료 처리하지 않는다.
+**Task 1 상태: [x] 완료.** Research Harness MVP 전체는 완료 처리하지 않는다.
 
 **검증:** `uv run python -m pytest tests/research_harness/test_slate.py -v`
 
@@ -481,12 +481,12 @@ Task 1 전체와 Research Harness MVP는 완료 처리하지 않는다.
 `docs/specs/2026-08-31-research-harness-evaluation-snapshot.md` §13의 exact contract를
 구현해 P0-1을 닫는다. 실제 git worktree와 subprocess 환경은 만들지 않는다.
 
-> **2026-09-01 현재 상태:** exact typed model/error와 canonical 입력, production daily 4-run
+> **2026-09-02 완료 상태:** exact typed model/error와 canonical 입력, production daily 4-run
 > fixture builder, canonical `fixture://` source adapter, Stage B snapshot build, P0-2 coverage,
 > outer integrity marker 기반 write-once 게시와 Judge handoff 재검증까지 구현했습니다.
-> CandidateDataView materialization은 구현됐고 독립 두 run의 최종 실증은 남아 있으므로 이 Task와 Stage C
-> 전체 체크박스는 완료 처리하지 않습니다. 문제·해결·검증 근거는 연결 spec의 두 Stage C
-> Portfolio Record에 기록합니다.
+> CandidateDataView와 private typed reproducibility verifier로 독립 두 Judge root의 최종 실증 및
+> 별도 same-target reuse를 완료했습니다. 문제·해결·검증 근거는 연결 spec의 Stage C
+> Portfolio Record에 기록합니다. 후속 Task 2+와 전체 MVP는 진행 중입니다.
 
 - [x] `LocalEvaluationFixture` module의 작은 interface
       `build_local_evaluation_fixture(LocalEvaluationFixtureRequest)`를 구현한다. 필수
@@ -518,12 +518,12 @@ Task 1 전체와 Research Harness MVP는 완료 처리하지 않는다.
       consumption registry 권한을 요구하는 별도 후속 interface로 남긴다
 - [x] Stage B `_SUCCESS`, typed manifest, manifest SHA와 네 artifact digest·row count를
       재검증한 최소 `JudgeSnapshotHandoff`를 만든다. P0-2는 이 handoff만 소비한다
-- [ ] 서로 다른 두 Judge root에서 같은 seed·날짜를 독립 생성해 두 receipt가 모두
+- [x] 서로 다른 두 Judge root에서 같은 seed·날짜를 독립 생성해 두 receipt가 모두
       `reused=false`이고 source SHA·slate ID·evaluation ID·네 artifact SHA·snapshot
       fingerprint가 같은지 확인한다. 같은 target 재호출의 `reused=true`는 별도 테스트다
 - [x] spec의 실패 code를 typed error로 구현하고, 오류에 user/input/path 원문을 노출하지
       않는다
-- [ ] Problem/Solution/Result에 candidate/Judge interface 분리, canonical source adapter,
+- [x] Problem/Solution/Result에 candidate/Judge interface 분리, canonical source adapter,
       독립 재생성 증거와 남은 same-UID 한계를 기록한다
 
 **검증:**

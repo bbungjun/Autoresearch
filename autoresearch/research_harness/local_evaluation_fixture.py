@@ -58,7 +58,7 @@ from autoresearch.research_harness.fixture_models import (
     LocalEvaluationFixtureReceipt,
     LocalEvaluationFixtureRequest,
 )
-from autoresearch.research_harness.slate import build_evaluation_snapshot
+from autoresearch.research_harness.slate import _build_evaluation_snapshot
 logger = logging.getLogger(__name__)
 
 _FIXTURES_PATH: Final = Path("fixtures") / "by-hash"
@@ -252,7 +252,7 @@ def _build_staged_fixture(
             ),
         )
     source = FixtureActionLogSource(staging, descriptor_digest)
-    snapshot = build_evaluation_snapshot(
+    snapshot = _build_evaluation_snapshot(
         EvaluationSnapshotRequest(
             action_log_root=source.opaque_root,
             history_start_date=descriptor.history_start_date,
@@ -262,6 +262,11 @@ def _build_staged_fixture(
             output_root=staging,
         ),
         source=source,
+        created_at=datetime.combine(
+            descriptor.evaluation_start_date,
+            datetime.min.time(),
+            tzinfo=UTC,
+        ),
     )
     _validate_coverage(snapshot.target_path)
     snapshot_lock = (

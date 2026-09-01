@@ -1,6 +1,6 @@
 # Research Harness P0-1 — 재현 가능한 평가 데이터와 split
 
-> 작성: 2026-08-31 | 상태: Stage A·B, Stage C fixture·Judge handoff·CandidateDataView 구현; 독립 two-root 최종 실증 대기 | 추적: #17, #22
+> 작성: 2026-08-31 | 상태: Stage A·B·C 완료, P0-1 완료 | 추적: #17, #22
 >
 > 상위 계약:
 > `docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md`
@@ -8,13 +8,14 @@
 > 구현 순서:
 > `docs/plans/2026-08-15-local-research-harness-mvp.md` Task 1-0, Task 1
 
-## Stage B 및 Stage C data-only 경계 구현, 독립 최종 실증 대기
+## Stage A·B·C 및 P0-1 완료
 
 Stage B는 원천 파티션 검증, canonical slate 검증, 다일 click attribution, 고정 user
 split·구조 coverage, label 분리 artifact·typed manifest, local write-once publisher와 공개
 snapshot builder까지 구현했습니다. Stage C는 typed model과 canonical input, production daily
 4-run fixture builder, canonical source adapter, write-once 게시, P0-2용 Judge snapshot handoff와
-validation 전용 data-only CandidateDataView까지 구현했습니다. 독립 two-root 최종 실증은 남아 있습니다.
+validation 전용 data-only CandidateDataView와 독립 two-root 재생성 verifier까지 구현·실증했습니다.
+동일 target fixture/view 재사용은 독립 재생성과 분리된 테스트로 검증합니다.
 실제 disposable worktree,
 subprocess argv·환경과 Sealed Judge의 지표·판정은 각각 후속 Task 3과 P0-2 책임입니다.
 
@@ -837,13 +838,13 @@ Stage C fixture·Judge handoff·CandidateDataView가 구현됐으며, 독립 two
 5. [x] evaluation ID·parquet·manifest 생성
 6. [x] write-once local publisher
 
-### Stage C — fixture와 실증 (부분 구현)
+### Stage C — fixture와 실증 (구현 완료, 2026-09-02)
 
 1. [x] versioned fixture descriptor와 Judge 소유 write-once state 구현
 2. [x] P0-2-ready rule-based 일일 파티션 fixture 생성
 3. [x] data-only `CandidateDataView`와 safe manifest 구현
 4. [x] 검증된 `JudgeSnapshotHandoff` 구현
-5. [ ] 독립 2-run 재생성 및 별도 reuse 경로 실증
+5. [x] 독립 2-run 재생성 및 별도 reuse 경로 실증
 6. [x] candidate view에 label·final·source URI·fixture seed·Judge path가 없는지 확인
 
 ## Portfolio Record — Stage C contract review
@@ -908,7 +909,8 @@ virtual-user/YouTube Parquet SHA가 유지됐습니다. `date.min`부터 `date.m
 `tests/research_harness`는 198개 통과·1개 환경 의존 skip이었습니다. 이는 input foundation
 완료 당시의 범위 기록입니다. 이후 일일 producer, action log·snapshot 생성, write-once fixture
 게시, source adapter, Judge handoff 재검증과 candidate view materialization까지 구현됐지만
-독립 two-root 최종 프로토콜이 남아 있어 Stage C 전체는 완료로 표시하지 않습니다.
+이 input foundation 완료 시점에는 독립 two-root 최종 프로토콜이 남아 있어 Stage C 전체를
+완료로 표시하지 않았습니다. 현재 상태는 아래 독립 재생성 완료 기록이 갱신합니다.
 
 ## Portfolio Record — Stage C fixture builder and Judge handoff
 
@@ -939,7 +941,8 @@ digest·row count, 입력과 action-log receipt를 다시 검증하며 상이하
 holdout 40개 slate 모두 24행·click-positive 조건을 충족했습니다. 같은 seed 917·평가일의
 서로 다른 두 Judge root를 사용하는 자동화 테스트는 같은 descriptor, source digest, event ID,
 evaluation ID와 snapshot fingerprint를 만들었고 seed 918은 다른 source digest를 만들었습니다.
-서로 다른 Judge root의 독립 최종 비교는 후속 작업으로 남아 있습니다. 같은 root에서
+이 fixture builder 완료 시점에는 서로 다른 Judge root의 독립 최종 비교가 후속 작업으로
+남아 있었습니다. 같은 root에서
 동시에 시작한 실제 두 process는 descriptor lock 아래 한 번만 게시되고 다른 한 번은 검증된
 `reused=true`가 됨을 확인했습니다. Focused 테스트는 완성
 target reuse, partial/tamper conflict, handoff marker·schema·fingerprint·manifest bytes·artifact
@@ -995,7 +998,58 @@ snapshot fingerprint, source URI, fixture seed와 Judge path가 없음을 확인
 target만 `reused=true`였고 focused 테스트 34개가 통과했습니다. Hook 없는 buffer-backed
 source도 전체 URI를 대조한 뒤 history 두 날짜만 열었고, 같은 destination의 동시 두 호출은
 한 번 게시하고 한 번 `reused=true`로 반환했습니다. 독립 두 Judge root의 최종
-프로토콜과 실제 worktree/subprocess/final consumption registry는 여전히 후속 범위입니다.
+프로토콜은 아래 최종 기록에서 완료했습니다. 실제 worktree/subprocess/final consumption
+registry는 여전히 후속 범위입니다.
+
+## Portfolio Record — Stage C independent reproduction completion
+
+### Problem
+
+같은 target의 `reused=true`만으로는 source부터 snapshot까지 다시 생성해도 같은 결과가
+나온다는 증거가 아니었습니다. 또한 물리 Judge root가 evaluation identity에 섞이면 독립
+root의 결과가 달라지고, Candidate와 Judge interface를 합치면 label·final artifact와 source
+identity가 반복 연구 경계로 새어 나갈 수 있었습니다. 실제 독립 실행을 추가하자 fingerprint와
+artifact는 같아도 실행 시각인 manifest `created_at` 때문에 manifest SHA가 달라지는 결함도
+드러났습니다.
+
+### Solution
+
+외부 seam은 `build_local_evaluation_fixture()`와
+`materialize_candidate_data_view()` 두 개로 유지했습니다. 내부 typed verifier가 두 receipt의
+`reused=false`와 서로 다른 physical root를 요구하고, descriptor 및 virtual-user·네 YouTube
+input receipt, 날짜순 action-log SHA·행 수·canonical URI, validation/final slate ID projection,
+두 evaluation ID, 네 snapshot artifact SHA·행 수, manifest SHA와 fingerprint를 한곳에서
+비교합니다. 어떤 parse·I/O·비교 실패도 원문 root·user·seed 없이
+`fixture_reproducibility_mismatch`로 정제합니다. Stage C는 snapshot 조립의 private clock seam에
+평가일 00:00 UTC를 넣어 manifest까지 결정적으로 만들되 Stage B 공개 facade signature는
+바꾸지 않았습니다. CandidateDataView는 각 Judge handoff에서 별도 destination으로 최초
+materialize하고, 동일 destination 재호출 reuse는 별도 protocol로 유지했습니다.
+
+### Result
+
+2026-09-02 fresh 실행에서 seed 917·평가일 2026-09-01의 서로 다른 두 기존 absolute Judge
+root를 production daily부터 snapshot까지 각각 생성하고 두 fixture와 두 candidate view가 모두
+`reused=false`인 상태로 9.664초에 검증했습니다. descriptor는
+`d5424f2614020828080597636197b4a0892e94ff8d3886b5acdf4364b1550358`, manifest SHA는
+`c39a17535f5f2aa81f031ada34121477575311f3ae3f36c2dfc1abc0f9dd7a6d`, fingerprint는
+`17492a8d485d21fb6e1ba30c62afbf0607f1b451debb38d0c0cfabc498d94a54`로 일치했습니다.
+네 action-log는 각각 5,400행, validation/final slate·labels는 각각
+3,840/3,840/960/960행이었고, candidate manifest SHA는
+`291f1b1db07951ff264662018432999856e1c63f180548d1da5ec6a05a115140`로 같았습니다.
+두 candidate view의 exact tree와 모든 file bytes가 같고 labels, final ID, snapshot fingerprint,
+source URI, fixture seed, virtual-user input과 두 Judge path가 없음을 확인했습니다. 이어 같은
+fixture target과 같은 candidate destination을 완전 재검증해 각각 `reused=true`를 별도로
+확인했습니다. Immutable receipt의 controlled descriptor difference는 exact typed mismatch를
+냈고 원 fixture는 변경하지 않았습니다. 새 protocol focused 3개는 10.14초에 통과했고,
+최종 전체 `tests/research_harness`는 264개 통과·Windows/POSIX 환경 의존 3개 skip,
+`tests/action_log_generation`은 254개 통과(기존 의존성 warning 2개)였습니다. 전체
+`autoresearch tests` Ruff와 `git diff --check`도 통과했습니다.
+
+이 완료는 같은 UID의 hostile actor가 descriptor·artifact·manifest·outer marker를 모두
+일관되게 다시 쓰는 공격을 방어한다는 뜻이 아닙니다. 또한 CandidateDataView의 Judge 검증과
+새 verifier가 `local_evaluation_fixture` 및 `slate`의 private helper에 결합되어 있으므로,
+Task 2+를 진행하며 공통 내부 integrity module로 옮기는 리팩터링 후보가 남습니다. 실제
+worktree/argv/env와 final consumption, P0-2 metric은 이 P0-1 범위에 포함하지 않았습니다.
 
 ## Portfolio Record — Stage B snapshot builder
 
@@ -1027,7 +1081,8 @@ artifact(두 label-free slate와 두 sealed labels)와 `manifest.json`을 게시
 입력 재빌드의 `reused=true`, 네 artifact의 1:1 join key, tampered target의 typed conflict,
 staging residue 없음 을 관찰했습니다. 이는 Stage B 완료 시점 기록으로, 당시 미구현이던
 Stage C 일일 producer·write-once fixture·Judge handoff는 현재 구현됐습니다. CandidateDataView와
-독립 two-root 최종 실증은 후속 범위입니다.
+이 Stage B 완료 시점에는 독립 two-root 최종 실증이 후속 범위였습니다. 현재 P0-1 상태는
+Stage C 독립 재생성 완료 기록이 갱신합니다.
 실제 candidate workspace와 Sealed Judge는 각각 Task 3과 P0-2의 후속 과제입니다.
 
 ## 16. 검증 매트릭스
