@@ -37,6 +37,9 @@ from autoresearch.research_harness.fixture_models import (
     LocalEvaluationFixtureReceipt,
     LocalEvaluationFixtureRequest,
 )
+from autoresearch.research_harness.local_evaluation_fixture import (
+    build_local_evaluation_fixture,
+)
 from autoresearch.research_harness.slate import build_evaluation_snapshot
 
 
@@ -59,6 +62,7 @@ __all__ = [
     "StageCError",
     "StageCErrorCode",
     "build_evaluation_snapshot",
+    "build_local_evaluation_fixture",
     "canonical_fixture_dates",
     "descriptor_sha256",
     "select_fixture_user_ids",

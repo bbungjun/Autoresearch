@@ -875,6 +875,38 @@ action log·snapshot 생성, write-once fixture 게시, source adapter, Judge ha
 candidate view materialization을 아직 구현하지 않았으므로 Stage C 체크리스트는 완료로
 표시하지 않습니다.
 
+## Portfolio Record — Stage C fixture builder and Judge handoff
+
+### Problem
+
+Stage C 입력 foundation만으로는 입력이 실제 일일 action log와 Stage B snapshot까지 이어진다는
+증거가 없었고, 물리 Judge 경로가 evaluation identity에 섞이거나 부분 fixture·변조 artifact가
+재사용될 수 있었습니다. Production producer의 `generated_at`은 실행 시각이라 같은 seed·날짜의
+event 의미와 ID가 같아도 Parquet bytes는 달라졌으며, 이는 독립 재생성 검증을 방해했습니다.
+
+### Solution
+
+`build_local_evaluation_fixture()`가 descriptor hash별 sibling staging에서 production
+`run_daily_action_log`을 T-2부터 T+1까지 네 번 실행하고, 각 요청의 공식 `seed` 인자로
+`fixture_seed`를 전달하도록 구현했습니다. Producer가 만든 schema와 event를 유지하면서
+`generated_at` audit column만 partition 날짜 기반 값으로 정규화해 fixture source bytes를
+결정적으로 만들었습니다. 내부 `FixtureActionLogSource`는 물리 Parquet를 읽되 Stage B에는
+`fixture://<descriptor-hash>/action-log` identity만 전달합니다. Snapshot의 두 split은 실제
+slate/label artifact를 다시 읽어 user-slate당 24행, click-positive slate 30개·20% 이상,
+clicked/non-clicked 공존을 검사합니다. Handoff 생성과 fixture reuse는 `_SUCCESS`, typed canonical
+manifest, fingerprint, manifest SHA-256, 네 artifact의 digest·row count, 입력과 action-log
+receipt를 다시 검증하며 상이하거나 부분인 target을 덮어쓰지 않습니다.
+
+### Result
+
+실제 200-user fixture는 날짜별 action log 5,400행을 생성하고 validation 160개 및 final
+holdout 40개 slate 모두 24행·click-positive 조건을 충족했습니다. 같은 seed 917·평가일의
+서로 다른 두 Judge root는 같은 descriptor, source digest, event ID, evaluation ID와 snapshot
+fingerprint를 만들었고 seed 918은 다른 source digest를 만들었습니다. Focused 테스트는 완성
+target reuse, partial/tamper conflict, handoff marker·schema·fingerprint·manifest bytes·artifact
+digest/row-count 변조와 coverage 실패의 typed code를 확인합니다. CandidateDataView와 실제
+workspace/subprocess 환경은 생성하지 않았으며 Stage C 전체 완료는 주장하지 않습니다.
+
 ## Portfolio Record — Stage B snapshot builder
 
 ### Problem

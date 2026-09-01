@@ -488,6 +488,14 @@ Task 1 전체와 Research Harness MVP는 완료 처리하지 않는다.
 > materialization은 남아 있습니다. 문제·해결·검증 근거는 연결 spec의
 > `Portfolio Record — Stage C fixture input foundation`에 기록합니다.
 
+> **2026-09-01 fixture builder 구현 기록:** canonical 입력에서 실제 production daily
+> producer를 네 날짜 실행하고, 물리 Judge root를 숨기는 `fixture://` source adapter로 Stage B
+> snapshot을 생성하는 외부 builder를 구현했습니다. P0-2 coverage와 snapshot handoff 전체
+> digest/row count를 재검증하고 descriptor hash별 write-once 게시·reuse/conflict를 고정했습니다.
+> CandidateDataView materialization은 여전히 후속 작업이므로 이 Task와 Stage C 전체 체크박스는
+> 완료 처리하지 않습니다. 검증 근거는 연결 spec의
+> `Portfolio Record — Stage C fixture builder and Judge handoff`에 기록합니다.
+
 - [ ] `LocalEvaluationFixture` module의 작은 interface
       `build_local_evaluation_fixture(LocalEvaluationFixtureRequest)`를 구현한다. 필수
       `judge_state_root`, `evaluation_start_date`, default 없는 `fixture_seed`만 받고, 내부에서

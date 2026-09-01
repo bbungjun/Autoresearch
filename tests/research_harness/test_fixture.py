@@ -1,0 +1,373 @@
+from __future__ import annotations
+
+from datetime import date
+from hashlib import sha256
+import inspect
+import json
+import os
+from pathlib import Path
+
+import pyarrow.parquet as pq
+import pytest
+
+from autoresearch.research_harness import (
+    LocalEvaluationFixtureRequest,
+    StageCError,
+    StageCErrorCode,
+    build_local_evaluation_fixture,
+)
+from autoresearch.research_harness.evaluation_artifacts import (
+    calculate_snapshot_fingerprint,
+    canonical_json_bytes,
+)
+from autoresearch.research_harness.evaluation_snapshot_models import (
+    EvaluationSnapshotManifest,
+)
+from autoresearch.research_harness.local_evaluation_fixture import (
+    FixtureActionLogSource,
+    _validate_coverage,
+    _validated_judge_handoff,
+)
+
+
+EVALUATION_DATE = date(2026, 9, 1)
+
+
+def _long_path(path: Path) -> Path:
+    if os.name == "nt":
+        return Path(f"\\\\?\\{path.absolute()}")
+    return path
+
+
+def _copy_snapshot(source: Path, destination: Path) -> None:
+    manifest = EvaluationSnapshotManifest.model_validate_json(
+        (source / "manifest.json").read_bytes()
+    )
+    destination.mkdir(parents=True)
+    for name in ("manifest.json", "_SUCCESS"):
+        (destination / name).write_bytes((source / name).read_bytes())
+    for artifact in (
+        manifest.validation.artifacts.slate,
+        manifest.validation.artifacts.labels,
+        manifest.final_holdout.artifacts.slate,
+        manifest.final_holdout.artifacts.labels,
+    ):
+        target = destination / artifact.relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(_long_path(source / artifact.relative_path).read_bytes())
+
+
+def test_builder_has_exact_public_interface() -> None:
+    assert inspect.signature(build_local_evaluation_fixture) == inspect.Signature(
+        parameters=(
+            inspect.Parameter(
+                "request",
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                annotation="LocalEvaluationFixtureRequest",
+            ),
+        ),
+        return_annotation="LocalEvaluationFixtureReceipt",
+    )
+
+
+@pytest.fixture(scope="module")
+def built_fixture(tmp_path_factory: pytest.TempPathFactory):
+    state_root = tmp_path_factory.mktemp("fixture-state")
+    receipt = build_local_evaluation_fixture(
+        LocalEvaluationFixtureRequest(
+            judge_state_root=state_root,
+            evaluation_start_date=EVALUATION_DATE,
+            fixture_seed=917,
+        )
+    )
+    return state_root, receipt
+
+
+def test_builder_runs_production_daily_and_publishes_canonical_fixture(
+    built_fixture,
+) -> None:
+    state_root, receipt = built_fixture
+    assert receipt.reused is False
+    assert receipt.fixture_root == (
+        state_root / "fixtures" / "by-hash" / receipt.descriptor_sha256
+    )
+    assert receipt.descriptor_path == receipt.fixture_root / "fixture.json"
+    assert sha256(receipt.descriptor_path.read_bytes()).hexdigest() == receipt.descriptor_sha256
+    assert (receipt.fixture_root / "_SUCCESS").read_text(encoding="utf-8") == (
+        f"{receipt.descriptor_sha256}\n"
+    )
+    assert [partition.rows for partition in receipt.action_log_partitions] == [5400] * 4
+    assert [partition.uri for partition in receipt.action_log_partitions] == [
+        f"fixture://{receipt.descriptor_sha256}/action-log/dt={day}/part-0.parquet"
+        for day in ("2026-08-30", "2026-08-31", "2026-09-01", "2026-09-02")
+    ]
+    assert all(
+        (receipt.fixture_root / "action_log" / f"dt={partition.dt}" / "part-0.parquet").is_file()
+        for partition in receipt.action_log_partitions
+    )
+
+    manifest = EvaluationSnapshotManifest.model_validate_json(
+        (receipt.judge.snapshot_root / "manifest.json").read_bytes()
+    )
+    assert manifest.source.root == f"fixture://{receipt.descriptor_sha256}/action-log"
+    assert manifest.snapshot_fingerprint == receipt.judge.snapshot_fingerprint
+    assert calculate_snapshot_fingerprint(manifest) == receipt.judge.snapshot_fingerprint
+    for split in (manifest.validation, manifest.final_holdout):
+        assert split.counts.click_positive_slate_count >= 30
+        assert split.counts.click_positive_slate_ratio >= 0.2
+        assert 0 < split.counts.clicked_row_count < split.counts.row_count
+        assert split.counts.mean_slate_size == 24.0
+
+
+def test_same_target_is_reused_only_after_full_validation(built_fixture) -> None:
+    state_root, first = built_fixture
+    second = build_local_evaluation_fixture(
+        LocalEvaluationFixtureRequest(state_root, EVALUATION_DATE, 917)
+    )
+    assert second.reused is True
+    assert second.descriptor_sha256 == first.descriptor_sha256
+    assert second.action_log_partitions == first.action_log_partitions
+    assert second.judge == first.judge
+
+
+def test_request_root_must_be_existing_absolute_directory(tmp_path: Path) -> None:
+    file_root = tmp_path / "file-root"
+    file_root.write_text("not a directory", encoding="utf-8")
+    requests = (
+        LocalEvaluationFixtureRequest(Path("relative"), EVALUATION_DATE, 1),
+        LocalEvaluationFixtureRequest(tmp_path / "missing", EVALUATION_DATE, 1),
+        LocalEvaluationFixtureRequest(file_root, EVALUATION_DATE, 1),
+    )
+    for request in requests:
+        with pytest.raises(StageCError) as caught:
+            build_local_evaluation_fixture(request)
+        assert caught.value.code == StageCErrorCode.FIXTURE_REQUEST_INVALID
+        assert str(request.judge_state_root) not in str(caught.value)
+
+
+def test_tampered_complete_fixture_conflicts(built_fixture) -> None:
+    state_root, receipt = built_fixture
+    target = receipt.fixture_root / "action_log" / "dt=2026-08-30" / "part-0.parquet"
+    original = target.read_bytes()
+    target.write_bytes(original + b"tamper")
+    try:
+        with pytest.raises(StageCError) as caught:
+            build_local_evaluation_fixture(
+                LocalEvaluationFixtureRequest(state_root, EVALUATION_DATE, 917)
+            )
+        assert caught.value.code == StageCErrorCode.FIXTURE_STATE_CONFLICT
+    finally:
+        target.write_bytes(original)
+
+
+def test_snapshot_artifact_row_count_tamper_conflicts(built_fixture) -> None:
+    state_root, receipt = built_fixture
+    manifest_path = receipt.judge.snapshot_root / "manifest.json"
+    payload = manifest_path.read_text(encoding="utf-8")
+    manifest = EvaluationSnapshotManifest.model_validate_json(payload)
+    changed = manifest.model_copy(
+        update={
+            "validation": manifest.validation.__class__(
+                evaluation_id=manifest.validation.evaluation_id,
+                counts=manifest.validation.counts,
+                optional_non_null_ratio=manifest.validation.optional_non_null_ratio,
+                artifacts=manifest.validation.artifacts.__class__(
+                    slate=manifest.validation.artifacts.slate.__class__(
+                        relative_path=manifest.validation.artifacts.slate.relative_path,
+                        rows=manifest.validation.artifacts.slate.rows + 1,
+                        sha256=manifest.validation.artifacts.slate.sha256,
+                    ),
+                    labels=manifest.validation.artifacts.labels,
+                ),
+            )
+        }
+    )
+    manifest_path.write_text(changed.model_dump_json(), encoding="utf-8")
+    try:
+        with pytest.raises(StageCError) as caught:
+            build_local_evaluation_fixture(
+                LocalEvaluationFixtureRequest(state_root, EVALUATION_DATE, 917)
+            )
+        assert caught.value.code == StageCErrorCode.FIXTURE_STATE_CONFLICT
+    finally:
+        manifest_path.write_text(payload, encoding="utf-8")
+
+
+def test_fixture_contains_no_candidate_or_workspace_side_effects(built_fixture) -> None:
+    _, receipt = built_fixture
+    relative_files = {
+        path.relative_to(receipt.fixture_root).as_posix()
+        for path in receipt.fixture_root.rglob("*")
+        if path.is_file()
+    }
+    assert not any("candidate" in path or "workspace" in path for path in relative_files)
+    assert pq.read_metadata(
+        receipt.fixture_root / "inputs" / "virtual_users.parquet"
+    ).num_rows == 200
+
+
+def test_independent_roots_are_identical_and_seed_changes_source_bytes(
+    built_fixture, tmp_path: Path
+) -> None:
+    _, first = built_fixture
+    same_root = tmp_path / "same"
+    different_root = tmp_path / "different"
+    same_root.mkdir()
+    different_root.mkdir()
+    same = build_local_evaluation_fixture(
+        LocalEvaluationFixtureRequest(same_root, EVALUATION_DATE, 917)
+    )
+    different = build_local_evaluation_fixture(
+        LocalEvaluationFixtureRequest(different_root, EVALUATION_DATE, 918)
+    )
+
+    assert same.reused is False
+    assert same.descriptor_sha256 == first.descriptor_sha256
+    assert same.action_log_partitions == first.action_log_partitions
+    assert same.judge.snapshot_fingerprint == first.judge.snapshot_fingerprint
+    assert same.judge.validation_id == first.judge.validation_id
+    assert same.judge.final_holdout_id == first.judge.final_holdout_id
+    assert different.descriptor_sha256 != first.descriptor_sha256
+    assert [item.sha256 for item in different.action_log_partitions] != [
+        item.sha256 for item in first.action_log_partitions
+    ]
+    assert pq.read_table(
+        same.fixture_root / "action_log" / "dt=2026-09-01" / "part-0.parquet",
+        columns=["event_id"],
+    ).column("event_id").to_pylist() == pq.read_table(
+        first.fixture_root / "action_log" / "dt=2026-09-01" / "part-0.parquet",
+        columns=["event_id"],
+    ).column("event_id").to_pylist()
+
+    first_source = FixtureActionLogSource(first.fixture_root, first.descriptor_sha256)
+    same_source = FixtureActionLogSource(same.fixture_root, same.descriptor_sha256)
+    assert first_source.opaque_root == same_source.opaque_root
+    assert first_source.partition_uri(EVALUATION_DATE) == same_source.partition_uri(
+        EVALUATION_DATE
+    )
+
+
+def test_missing_success_marker_is_partial_target_conflict(built_fixture) -> None:
+    state_root, receipt = built_fixture
+    marker = receipt.fixture_root / "_SUCCESS"
+    payload = marker.read_bytes()
+    marker.unlink()
+    try:
+        with pytest.raises(StageCError) as caught:
+            build_local_evaluation_fixture(
+                LocalEvaluationFixtureRequest(state_root, EVALUATION_DATE, 917)
+            )
+        assert caught.value.code == StageCErrorCode.FIXTURE_STATE_CONFLICT
+    finally:
+        marker.write_bytes(payload)
+
+
+def test_hardlink_alias_in_complete_fixture_conflicts(built_fixture) -> None:
+    state_root, receipt = built_fixture
+    alias = receipt.fixture_root / "descriptor-alias"
+    try:
+        os.link(receipt.descriptor_path, alias)
+    except OSError:
+        pytest.skip("hardlink creation is unavailable on this filesystem")
+    try:
+        with pytest.raises(StageCError) as caught:
+            build_local_evaluation_fixture(
+                LocalEvaluationFixtureRequest(state_root, EVALUATION_DATE, 917)
+            )
+        assert caught.value.code == StageCErrorCode.FIXTURE_STATE_CONFLICT
+    finally:
+        alias.unlink()
+
+
+def test_coverage_insufficient_is_typed_and_does_not_publish(
+    built_fixture, tmp_path: Path
+) -> None:
+    _, receipt = built_fixture
+    copied = tmp_path / receipt.judge.snapshot_fingerprint
+    _copy_snapshot(receipt.judge.snapshot_root, copied)
+    manifest_path = copied / "manifest.json"
+    manifest = EvaluationSnapshotManifest.model_validate_json(manifest_path.read_bytes())
+    low_counts = manifest.validation.counts.__class__(
+        user_count=manifest.validation.counts.user_count,
+        slate_count=manifest.validation.counts.slate_count,
+        row_count=manifest.validation.counts.row_count,
+        clicked_row_count=0,
+        click_positive_slate_count=0,
+        click_positive_slate_ratio=0.0,
+        mean_slate_size=24.0,
+    )
+    changed = manifest.model_copy(
+        update={
+            "validation": manifest.validation.__class__(
+                evaluation_id=manifest.validation.evaluation_id,
+                counts=low_counts,
+                optional_non_null_ratio=manifest.validation.optional_non_null_ratio,
+                artifacts=manifest.validation.artifacts,
+            )
+        }
+    )
+    manifest_path.write_bytes(canonical_json_bytes(changed.model_dump(mode="json")))
+    with pytest.raises(StageCError) as caught:
+        _validate_coverage(copied)
+    assert caught.value.code == StageCErrorCode.FIXTURE_COVERAGE_INSUFFICIENT
+    assert not (tmp_path / "_SUCCESS").exists()
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ("success", "schema", "fingerprint", "manifest_sha", "artifact_digest", "artifact_rows"),
+)
+def test_judge_handoff_reopens_and_validates_every_sealed_component(
+    built_fixture, tmp_path: Path, tamper: str
+) -> None:
+    _, receipt = built_fixture
+    copied = tmp_path / tamper / receipt.judge.snapshot_fingerprint
+    _copy_snapshot(receipt.judge.snapshot_root, copied)
+    manifest_path = copied / "manifest.json"
+    manifest = EvaluationSnapshotManifest.model_validate_json(manifest_path.read_bytes())
+    if tamper == "success":
+        (copied / "_SUCCESS").write_text("wrong\n", encoding="utf-8")
+    elif tamper == "schema":
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        payload["unexpected"] = True
+        manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    elif tamper == "fingerprint":
+        manifest_path.write_bytes(
+            canonical_json_bytes(
+                manifest.model_copy(update={"snapshot_fingerprint": "0" * 64}).model_dump(
+                    mode="json"
+                )
+            )
+        )
+    elif tamper == "manifest_sha":
+        manifest_path.write_bytes(manifest_path.read_bytes() + b" ")
+    elif tamper == "artifact_digest":
+        path = copied / manifest.validation.artifacts.slate.relative_path
+        path.write_bytes(path.read_bytes() + b"tamper")
+    else:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        payload["validation"]["artifacts"]["slate"]["rows"] += 1
+        manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(StageCError) as caught:
+        _validated_judge_handoff(
+            copied,
+            expected_fingerprint=str(receipt.judge.snapshot_fingerprint),
+        )
+    assert caught.value.code == StageCErrorCode.JUDGE_HANDOFF_INVALID
+
+
+def test_reparse_state_root_is_rejected_without_path_disclosure(tmp_path: Path) -> None:
+    physical = tmp_path / "physical"
+    linked = tmp_path / "linked"
+    physical.mkdir()
+    try:
+        os.symlink(physical, linked, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation is unavailable on this Windows host")
+    with pytest.raises(StageCError) as caught:
+        build_local_evaluation_fixture(
+            LocalEvaluationFixtureRequest(linked, EVALUATION_DATE, 1)
+        )
+    assert caught.value.code == StageCErrorCode.FIXTURE_REQUEST_INVALID
+    assert str(linked) not in str(caught.value)
