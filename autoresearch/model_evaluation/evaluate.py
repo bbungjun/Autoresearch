@@ -26,7 +26,6 @@ import os
 import sys
 import tempfile
 from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Final, Optional
 
 import yaml
@@ -37,7 +36,6 @@ from sklearn.metrics import (  # noqa: E402
     roc_auc_score,
     average_precision_score,
     log_loss,
-    brier_score_loss,
 )
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -50,78 +48,20 @@ from autoresearch.feature_engineering.model_contract import (  # noqa: E402
     require_experiment_feature_columns,
     require_model_feature_columns,
 )
+from autoresearch.model_evaluation.probability_metrics import (  # noqa: E402
+    GroupedRocAuc,
+    grouped_roc_auc as _grouped_roc_auc,
+    probability_metrics,
+)
+
+
+# 기존 호출자의 import 경로를 유지하는 compatibility alias다.
+grouped_roc_auc = _grouped_roc_auc
 
 
 # grouped 지표의 그룹 키. 반드시 `PASSTHROUGH_COLUMNS`의 원소여야 한다 — 모델 입력이
 # 아닌 컬럼만 그룹 키가 될 수 있다(#505). 연결은 계약 테스트가 지킨다.
 GROUP_KEY_COLUMN: Final[str] = "user_id"
-
-
-@dataclass(frozen=True, slots=True)
-class GroupedRocAuc:
-    """유저 단위 ROC-AUC와 그 값을 얼마나 믿을 수 있는지의 근거(#505).
-
-    ``value``만 떼어 보면 안 된다 — 제외 유저가 많을수록 소수 유저의 값이 전체를
-    대표하게 되므로, 집계 대상 수를 함께 읽어야 지표의 신뢰도를 알 수 있다.
-    """
-
-    value: float | None
-    total_groups: int
-    scored_groups: int
-    skipped_groups: int
-    # 그룹 키가 null이라 어느 그룹에도 귀속되지 못한 행 수. 그룹이 아니므로 위 세 수에
-    # 들어가지 않지만, 세지 않으면 조용히 사라져 커버리지 보고가 거짓이 된다.
-    null_key_rows: int
-
-
-def grouped_roc_auc(
-    labels: Sequence[int],
-    scores: Sequence[float],
-    groups: Sequence[object],
-) -> GroupedRocAuc:
-    """그룹(유저) 단위로 ROC-AUC를 재고 매크로 평균한다(#505).
-
-    전역 ROC-AUC는 전체 (유저, 영상) 쌍에서 계산하므로 **유저를 가로지르는 순서**까지
-    점수에 넣는다. 리랭킹 품질은 한 유저의 후보 목록 **안**의 순서이므로, 그룹 안에서
-    재고 그룹끼리 평균해야 제품 목표와 같은 것을 잰다.
-
-    매크로 평균(그룹 동등 가중)을 쓴다 — 후보 수가 많은 유저가 지표를 지배하면 "유저
-    경험의 평균"이 아니라 "행의 평균"이 된다.
-
-    Args:
-        labels: 이진 라벨.
-        scores: 모델 점수(순위만 쓰므로 보정 여부는 무관하다).
-        groups: 행이 속한 그룹 키(보통 ``user_id``).
-
-    Returns:
-        매크로 평균과 집계 대상 수, 그리고 그룹 키가 null이라 귀속되지 못한 행 수.
-        양성·음성을 모두 가진 그룹이 없으면 ``value``는 ``None``이다 — 관측 지표이므로
-        실패시키지 않는다.
-    """
-    frame = pd.DataFrame({"label": labels, "score": scores, "group": groups})
-    # `groupby`의 기본값 dropna=True는 null 키 행을 그룹으로 세지도, 집계에 넣지도
-    # 않는다. 여기서 먼저 세지 않으면 그 행들이 어느 수치에도 남지 않아 커버리지
-    # 보고가 실제로 버려진 행을 감춘다. `dropna=False`로 묶지 않는 이유는 서로 무관한
-    # 행들이 하나의 가짜 그룹이 되어 의미 없는 AUC가 계산되기 때문이다.
-    null_key_rows = int(frame["group"].isna().sum())
-
-    per_group: list[float] = []
-    total_groups = 0
-    for _, rows in frame.groupby("group", sort=False):
-        total_groups += 1
-        # 한 클래스만 있는 그룹은 ROC-AUC가 정의되지 않는다(순위를 비교할 상대가 없다).
-        if rows["label"].nunique() < 2:
-            continue
-        per_group.append(float(roc_auc_score(rows["label"], rows["score"])))
-
-    scored_groups = len(per_group)
-    return GroupedRocAuc(
-        value=(sum(per_group) / scored_groups) if scored_groups else None,
-        total_groups=total_groups,
-        scored_groups=scored_groups,
-        skipped_groups=total_groups - scored_groups,
-        null_key_rows=null_key_rows,
-    )
 
 
 # 학습 경로가 승격 증거로 산출하는 held-out 지표 이름. 증거 계약이 인정하는
@@ -364,12 +304,15 @@ def main(
         print("  [OK] 예측 완료 (보정 없음)")
 
     print("\n[Step 4] 평가 지표 계산...")
-    # AUC 계열은 순위 기반이라 보정 전/후 동일하므로 어느 확률로 재도 같다.
-    roc_auc = evaluate_held_out_roc_auc(model, dataset, feature_columns)
-    pr_auc = average_precision_score(y, y_pred_proba)
-    # LogLoss/Brier는 보정된 확률(원분포 기준)로 잰다 — 보정 검증 근거(결정 5).
-    logloss = log_loss(y, y_pred_proba)
-    brier = brier_score_loss(y, y_pred_proba)
+    shared_metrics = probability_metrics(
+        y,
+        y_pred_proba,
+        dataset[GROUP_KEY_COLUMN] if GROUP_KEY_COLUMN in dataset.columns else None,
+    )
+    roc_auc = shared_metrics.roc_auc
+    pr_auc = shared_metrics.pr_auc
+    logloss = shared_metrics.log_loss
+    brier = shared_metrics.brier
 
     print(f"  [OK] ROC-AUC: {roc_auc:.4f}  (보정에 불변)")
     print(f"  [OK] PR-AUC: {pr_auc:.4f}  (보정에 불변)")
@@ -377,9 +320,8 @@ def main(
     # 과거 실험과의 비교 가능성을 끊으므로 이 작업의 범위가 아니다(#493이 소유).
     # 패스스루 컬럼이 없는 과거 스냅샷은 조용히 건너뛴다 — 조립은 fail-closed지만
     # 평가까지 막으면 재현 평가 경로가 끊긴다.
-    grouped = None
-    if GROUP_KEY_COLUMN in dataset.columns:
-        grouped = grouped_roc_auc(y, y_pred_proba, dataset[GROUP_KEY_COLUMN])
+    grouped = shared_metrics.grouped_roc_auc
+    if grouped is not None:
         coverage = (
             f"(유저 {grouped.total_groups}명 중 {grouped.scored_groups}명 집계, "
             f"{grouped.skipped_groups}명 제외"
