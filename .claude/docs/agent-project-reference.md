@@ -100,8 +100,14 @@ docs/
   `harness_config.json`)로 제공하며 준비된 모델만 사용한다. 출력은 기존 파일을 덮어쓰지 않는다.
   final metadata·workspace는 별도 준비/게시 interface에서 소비 grant를 검증한다. fixture는
   고정 registry 위치의 현재 final marker만 선택적 상태로 허용하고 원본 receipt는 유지한다.
+  `local_runtime.py`와 `autoresearch.cli harness-run --config`는 Judge-only 설정의 입력
+  고정·checkpoint 대조 후 실제 agent/학습 adapter를 Controller에 연결한다. `run_inputs.py`는
+  metadata bytes를 원천 재조회 없이 복구하고, `coding_agent.py`는 저장 로그인 기반 Codex
+  실행·usage·프로세스 회수를, `local_trial_runner.py`는 candidate commit과 paired seed
+  실행·봉인·artifact 보존을 맡는다. 설정 정본은 `HarnessRunConfig`이며 절대 로컬 경로와
+  사전 실측 sigma를 요구한다. runtime은 모델 다운로드나 registry 초기화를 하지 않는다.
 - **비책임:** GCP 자원 생성·운영 Vertex AI 경로 교체·시스템 드라이버 관리·임베딩 파인튜닝은
-  이 로컬 adapter의 책임이 아니다. 실제 agent·REPORT·calibration의 연결은
+  이 로컬 adapter의 책임이 아니다. 연구 기록 Judge·REPORT·calibration은
   Task 6/7 후속 범위다. 위 Stage B/C facade 목록은 최초 단계의 계약 설명이며 전체
   패키지 export 현황은 `__init__.py`를 따른다.
 

@@ -23,6 +23,8 @@ negative downsampling 난수를 분리하며, `run-pipeline`은 검증된 snapsh
 ROC-AUC 열화 곡선과 열화 지점을 낸다(#471) — 승격 판정이 아니라 측정 도구다.
 `harness-predict`는 별도 candidate-safe 로컬 입력으로 seed별 새 학습과 CSV 예측을
 수행한다(#48). 이 경로는 운영 MLflow 등록이나 원격 데이터 게시를 호출하지 않는다.
+`harness-run`은 Judge-only 로컬 설정으로 실제 coding agent·Controller를 연결하고
+불변 입력과 ledger를 대조하여 재개한다(#52). 모델 준비와 calibration은 별도다.
 
 [비책임] 실제 조립·학습·평가·승격 로직은 각 모듈(`autoresearch/model_training/`,
 `autoresearch/model_evaluation/`, `autoresearch/model_registry/promote.py`)이 소유한다. DAG·스케줄·재시도는 인접 저장소
@@ -103,6 +105,34 @@ def harness_predict(
     except FeatureContractError as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=1) from None
+
+
+@app.command("harness-run")
+def harness_run(
+    config: Path = typer.Option(..., "--config", help="Judge-only 실제 실험 설정 JSON"),
+) -> None:
+    """준비된 로컬 모델·로그인으로 자율 실험을 실행하거나 같은 run을 재개한다."""
+    from autoresearch.feature_engineering.model_contract import FeatureContractError
+    from autoresearch.research_harness.controller import ControllerError
+    from autoresearch.research_harness.fixture_errors import StageCError
+    from autoresearch.research_harness.ledger import LedgerError
+    from autoresearch.research_harness.local_runtime import (
+        LocalRuntimeError, load_run_config, run_local_research,
+    )
+
+    try:
+        result = run_local_research(load_run_config(config))
+    except (LocalRuntimeError, ControllerError, StageCError, LedgerError, FeatureContractError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from None
+    except (OSError, ValueError, RuntimeError):
+        typer.echo("harness_runtime_failed: stage=local_io", err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(json.dumps({
+        "conclusion": result.conclusion.value,
+        "validation_trials": result.validation_trials,
+        "final_reason_code": result.final_reason_code,
+    }, sort_keys=True))
 
 
 @app.command()

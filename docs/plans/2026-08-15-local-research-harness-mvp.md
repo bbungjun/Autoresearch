@@ -1450,6 +1450,73 @@ skip이며 신규 38개는 모두 실행됐다. 전체 Ruff·diff check도 통�
 adapter를, 이어 context-free 실험 기록 검토와 REPORT를 연결한다. Goal 5에서만 실제
 5-seed sigma와 품질·자율성·비용 및 개선/무변경/복구 시나리오를 측정한다.
 
+### Goal 4A 완료
+
+PR #51은 독립 리뷰와 전체 CI 통과 후 `9fb1498527a6e5b23a722071b7aae70b03c858de`로
+squash merge했다. Python 3.11/3.12, Feast/Postgres, lock/export, Ruff와 변경 대상 이미지
+빌드가 통과했다. agent/mlflow 이미지는 기존 path filter에 따라 건너뛰었다.
+위 4A의 독립 리뷰·검증·merge·기록 항목도 완료 상태다.
+
+### Goal 4B: 실제 coding agent와 재개 가능한 실행 (#52)
+
+**문제:** metadata가 메모리에만 있고 실제 ResearchTrialRunner adapter가 없어 모델 학습과
+Controller 정책을 한 run에서 실행·재개할 수 없었다. Codex CLI 로그인·구조화 응답 smoke는
+성공했지만 실제 코드 변경이나 자율 ML 실험을 증명하지 않는다.
+
+**해결:** spec §4.9를 먼저 고정하고 기존 Controller/Workspace/LocalRunner/Domain을
+조립한다. immutable run-input 게시와 actual agent launcher는 작은 module로 분리한다.
+원천 재조회 대신 저장 metadata bytes를 재개하며 final registry는 기존 위치·권한을 유지한다.
+
+- [ ] run-input 고정/복구/drift/부분 게시 테스트부터 구현
+- [ ] Codex CLI structured response·usage·timeout·tree 회수 테스트와 adapter
+- [ ] 실제 trial runner의 candidate commit·seed paired 실행·봉인/평가 연결
+- [ ] local 실행 설정과 checkpoint 결속·재개 CLI 및 README/reference 갱신
+- [ ] 실제 agent 코드 변경/실제 학습 연결 smoke (5-seed calibration과 구분)
+- [ ] 독립 리뷰·회귀·CI·PR·merge, 문제/해결/결과 기록
+
+**한계:** 새 실행의 LLM 호출 횟수는 exactly-once가 아니다. 중단된 validation attempt는
+다시 실행할 수 있으며 그 비용과 실패를 보존한다. 실제 품질 개선은 보장하지 않는다.
+
+**구현/검증 중간 기록:** run-input 게시·새 process 복구·drift·부분 게시 검증은 신규
+48개, Ledger 인접 회귀 포함 73개가 통과했다. Codex adapter 신규 27개와 기존 Runner
+회귀는 54 passed, 4 skipped였다. Windows fstat/lstat의 ctime 의미 차이로 정상 응답을
+거부하는 문제, Ctrl-C receipt 보존, JSON `1e400` 비유한 값 처리도 재현 후 수정했다.
+runtime/CLI 테스트는 checkpoint replay·metadata 원천 미조회·snapshot 변경·잘못된 경로·
+registry 미초기화 등을 검증했다. 빈 ledger의 last_sequence가 -1인 기존 계약을 테스트로
+확인하여 truthiness 대신 명시적 >= 0 비교를 사용했다. 독립 리뷰는 얕은 snapshot 경로의
+IndexError, 학습 cancellation 산출물/시간 손실, frozen exception과 contextlib 충돌을
+발견했고 각각 RED 회귀 후 수정했다.
+
+**실제 실행 발견 — 성공과 구분:** 저장 로그인과 명시 모델로 실제 Codex를 호출했지만
+내부 파일 읽기 명령이 `blocked by policy`로 거부됐다. CLI exit 0과 구조화 응답만으로는
+구현 성공을 증명할 수 없었다. 131.702초, input 447,840 / cached input 400,512 /
+output 4,687 / reasoning output 1,840 tokens가 CLI에서 보고됐다. cached/reasoning은
+별도 관측 필드이며 전체 token에 중복 합산하지 않는다. 달러 비용은 미확인이다.
+code SHA는 baseline과 같고 patch는 비어 있어 실제 코드 변경·학습·개선 성과는 없었다.
+실행용 진단 스크립트의 출력 함수 인자 오류도 candidate 준비 직후 발생하여 수정했다.
+그 뒤 무변경 paired adapter만 실제 GPU 환경에서 분리 점검했으나 학습 진입 전 MLflow의
+`Path.home()` 초기화가 최소 환경변수에서 실패했다. host home을 다시 상속하는 대신
+trusted launcher가 disposable home/temp를 제공하도록 계약을 보완했다.
+
+이 과정에서 agent 응답에 implemented/no_change/blocked 상태를 추가해 정책 차단을
+의도적인 무변경과 구분했고, checkout line-ending 잡음이 변경 목록에 들어오지 않도록
+최종 staged patch와 경로만 candidate 증거로 보존한다. Windows 실행 정책은 우회하거나
+전체 접근으로 바꾸지 않았다. 실제 agent 코드 변경·paired 학습 smoke 및 CI/merge는
+아직 완료 결과로 기록하지 않는다. Controller ledger duration에는 기존 계약상 agent
+prepare 시간이 없으므로 후속 전체 비용 집계는 attempt의 agent/prepare/학습 기록을 쓴다.
+
+**실제 paired 학습 연결 검증:** home 보완 뒤 PyTorch cache 초기화가 Windows의
+`getpass.getuser()` fallback에서 `pwd` import로 실패함을 별도 실제 import probe로 확인했다.
+host 이름 대신 child USERNAME을 `harness`로 고정하고 다시 실행했다. 최종 실제 GPU
+paired adapter는 동일 baseline SHA·seed 42의 **두 독립 학습/예측/봉인/채점**을
+40.468초에 완료했다. 두 결과 모두 3,840행·160 slate, NDCG@10 0.7817132868,
+Recall@10 1.0, LogLoss 0.1639438929, Brier 0.0374715513으로 같았다. 이 값은
+단일 seed의 무변경 연결 smoke이며 agent가 개선 코드를 구현한 실험이나 baseline sigma
+calibration이 아니다. final은 소비하지 않았다. HOME/USERNAME 보완의 runner 회귀는
+31 passed, 6 skipped, 독립 리뷰에서도 같은 결과를 확인했다. 코드 변경 후 전체 회귀와
+CI는 이어서 확인한다. 실제 coding agent의 정책 차단이 남아 있으므로 PR은 Draft로
+준비하며, 이슈 #52와 Goal 4/5를 완료 처리하지 않는다.
+
 ## Task 7: 지표별 baseline σ 측정 + end-to-end 완주
 
 앞선 Task가 전부 머지된 뒤에만 가능하다. σ 측정에 `harness-predict`(Task 6)와

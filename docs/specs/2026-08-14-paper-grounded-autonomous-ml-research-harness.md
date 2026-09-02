@@ -265,6 +265,10 @@ ID를 포함하고 초기화된 submodule은 staged gitlink와 HEAD 일치를 �
 파일명·내용·삭제·mode 변경은 fingerprint를 바꾼다. credential 검사는 현재 bytes뿐 아니라
 commit될 index blob에도 동일하게 적용한다.
 
+위 값은 workspace inspection receipt의 fingerprint다. #52의 `PreparedCandidate`는
+최종 commit될 staged patch의 SHA-256을 별도 diff fingerprint로 보존한다(§4.9).
+credential 검사는 commit 전에 계속 전체 workspace/index를 대상으로 한다.
+
 #### 4.4.2 LocalRunner 계약
 
 Task 5a의 공개 경계는 동기식 `LocalRunner.run(request) -> LocalRunReceipt` 하나다.
@@ -289,7 +293,9 @@ host 환경을 합치는 기능은 제공하지 않는다. `CandidateProcessCont
 dataclass이므로 provenance를 신뢰하지 않는다. Runner는 환경 이름의 중복, 이름·값의 NUL과 허용
 값을 검사하고, 실행 시점 host의 OS 경로 allowlist와 고정
 `PYTHONDONTWRITEBYTECODE=1`, `PYTHONUNBUFFERED=1`로 다시 계산한 값과 정확히 일치할 때만
-실행한다. trusted launcher는 candidate의 `Popen(env=...)` 경계에서 이 allowlist만 전달한다.
+실행한다. trusted launcher는 candidate의 `Popen(env=...)` 경계에서 이 allowlist를 전달하며,
+#52에서 ML 런타임을 위해 §4.9의 disposable HOME/USERPROFILE/TEMP/TMP/TMPDIR와 고정
+USERNAME만 추가한다. 경로는 host에서 복사하지 않고 검증된 cwd의 새 출력 하위 경로로 고정한다.
 Python candidate가 시작된 뒤 interpreter 자체가 locale 정규화를 위해 `LC_CTYPE` 같은 변수를
 추가할 수 있으나, 이는 host 환경 상속으로 간주하지 않는다. `PYTHONPATH`, credential 변수와
 그 밖의 추가 host 환경은 candidate 생성 경계에서 거부한다. candidate stdin은
@@ -616,6 +622,68 @@ embedding manifest/identity·실행 라이브러리·시간을 담고 로컬 절
 `training_duration_seconds`는 피처 조립과 학습/예측을 함께 포함한다. 프로세스 전체 시간은
 후속 LocalRunner receipt에서 측정한다. 실패는 경로·원문 입력을 노출하지 않는 고정 코드와
 nonzero exit로 전달한다.
+
+### 4.9 실제 agent 실행과 불변 run 입력 (#52)
+
+기존 `ResearchController` 정책은 유지하고 실제 `ResearchTrialRunner` adapter를 연결한다.
+한 run은 초기 card, budget, baseline/champion SHA, screening/confirmation seeds, baseline
+sigma, Judge handoff와 registry 위치, runtime 설정을 처음 실행 전에 고정한다.
+`RunInputContract`는 이 값들을 명시적 typed field로 가지며 runtime 설정만 canonical JSON
+문자열로 묶는다. runtime JSON은 호출자가 strict 설정 모델로 검증한 값이며 임의 환경 변수나
+자격 증명을 포함하지 않는다. 임베딩 모델 파일 identity와 Codex 모델·reasoning effort,
+실행 timeout도 이 설정에 포함한다.
+
+`freeze_run_inputs(root, *, contract, validation_metadata, final_metadata)`와
+`load_run_inputs(root, *, expected_contract)`는 Judge-owned run root의 `run-inputs/`에서
+두 metadata bundle과 manifest digest 및 ledger artifact evidence를 반환한다.
+manifest와 validation/final 각각 users/videos Parquet의 다섯 파일만 게시한다.
+metadata는 원래 bytes 그대로 보존하고 schema·행수·receipt·split identity를 대조한다.
+신규 게시는 lock/staging/rename/fsync, 재사용은 exact-tree·canonical manifest·digest
+검증을 거친다. 다른 계약이나 bytes, 파일 누락·추가·alias는 실패한다. 이 디렉터리를
+fixture root나 candidate checkout 안에 두지 않는다. 재개 시 원천 metadata를 재조회하지
+않고 저장 bytes를 복구한다. 호출자는 Controller 실행 전에 `run-inputs` checkpoint의
+manifest digest를 대조/기록한다. 게시 후 checkpoint 전 중단은 동일 게시물을 검증하여
+checkpoint만 보완한다. Controller의 ledger schema는 확장하지 않는다.
+
+실제 coding agent는 기존 ChatGPT 로그인으로 Codex CLI의 새 ephemeral 실행을 사용한다.
+명시적 model/effort와 `--ignore-user-config`로 실행 설정을 고정하고 workspace-write,
+JSON 이벤트와 구조화된 최종 응답을 사용한다. 이 옵션은 저장 로그인 자체를 제거하지 않는다.
+기존 executor의 Linux 전용 프로세스 처리를 그대로 가져오지 않는다. timeout과 프로세스
+트리 회수는 Harness의 Windows Job Object/POSIX process group 패턴을 따른다.
+OS 실행에 필요한 환경과 Codex 로그인 위치만 전달하고 GitHub/GCP/API key 환경은 전달하지
+않는다. 이는 동일 OS 사용자에 대한 보안 sandbox를 보장하는 설계가 아니다.
+
+agent는 initial card와 validation feedback만 받아 현재 champion에서 한 가설을 구현한다.
+채점 규칙·정답·final 결과·grant·Judge 경로는 prompt/context에 넣지 않는다. 저장소 내부
+수정 경로 allowlist는 추가하지 않으며, 외부 trusted Judge가 수치 판정을 소유한다.
+agent는 커밋/push·원격 자원 생성·데이터 다운로드를 수행하지 않는다. Harness는 변경의
+credential 검사와 diff fingerprint를 확보한 뒤 로컬 candidate commit을 만들고 설명·
+변경 SHA·usage·시간을 artifact로 보존한다. agent가 보고한 개선 주장은 실제 metric과
+구분하며, usage가 없는 경우 0으로 만들지 않는다. 달러 비용은 근거 없으면 null이다.
+구조화 응답은 `status=implemented|no_change|blocked`를 명시한다. CLI exit 0만으로 구현
+성공을 간주하지 않으며 `blocked`는 설명을 보존한 실행 실패로 기록한다. 의도적인
+`no_change`와 도구 정책 차단을 구분한다. 변경 경로·fingerprint는 보존된 commit diff와
+일치해야 하며 checkout line-ending 차이를 실제 코드 변경으로 보고하지 않는다.
+
+예측은 code SHA별 새 disposable workspace에 runtime `harness_config.json`을 배치하고
+기존 `LocalRunner`를 실행한다. 이 로컬 설정·모델·캐시는 candidate commit에 넣지 않는다.
+training override는 명시한 값만 전달하여 candidate의 코드 기본값 변경이 가려지지 않는다.
+예측 trusted launcher는 host의 home/temp를 상속하지 않고 `harness_out/.runtime/home`과
+`harness_out/.runtime/tmp`를 새로 만든다. child의 HOME/USERPROFILE과 TEMP/TMP/TMPDIR은
+각각 이 경로로 고정한다. ML 라이브러리가 `Path.home()`이나 임시 파일을 필요로 하더라도
+사용자 홈·자격 증명 경로를 노출하지 않는다. 이미 존재하거나 alias인 runtime 경로는 실패다.
+PyTorch 캐시 초기화의 `getpass.getuser()`용 USERNAME은 고정 문자열 `harness`다.
+이는 host 이름 상속이나 OS 계정/실행 권한 변경이 아니라 cache naming용 child 환경이다.
+이 경로는 disposable workspace와 함께 회수하며 저장 로그인은 prediction child에 주지 않는다.
+각 seed는 독립 학습이며 baseline/candidate CSV와 모델·receipt를 Judge-owned run artifact에
+보존하고 trusted domain에서 봉인·평가한다. final은 기존 같은 grant 아래 계획된 paired
+seed만 실행하고 실패 후 새 claim으로 재시도하지 않는다. 재개는 완료 trial을 재실행하지
+않고 중단된 validation trial만 다시 시작할 수 있다. 완료 전 중단된 agent/학습 비용도
+attempt artifact에 남기며 정확히 한 번의 LLM 실행은 보장하지 않는다.
+
+MVP planner는 초기 card와 validation feedback 수로 재생 가능한 card 순서를 만든다.
+coding agent가 feedback을 읽어 구현을 조정하며, 별도 LLM planner framework는 추가하지
+않는다. context-free 연구 기록 Judge와 REPORT, 실제 5-seed calibration은 후속 PR이다.
 
 ## 5. 목표 아키텍처
 
