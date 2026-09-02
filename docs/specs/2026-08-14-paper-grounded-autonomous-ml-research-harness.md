@@ -520,11 +520,11 @@ coverage로 손실을 드러낸다. 입력 계약 위반은 원본 값을 노출
 code로 거부한다. key 고유성·score `[0,1]` 검증은 prediction 의미를 아는 P0-2B에 남겨 같은
 규칙을 두 계층이 중복 소유하지 않게 했다.
 
-**결과.** 구현 helper를 기대값 계산에 재사용하지 않은 손 계산 golden test 17개로 완전
+**결과.** 구현 helper를 기대값 계산에 재사용하지 않은 손 계산 golden test 20개로 완전
 정답 `1.0`, click 1개가 3위인 NDCG `0.5`, 동점 click 2위
 `1/log2(3)`, Recall 분모 `3`일 때 `2/3`, zero-click 제외 coverage, 빈 입력,
-짧은 slate, row 순서 불변과 오류 코드를 검증했다. P0-2A 집중 테스트는 17개가 통과했고,
-Research Harness 회귀 테스트는 `291 passed, 3 skipped`였다. 아직 prediction 1:1 검증,
+짧은 slate, row 순서 불변과 오류 코드를 검증했다. P0-2A 집중 테스트는 20개가 통과했고,
+Research Harness 회귀 테스트는 `294 passed, 3 skipped`였다. 아직 prediction 1:1 검증,
 제품 coverage gate와 sigma 기반 판정은 구현하지 않았으며 각각 P0-2B/C의 후속 범위다.
 
 #### P0-2B/C 평가 대상 선택과 prediction 신뢰 경계

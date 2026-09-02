@@ -211,6 +211,16 @@ def test_error_codes_exactly_match_the_p0_2a_contract() -> None:
         ),
         (
             {
+                "labels": [1],
+                "scores": [0.5],
+                "slate_ids": ["slate-1"],
+                "video_ids": ["video-a"],
+                "k": False,
+            },
+            RankingMetricErrorCode.INVALID_K,
+        ),
+        (
+            {
                 "labels": [2],
                 "scores": [0.5],
                 "slate_ids": ["slate-1"],
@@ -232,7 +242,27 @@ def test_error_codes_exactly_match_the_p0_2a_contract() -> None:
         (
             {
                 "labels": [1],
+                "scores": [0.5],
+                "slate_ids": ["slate-1"],
+                "video_ids": [""],
+                "k": 1,
+            },
+            RankingMetricErrorCode.INVALID_IDENTIFIER,
+        ),
+        (
+            {
+                "labels": [1],
                 "scores": [float("nan")],
+                "slate_ids": ["slate-1"],
+                "video_ids": ["video-a"],
+                "k": 1,
+            },
+            RankingMetricErrorCode.NON_FINITE_SCORE,
+        ),
+        (
+            {
+                "labels": [1],
+                "scores": [float("inf")],
                 "slate_ids": ["slate-1"],
                 "video_ids": ["video-a"],
                 "k": 1,
