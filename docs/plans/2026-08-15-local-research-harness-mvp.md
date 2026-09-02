@@ -828,6 +828,9 @@ evidence 소실, Ledger의 thread·process 동시 append, 멱등 재시도, chec
 line 비교, 잠금 오류 분류, lock path↔descriptor identity와 재시도 가능한 공통 directory sync
 경계로 수정했다. Task 4 최종 수정 뒤 Research Harness 전체 회귀는 441개 통과·7개 환경 의존
 skip이었고, 저장소 전체 Ruff 검사도 통과했다.
+첫 Linux CI에서는 directory sync와 append sync가 같은 `os.fsync` mock을 공유한 테스트 오판과
+Linux `OSError`에 `winerror`가 없다는 이식성 오류가 드러났다. file sync seam을 분리하고
+선택 속성 접근으로 바꿔 Windows·POSIX가 같은 오류 계약을 사용하도록 수정했다.
 
 ---
 

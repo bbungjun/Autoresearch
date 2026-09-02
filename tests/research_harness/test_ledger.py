@@ -369,7 +369,7 @@ def test_fsync_failure_is_ambiguous_but_retry_is_idempotent(
     path = _ledger_path(tmp_path)
     ledger = open_trial_ledger(path)
     trial = _trial(tmp_path)
-    original_fsync = ledger_module.os.fsync
+    original_sync = ledger_module._sync_file
 
     calls = 0
 
@@ -378,12 +378,12 @@ def test_fsync_failure_is_ambiguous_but_retry_is_idempotent(
         calls += 1
         if calls == 2:
             raise OSError("sensitive detail")
-        original_fsync(descriptor)
+        original_sync(descriptor)
 
-    monkeypatch.setattr(ledger_module.os, "fsync", fail_fsync)
+    monkeypatch.setattr(ledger_module, "_sync_file", fail_fsync)
     with pytest.raises(LedgerError) as captured:
         ledger.append(trial)
-    monkeypatch.setattr(ledger_module.os, "fsync", original_fsync)
+    monkeypatch.setattr(ledger_module, "_sync_file", original_sync)
 
     retry = open_trial_ledger(path).append(trial)
     assert captured.value.code is LedgerErrorCode.IO_FAILED

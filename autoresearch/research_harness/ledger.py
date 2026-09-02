@@ -176,7 +176,7 @@ class TrialLedger:
             try:
                 os.lseek(descriptor, 0, os.SEEK_END)
                 _write_all(descriptor, payload)
-                os.fsync(descriptor)
+                _sync_file(descriptor)
             except OSError:
                 raise LedgerError(LedgerErrorCode.IO_FAILED, "append_sync") from None
             return LedgerAppendReceipt(sequence=sequence, created=True)
@@ -245,7 +245,7 @@ def _locked_ledger(path: Path) -> Iterator[int]:
             raise LedgerError(LedgerErrorCode.IO_FAILED, "lock_validation")
         _initialize_locked_file(lock_descriptor)
         ledger_descriptor, _ = _open_data_file(path)
-        os.fsync(ledger_descriptor)
+        _sync_file(ledger_descriptor)
         sync_directory(path.parent)
         yield ledger_descriptor
     except LedgerError:
@@ -368,8 +368,9 @@ def _release_lock(descriptor: int) -> None:
 
 
 def _windows_lock_is_contended(error: OSError) -> bool:
-    if error.winerror is not None:
-        return error.winerror in {33, 36}
+    winerror = getattr(error, "winerror", None)
+    if winerror is not None:
+        return winerror in {33, 36}
     return error.errno in {errno.EACCES, errno.EDEADLK}
 
 
@@ -765,3 +766,7 @@ def _write_all(descriptor: int, payload: bytes) -> None:
         if written <= 0:
             raise OSError
         offset += written
+
+
+def _sync_file(descriptor: int) -> None:
+    os.fsync(descriptor)
