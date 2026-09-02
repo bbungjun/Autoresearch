@@ -545,6 +545,61 @@ P0-2B는 Judge 소유 사본의 CSV parser, field byte·schema·1:1 key 의미 �
 parser entrypoint**를 제한 subprocess에서 실행하는 책임만 소유한다. 두 단계가 서로 다른
 parser나 schema 정의를 갖지 않는다.
 
+P0-2B의 package 공개 interface는 `build_validation_target(handoff)`와
+`score_predictions(target, prediction_copy)` 두 함수, 불변 `JudgeScoringResult`, 그리고
+`JudgeError`·`JudgeErrorCode`로 제한한다. `JudgeEvaluationTarget`, `PredictionRow`,
+`parse_prediction_copy()`는 P0-2C가 같은 구현을 재사용할 module 내부 interface이며 package
+`__init__.py`에서 재수출하지 않는다. target은 공개 constructor 없이 검증된 factory만 만들고,
+직접 생성은 `invalid_judge_target`으로 거부한다. handoff·slate·label artifact가 계약과 다르거나
+재검증에 실패해도 같은 code로 fail-closed한다. CSV·prediction key·score 계약 위반은
+`invalid_predictions`로 고정하고 원본 field 값이나 Judge path를 오류에 싣지 않는다.
+
+`parse_prediction_copy()`는 정확한 header
+`evaluation_id,slate_id,video_id,score`와 최대 300,000행을 streaming으로 읽어 typed row를
+만든다. ID field는 comma·quote·개행·앞뒤 공백 없는 ASCII이며 `evaluation_id`는 현재
+`eval_` + SHA-256 계약에 맞춰 정확히 69 byte, `slate_id`와 `video_id`는 각각 1~64 byte다.
+`score` token은 앞뒤 공백 없는 ASCII 최대 24 byte이고 finite float `[0,1]`이어야 한다.
+target factory는 slate artifact의 모든 key가 이 prediction 표현 계약으로 encode 가능한지도
+검증한다. 표현할 수 없는 trusted key를 candidate prediction 오류로 전가하지 않고 target을
+`invalid_judge_target`으로 거부한다.
+P0-2C의 ingestion byte 상한은 **65 MiB + 1 byte probe**로 고정한다. CRLF 최악 행은
+`69 + 64 + 64 + 24 + comma 3 + CRLF 2 = 226 byte`이고 300,000행과 39 byte header는
+`67,800,039 byte`라 65 MiB(`68,157,440 byte`) 안에 든다. 기존 64 MiB 계산은 실제
+69-byte evaluation ID를 64 byte로 센 오류이므로 사용하지 않는다.
+
+`JudgeScoringResult`는 target evaluation ID와 row count, `ndcg_at_10`, `recall_at_10`,
+`ndcg_at_24`, 그리고 `ProbabilityMetricResult`를 담는다. probability 결과는
+`row_count`, `positive_count`, `negative_count`, `roc_auc`, `pr_auc`, `log_loss`, `brier`,
+`GroupedRocAuc`를 포함한다. 양성·음성 중 한 클래스가 없으면 전역 probability metric은
+예외 대신 `None`으로 구조화해 P0-2C가 `metric_unavailable`로 판정할 수 있게 한다. 기존
+`evaluate.py`의 같은 계산을
+`model_evaluation/probability_metrics.py`의 순수 interface로 먼저 이동하고 기존 CLI가 이를
+호출하게 해 Judge와 정의가 갈라지지 않게 한다. 지표별 coverage gate와 `None` 판정은
+P0-2C가 결과를 소비하면서 적용한다.
+
+##### Portfolio Record — P0-2B validation Judge scoring
+
+**문제.** 자율 실험 candidate가 자기 CSV의 `evaluation_id`로 validation과 final holdout 중
+유리한 대상을 고르거나, 일부 key만 제출하고도 점수를 받으면 실험 지표를 신뢰할 수 없다.
+기존 probability metric도 CLI 내부에 묶여 있어 Judge가 별도 정의를 만들 경우 같은 score가
+서로 다른 증거가 될 위험이 있었다. 또한 최초 문서의 64 MiB 계산은 실제 69-byte evaluation
+ID를 64 byte로 세어 300,000행 최악 크기를 잘못 계산했다.
+
+**해결.** 검증된 Stage C handoff만 받는 `build_validation_target()`이 validation artifact를
+고정하고, 직접 만들 수 없는 opaque target을 `score_predictions()`에 전달하도록 interface를
+제한했다. streaming parser는 exact header, ASCII field byte, 300,000행, finite `[0,1]` score를
+검증하고 target key와 누락·중복·extra 없는 exact 1:1 관계만 허용한다. CSV로 표현할 수 없는
+artifact key와 null identity는 candidate 오류가 아니라 target 오류로 조기 거부한다. 기존 CLI의
+ROC-AUC·PR-AUC·Log Loss·Brier·grouped ROC-AUC 계산은 순수 probability module로 이동해
+Judge와 공유하고, 단일 클래스는 count와 `None`으로 구조화해 P0-2C가 판정하게 했다.
+
+**결과.** P0-2B 집중 계약 테스트 29개가 통과했으며 64/65-byte ID, 24/25-byte score,
+정확히 300,000/300,001행, LF/CRLF, final ID 선택 시도, key 누락·중복·extra, artifact 변조와
+null identity를 회귀 고정했다. 기존 평가 계산 회귀 25개와 Research Harness 회귀
+`319 passed, 3 skipped`, 전체 Ruff가 통과했다. 독립 spec 및 코드·보안 리뷰는 수정 후
+Critical/Important/Minor 발견 없이 PASS했다. candidate 경로 봉인, subprocess 자원 제한,
+coverage gate와 sigma 판정은 의도대로 P0-2C에 남아 있다.
+
 | 판정 | 조건 |
 | --- | --- |
 | `promote` | `Δ_ndcg_at_10 ≥ 2σ_ndcg_at_10`이고 모든 guardrail `Δ_metric ≥ -1σ_metric` |
