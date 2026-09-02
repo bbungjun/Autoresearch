@@ -67,7 +67,7 @@ class ResearchDomain(ABC):
 
     @abstractmethod
     def describe_capabilities(self) -> Never:
-        """Paper Discovery가 사용할 domain capability를 반환한다."""
+        """MVP에서는 Paper Discovery 이전임을 typed 미지원 오류로 알린다."""
 
         raise NotImplementedError
 
