@@ -64,7 +64,7 @@ docs/
 - **경계:** `jobs/`는 입력을 검증하고 도메인 모듈을 호출하지만 schedule,
   retry, timeout, Pool과 KubernetesPodOperator 설정은 소유하지 않습니다.
 
-### `autoresearch/research_harness/` (Stage B + Stage C foundation)
+### `autoresearch/research_harness/` (로컬 Research Harness)
 - **책임:** 검증된 action log 파티션에서 source 검증 → slate identity 검증 → 다일
   click attribution → user split/구조 coverage → artifact/manifest → local publisher를
   조립합니다. Stage C foundation은 fixture/candidate handoff의 frozen typed contract,
@@ -88,10 +88,16 @@ docs/
 - **게시 경계:** local content-addressed target은 같은 lock protocol을 따르는 cooperating
   publisher에게만 write-once 의미를 보장합니다. 완성·동일 target만 재사용하며 부분 target이나
   manifest/artifact digest 불일치는 `snapshot_write_conflict`로 거부하고 덮어쓰지 않습니다.
-- **비책임:** Stage C foundation은 일일 action log producer 실행, fixture/snapshot
-  write-once orchestration, canonical source adapter, Judge handoff artifact 재검증,
-  candidate view 게시를 아직 수행하지 않습니다. candidate workspace 주입 검사와 Sealed
-  Judge·지표·승격도 Task 3 또는 P0-2 이후의 명시적 후속 범위입니다.
+- **후속 구현:** fixture/snapshot 게시, candidate view·workspace, Sealed Judge·지표,
+  ledger·Controller와 metadata v2를 구현했다. `local_features.py`는 후보 입력에서
+  KST/as-of 기반 21개 피처를 조립한다. `embedding.py`의 작은 TextEmbedder interface를
+  `local_embedding.py`가 local-files-only SentenceTransformer와 identity별 캐시로 구현한다.
+  GPU 의존성은 pyproject의 선택 그룹 `local-embedding`에만 선언한다. 수동 장치/모델 검증은
+  `scripts/research_harness/embedding_smoke.py`이며 사용법은 README가 소유한다.
+- **비책임:** GCP 자원 생성·운영 Vertex AI 경로 교체·시스템 드라이버 관리·임베딩 파인튜닝은
+  이 로컬 adapter의 책임이 아니다. 실제 agent·CTR 재학습·REPORT·calibration의 연결은
+  Task 6/7 후속 범위다. 위 Stage B/C facade 목록은 최초 단계의 계약 설명이며 전체
+  패키지 export 현황은 `__init__.py`를 따른다.
 
 ### `autoresearch/`의 학습·평가 단계 패키지
 - **책임:** 피처 조립(`feature_engineering/`), 모델 정의·학습·학습 데이터셋·

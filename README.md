@@ -82,7 +82,7 @@ docs/                # 문서 — docs/README.md 인덱스 참조
 ### Research Harness 평가 snapshot (Stage B)
 
 `autoresearch/research_harness/`는 검증된 action log 일일 파티션에서 재현 가능한
-평가 snapshot을 조립하는 파이프라인 경계입니다. 공개 Python API는 정확히
+평가 snapshot을 조립하는 파이프라인 경계입니다. Stage B의 주요 Python API는
 `ActionLogSource`, `EvaluationSnapshotError`, `EvaluationSnapshotReceipt`,
 `EvaluationSnapshotRequest`, `SnapshotErrorCode`,
 `build_evaluation_snapshot` 여섯 항목입니다. 마지막 함수의 계약은
@@ -97,9 +97,30 @@ validation/final holdout split으로 나눕니다. local publisher는 같은 loc
 cooperating publisher에 한해 동일한 완성 target을 재사용하고, 불완전하거나 digest가 다른
 target은 덮어쓰지 않고 실패합니다.
 
-RuleBased fixture·seed custody, candidate workspace 주입 검사, Sealed Judge 및 artifact
-handoff는 Stage C/P0-2 이후 범위로 아직 구현되지 않았습니다. 계약 정본은
+이후 RuleBased fixture, candidate workspace, Sealed Judge, ledger·Controller,
+metadata v2와 로컬 피처 조립을 구현했습니다. 실제 agent·재학습·REPORT의 통합 실행은
+후속 Task 6/7 범위입니다. snapshot 계약 정본은
 [`Research Harness P0-1 평가 snapshot`](docs/specs/2026-08-31-research-harness-evaluation-snapshot.md)입니다.
+
+### Research Harness 로컬 임베딩 준비
+
+`research_harness.local_embedding`은 준비된 모델을 사용하는 `TextEmbedder` adapter입니다.
+기본 dev·배포 환경에는 GPU 의존성을 넣지 않으며 `local-embedding` 선택 그룹을 사용합니다.
+Windows RTX 3070 Ti baseline은 CUDA 12.8 PyTorch wheel이며 시스템 드라이버를 바꾸지 않습니다.
+다른 기존 가상환경을 유지하려면 별도 worktree의 `.venv`에서 아래 명령을 실행하십시오.
+
+```bash
+uv sync --locked --no-default-groups --group local-embedding
+uv run --no-sync python -m scripts.research_harness.embedding_smoke --model-dir artifacts/models/multilingual-e5-small --cache-dir artifacts/embedding-cache-smoke --out artifacts/embedding-smoke.json --download
+```
+
+`--download`가 있을 때만 공개 고정 revision 모델을 준비합니다. 이후에는 같은 명령에서
+이 옵션을 빼면 로컬 파일만 사용합니다. JSON에는 모델 identity·파일 hash·라이브러리 버전,
+GPU 장치·할당 peak·처리 시간·cache hit 검증을 남깁니다. 새 캐시 디렉터리에서 실행해야
+첫 추론과 재사용 시간을 구분할 수 있습니다. 생성 모델/캐시/JSON은 커밋하지 않습니다.
+이 smoke는 모델 품질 실험이나 전체 agent loop의 완료 증거가 아닙니다. 설정·캐시·오류
+계약과 실제 검증 결과는 [Harness spec §4.7](docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md)와
+[구현 plan](docs/plans/2026-08-15-local-research-harness-mvp.md)을 따릅니다.
 
 ## 배포 이미지
 
