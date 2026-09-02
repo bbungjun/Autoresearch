@@ -545,6 +545,32 @@ P0-2B는 Judge 소유 사본의 CSV parser, field byte·schema·1:1 key 의미 �
 parser entrypoint**를 제한 subprocess에서 실행하는 책임만 소유한다. 두 단계가 서로 다른
 parser나 schema 정의를 갖지 않는다.
 
+P0-2B의 package 공개 interface는 `build_validation_target(handoff)`와
+`score_predictions(target, prediction_copy)` 두 함수, 불변 `JudgeScoringResult`, 그리고
+`JudgeError`·`JudgeErrorCode`로 제한한다. `JudgeEvaluationTarget`, `PredictionRow`,
+`parse_prediction_copy()`는 P0-2C가 같은 구현을 재사용할 module 내부 interface이며 package
+`__init__.py`에서 재수출하지 않는다. target은 공개 constructor 없이 검증된 factory만 만들고,
+직접 생성은 `invalid_judge_target`으로 거부한다. handoff·slate·label artifact가 계약과 다르거나
+재검증에 실패해도 같은 code로 fail-closed한다. CSV·prediction key·score 계약 위반은
+`invalid_predictions`로 고정하고 원본 field 값이나 Judge path를 오류에 싣지 않는다.
+
+`parse_prediction_copy()`는 정확한 header
+`evaluation_id,slate_id,video_id,score`와 최대 300,000행을 streaming으로 읽어 typed row를
+만든다. ID field는 comma·quote·개행·앞뒤 공백 없는 ASCII이며 `evaluation_id`는 현재
+`eval_` + SHA-256 계약에 맞춰 정확히 69 byte, `slate_id`와 `video_id`는 각각 1~64 byte다.
+`score` token은 앞뒤 공백 없는 ASCII 최대 24 byte이고 finite float `[0,1]`이어야 한다.
+P0-2C의 ingestion byte 상한은 **65 MiB + 1 byte probe**로 고정한다. CRLF 최악 행은
+`69 + 64 + 64 + 24 + comma 3 + CRLF 2 = 226 byte`이고 300,000행과 39 byte header는
+`67,800,039 byte`라 65 MiB(`68,157,440 byte`) 안에 든다. 기존 64 MiB 계산은 실제
+69-byte evaluation ID를 64 byte로 센 오류이므로 사용하지 않는다.
+
+`JudgeScoringResult`는 target evaluation ID와 row count, `ndcg_at_10`, `recall_at_10`,
+`ndcg_at_24`, 그리고 `ProbabilityMetricResult`를 담는다. probability 결과는 `roc_auc`,
+`pr_auc`, `log_loss`, `brier`, `GroupedRocAuc`를 포함한다. 기존 `evaluate.py`의 같은 계산을
+`model_evaluation/probability_metrics.py`의 순수 interface로 먼저 이동하고 기존 CLI가 이를
+호출하게 해 Judge와 정의가 갈라지지 않게 한다. 지표별 coverage gate와 `None` 판정은
+P0-2C가 결과를 소비하면서 적용한다.
+
 | 판정 | 조건 |
 | --- | --- |
 | `promote` | `Δ_ndcg_at_10 ≥ 2σ_ndcg_at_10`이고 모든 guardrail `Δ_metric ≥ -1σ_metric` |

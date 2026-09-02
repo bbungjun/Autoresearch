@@ -584,18 +584,23 @@ P0-2B/C에는 final target factory를 두지 않으며, 후속 final registry Ta
 `FinalConsumptionGrant` 전용 factory가 추가되기 전 production scoring은 validation으로
 제한한다. candidate 경로에서 안전하게 사본을 만드는 ingestion과 σ 판정은 P0-2C가 소유한다.
 
-- [ ] `judge.py` — 입력은 `build_validation_target()`이 만든 trusted target + Judge 소유
-      prediction 사본. target은 expected validation ID·정확한 slate/label artifact를 고정하며
-      prediction 값으로 split을 선택하지 않는다. 직접 target 생성과 handoff만으로 final target
-      생성을 시도하면 typed 오류로 거부한다
-- [ ] Judge 소유 사본을 읽는 parser가 header·field byte·행 수 계약을 검증해 typed prediction
-      rows를 만들고, semantic validator와 scoring은 이 값만 소비한다
+  - [ ] `judge.py` — 입력은 `build_validation_target()`이 만든 trusted target + Judge 소유
+        prediction 사본. target은 expected validation ID·정확한 slate/label artifact를 고정하며
+        prediction 값으로 split을 선택하지 않는다. 직접 target 생성과 handoff만으로 final target
+        생성을 시도하면 typed `invalid_judge_target` 오류로 거부한다. package 공개 interface는
+        `build_validation_target()`, `score_predictions()`, 결과·오류 타입으로 제한하고 opaque
+        target과 parser row는 재수출하지 않는다
+  - [ ] Judge 소유 사본을 읽는 parser가 header·field byte·행 수 계약을 검증해 typed prediction
+        rows를 만들고, semantic validator와 scoring은 이 값만 소비한다. evaluation ID는 정확히
+        69 byte, slate/video ID는 1~64 ASCII byte, score token은 최대 24 ASCII byte, 행은 최대
+        300,000개다
 - [ ] **predictions 스키마 강제 검증**: 컬럼은
       `evaluation_id, slate_id, video_id, score`. `evaluation_id`는 대상 split manifest와
       정확히 같고, 나머지 키는 slate와 정확히 1:1이어야 한다 — 누락 행, 중복 행,
       slate에 없는 행, NaN/Inf 또는 `[0,1]` 밖 score는
       전부 `invalid_predictions`로 거부. 거부는 실행 실패이지 지표 0점이 아니다
-- [ ] 지표 산출: primary `ndcg_at_10`, ranking guardrail `recall_at_10`·`ndcg_at_24`,
+  - [ ] 지표 산출: `JudgeScoringResult`에 primary `ndcg_at_10`, ranking guardrail
+        `recall_at_10`·`ndcg_at_24`,
       probability guardrail은 `labels/scores/groups`를 받는 순수
       `model_evaluation/probability_metrics.py`로 기존 `evaluate.py` 계산을 동작 변경 없이 먼저
       추출하고 기존 CLI와 Judge가 함께 사용한다. 구조 추출과 Judge 동작 추가는 별도 커밋이다
@@ -613,14 +618,15 @@ P0-2C PR이다. candidate 경로를 Judge 소유 사본으로 봉인하는 파�
 metric 결과를 지표별 baseline σ에 비교하는 판정을 추가한다.
 
 - [ ] candidate 경로의 파일을 `O_RDONLY|O_NOFOLLOW`로 한 번만 열고 검증한 같은 FD에서
-      `64 MiB + 1` byte까지만 읽는다. 복사 전후 `fstat`의 identity·mode·size·mtime을
+        `65 MiB + 1` byte까지만 읽는다. 복사 전후 `fstat`의 identity·mode·size·mtime을
       비교해 교체·성장을 검출하고, Judge 목적지는 `O_CREAT|O_EXCL`로 만든다. 경로를 다시
       열지 않으며 schema와 지표 계산은 Judge 사본만 읽는다
 - [ ] P0-2B의 동일 parser entrypoint를 격리 subprocess에서 실행해 정확히 4개 필드와 field
       byte 계약을 강제한다. P0-2C가 별도 parser·schema 정의를 만들지 않는다.
-      `evaluation_id`·`slate_id`·`video_id`는 comma·quote·개행 없는 ASCII 각 최대 64 byte,
-      `score` token은 최대 24 byte다. CRLF 기준 최악 행 221 byte와 header 39 byte에서
-      300,000행은 66,300,039 byte이므로 64 MiB 안에 든다. 행 수는 대상 slate와 같으면서
+        `evaluation_id`는 현재 ID 계약에 맞는 정확한 69 byte, `slate_id`·`video_id`는
+        comma·quote·개행 없는 ASCII 각 1~64 byte, `score` token은 최대 24 byte다. CRLF 기준
+        최악 행 226 byte와 header 39 byte에서 300,000행은 67,800,039 byte이므로 65 MiB 안에
+        든다. 행 수는 대상 slate와 같으면서
       최대 300,000행, wall-clock 10초, 메모리 256 MiB여야 하며 상한 위반은
       `invalid_predictions`다
 - [ ] `compare()` — 지표 방향을 정규화하고 D5 규칙(primary `≥2σ_primary` 개선 + 각
