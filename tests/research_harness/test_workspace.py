@@ -615,6 +615,36 @@ def test_gitlink_object_id_changes_fingerprint(
     assert second != base
 
 
+def test_changed_uninitialized_gitlink_is_rejected(
+    repository,
+    candidate_fixture,
+    tmp_path: Path,
+) -> None:
+    repository_root, _ = repository
+    _git(repository_root, "commit", "--allow-empty", "-m", "gitlink target")
+    target_commit = _git(repository_root, "rev-parse", "HEAD")
+    _, source = candidate_fixture
+
+    with open_candidate_workspace(
+        _request(repository, candidate_fixture, tmp_path / "candidate"),
+        source=source,
+    ) as workspace:
+        _git(
+            workspace.root,
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "160000",
+            target_commit,
+            "vendor/model",
+        )
+        with pytest.raises(WorkspaceError) as captured:
+            workspace.inspect_changes()
+
+    assert captured.value.code is WorkspaceErrorCode.GIT_FAILED
+    assert captured.value.stage == "submodule_unavailable"
+
+
 @pytest.mark.parametrize(
     "credential_path",
     ["credential.txt", "harness_in/credential.txt"],

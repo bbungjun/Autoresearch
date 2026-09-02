@@ -329,14 +329,19 @@ def _require_credential_free(
             for payload in _index_blob_payloads(root, index_records):
                 _require_payload_credential_free(payload)
         path = root.joinpath(*relative_path.split("/"))
-        if not path.exists() and not path.is_symlink():
+        if _index_mode(index_records) == "160000":
+            base_oid = _base_gitlink_oid(root, base_ref, relative_path)
+            staged_oid = _index_gitlink_oid(index_records)
+            if not path.is_dir():
+                if staged_oid is not None and staged_oid != base_oid:
+                    raise WorkspaceError(
+                        WorkspaceErrorCode.GIT_FAILED,
+                        "submodule_unavailable",
+                    )
+                continue
+            _canonical_submodule_state(path, base_oid, staged_oid)
             continue
-        if path.is_dir() and _index_mode(index_records) == "160000":
-            _canonical_submodule_state(
-                path,
-                _base_gitlink_oid(root, base_ref, relative_path),
-                _index_gitlink_oid(index_records),
-            )
+        if not path.exists() and not path.is_symlink():
             continue
         _require_payload_credential_free(_current_payload(path))
 
