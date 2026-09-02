@@ -21,6 +21,8 @@ negative downsampling 난수를 분리하며, `run-pipeline`은 검증된 snapsh
 `comparison_passed`/`comparison_rejected`/`comparison_failed` 결과 payload를 남긴다(#454).
 `measure-degradation`은 단일 cutoff로 학습한 모델을 이후 날짜에 하루씩 순차 적용해
 ROC-AUC 열화 곡선과 열화 지점을 낸다(#471) — 승격 판정이 아니라 측정 도구다.
+`harness-predict`는 별도 candidate-safe 로컬 입력으로 seed별 새 학습과 CSV 예측을
+수행한다(#48). 이 경로는 운영 MLflow 등록이나 원격 데이터 게시를 호출하지 않는다.
 
 [비책임] 실제 조립·학습·평가·승격 로직은 각 모듈(`autoresearch/model_training/`,
 `autoresearch/model_evaluation/`, `autoresearch/model_registry/promote.py`)이 소유한다. DAG·스케줄·재시도는 인접 저장소
@@ -83,6 +85,24 @@ from autoresearch.model_registry.promotion_result import (  # noqa: E402
 )
 
 app = typer.Typer()
+
+
+@app.command("harness-predict")
+def harness_predict(
+    slate: Path = typer.Option(..., "--slate", help="candidate v2 slate.parquet 경로"),
+    out: Path = typer.Option(..., "--out", help="새 prediction CSV 경로"),
+    seed: int = typer.Option(..., "--seed", min=0, max=2**32 - 1, help="재학습 seed"),
+    config: Path = typer.Option(Path("harness_config.json"), "--config", help="로컬 임베딩/학습 설정 JSON"),
+) -> None:
+    """후보 입력으로 새 LightGBM을 학습하고 예측·모델·receipt를 보존한다."""
+    from autoresearch.feature_engineering.model_contract import FeatureContractError
+    from autoresearch.research_harness.prediction import run_harness_prediction
+
+    try:
+        run_harness_prediction(slate=slate, out=out, seed=seed, config_path=config)
+    except FeatureContractError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from None
 
 
 @app.command()

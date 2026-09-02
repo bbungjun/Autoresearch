@@ -1192,8 +1192,8 @@ final metadata·권한 연결, checkpoint 영속화, 피처/임베딩·학습은
 | 순서 | PR 범위와 완료 증거 | 상태 |
 | --- | --- | --- |
 | 1 (#44) | 로컬 21개 피처, 최소 embedding interface, 손 계산 및 시간 경계 테스트 | #45 CI 통과·머지 완료 |
-| 2 (#46) | 실제 로컬 GPU adapter, 모델 고정 revision/파일 해시, 캐시 분리, CUDA 추론·OOM 검증 | 진행 중 |
-| 3 | 재학습 CLI, seed별 학습·예측, 입력 무결성과 완전 라벨 기간 검증 | 대기 |
+| 2 (#46) | 실제 로컬 GPU adapter, 모델 고정 revision/파일 해시, 캐시 분리, CUDA 추론·OOM 검증 | #47 CI 통과·머지 완료 |
+| 3 (#48) | 재학습 CLI, seed별 학습·예측, 입력 무결성과 완전 라벨 기간 검증 | 진행 중 |
 | 4 | final 권한/metadata, checkpoint identity, 실제 coding agent·독립 Judge·REPORT 연결 (필요하면 여러 PR) | 대기 |
 | 5 | 5회 독립 재학습 calibration, E2E·복구·판정 시나리오와 품질/자율성/비용 실측 | 대기 |
 
@@ -1274,7 +1274,7 @@ CUDA 실행, 반복 실험의 캐시 호환성을 증명하지 못한다. 환경
 - [x] pyproject 선택 그룹 → uv lock → proxy export 갱신 및 환경 격리
 - [x] 실제 CUDA tensor·고정 모델 query/document 추론 및 cache hit 실측
 - [x] model/revision/file hash, 의존성, 시간/메모리 및 한계 기록
-- [ ] 독립 리뷰, Harness 회귀, Ruff, CI, PR·squash merge
+- [x] 독립 리뷰, Harness 회귀, Ruff, CI, PR·squash merge
 
 **구현·트러블슈팅:** 최초 40개 단위 테스트의 RED를 확인한 뒤 adapter를 구현했다.
 실제 smoke에서 ST 6의 구 dimension API 폐기 경고가 발생해 `get_embedding_dimension()`으로
@@ -1314,6 +1314,89 @@ reserved는 507,510,784 bytes였다. 모델/캐시/JSON 원본은 ignored 산출
 **742 passed, 11 skipped (132.89초)**, 전체 Ruff·`uv lock --check`·`git diff --check`는
 통과했다. skip은 기존 플랫폼 조건이며 신규 테스트는 모두 실행됐다. 전체 저장소
 pytest·이미지 빌드는 PR의 Linux CI에서 확인하며 후속 재학습·실험 연결은 계속 진행한다.
+
+**#47 최종 반영:** Python 3.11(5분 57초)/3.12(5분 12초) 전체 pytest, feast/postgres,
+lock/export, Ruff, app/train/feast/serving/agent 이미지와 fan-in CI가 모두 통과했다.
+변경 없는 mlflow 이미지는 기존 path filter로 skip됐다. 미해결 리뷰 thread 없이
+`c65dda37ed1b105b9fb804e0ce8548090ca302dc`로 squash merge했다.
+
+### Task 6 seed별 재학습 CLI — #48
+
+**문제:** 피처 계산과 실제 GPU 임베딩은 있지만 기존 runner의 고정 `harness-predict`
+명령이 아직 없다. 과거 로그 전체를 학습하거나 고정 모델만 재점수화하면 시간 누수 또는
+가짜 seed sweep이 된다. 운영 train 전체 호출은 MLflow/등록/원격 의존성까지 가져온다.
+
+**해결 계획:** spec 4.8에 따라 입력 검증과 재학습을 작은 두 interface로 나눈다.
+검증한 같은 bytes에서 training 입력을 만들고 기존 attribution·피처·LGBMModel을 연결한다.
+CLI는 설정/입력 검증 → GPU 적재 → 새 fit → 모델/receipt/CSV 게시를 담당한다.
+독립 worker가 core와 손 계산/실제 LightGBM 테스트를, coordinator가 CLI·배선 테스트와
+문서·실제 GPU 실행을 맡고 구현하지 않은 worker가 전체 변경을 리뷰한다.
+
+- [x] 손 계산 30분/자정/T-1 경합·완전 라벨과 손상 입력 테스트의 RED
+- [x] 입력 receipt·연속 history 검증과 기존 attribution/21개 피처 연결
+- [x] seed별 split/sampling/새 fit 및 같은 seed 재현 테스트
+- [x] CLI/설정/비덮어쓰기 산출물·안전한 오류 계약과 테스트
+- [x] 실제 GPU 임베딩 + CPU LightGBM CLI smoke, 재현 receipt 보존
+- [ ] 독립 리뷰·회귀·Ruff·CI·PR·squash merge와 결과 기록
+
+**준비 결과:** 기존 production builder로 validation 전용 v2 입력을 만들었다. 평가일은
+2026-09-01, history는 08-30/08-31 각각 5,400 events(4,800 impressions), validation은
+3,840행이다. 학습 가능한 출력일은 08-30뿐이다. 이는 입력 준비 증거이며 아직 학습
+성공이나 모델 품질 측정이 아니다. final holdout은 소비하지 않았다.
+
+**검증·트러블슈팅:** core 최초 **12 failed**(모듈 부재)와 CLI **1 failed**(명령 부재)를
+확인하고 구현했다. core는 12 GREEN 뒤 경계값을 보강해 **30 passed**, CLI는 최초
+20 passed 이후 모델 디렉터리 안 출력 거부와 baseline 설정 drift 검사를 추가했다.
+LightGBM의 고유 예외가 일반 RuntimeError에 포함되지 않는다는 점을 대조하고,
+명시적 `LightGBMError` catch 및 원문 비노출 회귀를 추가했다. 파일을 검증한 뒤 다시 읽지
+않고 동일 payload에서 Arrow를 파싱하며 descriptor/파일 변경 검사도 적용했다.
+기존 모델·sampling 함수를 재사용하고 운영 train orchestration은 실행하지 않았다.
+독립 리뷰에서 모델/캐시 경로의 NUL 문자가 경로 해석 과정의 원본 ValueError로 새어 나오는
+P2를 재현했다. 경로 해석을 고정 오류로 변환하고 두 필드의 실제 CLI 회귀를 추가했다.
+최종 신규 테스트는 **55 passed**이며 독립 리뷰에서도 같은 55개를 직접 실행했고 추가
+차단 사항을 찾지 못했다. seed 0, 2**31, 2**32-1의 실제 fit도 별도로 확인했다.
+기존 CLI/downsampling 검증은 **93 passed, 1 failed**였다. 실패는 기존 traceback 검사에서
+POSIX 경로 문자열을 요구하는 Windows assertion이며 HEAD 원본 CLI에서도 동일하게
+재현돼 이번 변경 회귀와 구분했다. 관련 없는 테스트를 느슨하게 고치지 않았다.
+
+**실제 CLI 결과:** §4.7에서 준비한 동일 GPU 모델, LightGBM 4.7.0, scikit-learn 1.9.0,
+pandas 2.3.3, PyArrow 21.0.0으로 오프라인 실행했다. 입력 manifest SHA-256은
+`652e611348c22bd3f59f3a8e373be2db3b9d5392221ad3eb6769a1b0c6801189`다. 학습 전체
+4,800행(positive 200)을 train 2,880/validation 960/test 960으로 나눴고, 각 positive는
+120/40/40이다. 기본 sampling 1.0과 auto scale_pos_weight 23을 기록했다.
+
+| 실행 | 예측 행수 | 예측 준비 시간 | 피처·학습·예측 시간 | embedding hit/miss/inference |
+| --- | --- | --- | --- | --- |
+| seed 42 | 3,840 | 11.834초 | 2.927초 | 9/9/2 |
+| seed 42 새 프로세스 재실행 | 3,840 | 11.100초 | 2.527초 | 18/0/0 |
+| seed 43 새 프로세스 재학습 | 3,840 | 11.127초 | 2.490초 | 18/0/0 |
+
+시간은 Python import와 산출물 저장을 제외한 호출 내부 측정이며 전체 프로세스 비용이
+아니다. seed 42의 모델 text hash는
+`1458631e36d508b05d1fba715675f2e08bd1494752ed985dc74a48ef5252e6ae`, prediction hash는
+`72fc90a5bc7a31b48b10df1238471bf0ca8a542f3b33e564e249ce53f704be88`이고 재실행에서
+둘 다 같았다. seed 43의 모델 hash는
+`221337c45afdd9e873342c535710e993f12df3703cbf7e5d85aa1d520b4154fa`, prediction hash는
+`c1bb0ec1cfe0a5d0f47f2abe3297cf8d492d88090f911ddbbadaa6d7353394de`이며 split digest도
+달랐다. 세 CSV를 기존 sealed parser로 읽고 행수와 receipt/file hash 일치를 검증했다.
+다른 seed에서 값이 바뀐 관측은 기록하되 모든 데이터에서 달라진다고 일반화하지 않는다.
+
+**한계·후속:** 초기 fixture history는 이틀뿐이라 7일/30일 피처 coverage 완료 행은 0이다.
+학습 metadata 누락은 user/video 각각 1,936/4,800행, 예측 video 누락은 1,556/3,840행이다.
+이는 as-of cold-start를 0/unknown으로 처리한 진단이며 미래 metadata로 채우지 않았다.
+이 단계는 CLI·재현성 smoke이고 아직 모델 품질 평가·5-seed σ·자율성/비용 calibration이
+아니다. 실제 agent/Controller/final/REPORT는 다음 단계에서 연결한다. 최종 Harness 회귀는
+**797 passed, 11 skipped (137.91초)**였다. 독립 리뷰에서 추가 차단 사항은 없으며
+CI·PR 반영 결과는 확인 후 이어서 기록한다.
+
+**CI 발견·수정:** PR #50의 첫 Linux 전체 검사에서 새 seed 필수 옵션 테스트가 실패했다
+(Python 3.11: 3,606 passed, 123 skipped, 1 failed). CLI는 정상적으로 exit 2였지만
+Rich 색상 코드가 `--seed` 문자열 사이에 들어가 원시 출력 assertion이 실패했다.
+색상 출력/무색 출력을 명시한 회귀로 로컬에서도 **1 passed, 1 failed**를 재현했다.
+기존 CLI 테스트와 같은 `click.unstyle`로 장식만 제거하고 정확한 missing-option 메시지와
+exit code를 검사한다. 제품 오류 처리나 필수 seed 계약을 느슨하게 바꾸지 않았다.
+수정 후 신규 core/CLI는 **56 passed (9.70초)**이며 전체 Ruff·diff check를 통과했다.
+Python 3.12의 첫 CI도 같은 한 테스트만 실패했음을 확인했다.
 
 ## Task 7: 지표별 baseline σ 측정 + end-to-end 완주
 

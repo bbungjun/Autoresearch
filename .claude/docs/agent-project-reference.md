@@ -94,8 +94,12 @@ docs/
   `local_embedding.py`가 local-files-only SentenceTransformer와 identity별 캐시로 구현한다.
   GPU 의존성은 pyproject의 선택 그룹 `local-embedding`에만 선언한다. 수동 장치/모델 검증은
   `scripts/research_harness/embedding_smoke.py`이며 사용법은 README가 소유한다.
+  `local_training.py`는 후보 v2 입력의 receipt/완전 라벨 검증과 seed별 새 LightGBM 학습을
+  맡는다. `prediction.py`와 `autoresearch.cli harness-predict`는 로컬 설정·임베딩 적재·학습과
+  native 모델/receipt/CSV 게시를 연결한다. 설정은 선택 `--config`(기본
+  `harness_config.json`)로 제공하며 준비된 모델만 사용한다. 출력은 기존 파일을 덮어쓰지 않는다.
 - **비책임:** GCP 자원 생성·운영 Vertex AI 경로 교체·시스템 드라이버 관리·임베딩 파인튜닝은
-  이 로컬 adapter의 책임이 아니다. 실제 agent·CTR 재학습·REPORT·calibration의 연결은
+  이 로컬 adapter의 책임이 아니다. 실제 agent·REPORT·calibration의 연결은
   Task 6/7 후속 범위다. 위 Stage B/C facade 목록은 최초 단계의 계약 설명이며 전체
   패키지 export 현황은 `__init__.py`를 따른다.
 
