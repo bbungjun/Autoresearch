@@ -562,16 +562,28 @@ def test_gitlink_object_id_changes_fingerprint(
     candidate_fixture,
     tmp_path: Path,
 ) -> None:
-    repository_root, first_commit = repository
-    _git(repository_root, "commit", "--allow-empty", "-m", "second object")
-    second_commit = _git(repository_root, "rev-parse", "HEAD")
+    submodule = tmp_path / "fingerprint-submodule"
+    submodule.mkdir()
+    _git(submodule, "init")
+    _git(submodule, "config", "user.email", "test@example.com")
+    _git(submodule, "config", "user.name", "Test User")
+    (submodule / "model.txt").write_text("first\n", encoding="utf-8")
+    _git(submodule, "add", "model.txt")
+    _git(submodule, "commit", "-m", "first")
+    first_commit = _git(submodule, "rev-parse", "HEAD")
+    (submodule / "model.txt").write_text("second\n", encoding="utf-8")
+    _git(submodule, "commit", "-am", "second")
+    second_commit = _git(submodule, "rev-parse", "HEAD")
+    _git(submodule, "checkout", first_commit)
+
+    repository_root, _ = repository
     _git(
         repository_root,
-        "update-index",
-        "--add",
-        "--cacheinfo",
-        "160000",
-        first_commit,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        str(submodule),
         "vendor/model",
     )
     _git(repository_root, "commit", "-m", "add gitlink")
@@ -587,30 +599,31 @@ def test_gitlink_object_id_changes_fingerprint(
     with open_candidate_workspace(request, source=source) as workspace:
         _git(
             workspace.root,
-            "update-index",
-            "--cacheinfo",
-            "160000",
-            second_commit,
-            "vendor/model",
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "update",
+            "--init",
         )
+        _git(workspace.root / "vendor/model", "checkout", second_commit)
+        _git(workspace.root, "add", "vendor/model")
         second = workspace.inspect_changes().diff_fingerprint
-        _git(
-            workspace.root,
-            "update-index",
-            "--cacheinfo",
-            "160000",
-            base_sha,
-            "vendor/model",
-        )
+        _git(workspace.root / "vendor/model", "checkout", first_commit)
+        _git(workspace.root, "add", "vendor/model")
         base = workspace.inspect_changes().diff_fingerprint
 
     assert second != base
 
 
+@pytest.mark.parametrize(
+    "credential_path",
+    ["credential.txt", "harness_in/credential.txt"],
+)
 def test_secret_in_new_clean_submodule_commit_is_rejected(
     repository,
     candidate_fixture,
     tmp_path: Path,
+    credential_path: str,
 ) -> None:
     submodule = tmp_path / "submodule-source"
     submodule.mkdir()
@@ -621,11 +634,13 @@ def test_secret_in_new_clean_submodule_commit_is_rejected(
     _git(submodule, "add", "model.txt")
     _git(submodule, "commit", "-m", "safe")
     safe_commit = _git(submodule, "rev-parse", "HEAD")
-    (submodule / "credential.txt").write_text(
+    secret_path = submodule / credential_path
+    secret_path.parent.mkdir(parents=True, exist_ok=True)
+    secret_path.write_text(
         "ghp_" + "e" * 36,
         encoding="utf-8",
     )
-    _git(submodule, "add", "credential.txt")
+    _git(submodule, "add", credential_path)
     _git(submodule, "commit", "-m", "credential")
     credential_commit = _git(submodule, "rev-parse", "HEAD")
     _git(submodule, "checkout", safe_commit)
@@ -664,8 +679,12 @@ def test_secret_in_new_clean_submodule_commit_is_rejected(
         _git(workspace.root, "config", "diff.ignoreSubmodules", "all")
         with pytest.raises(WorkspaceError) as captured:
             workspace.inspect_changes()
+        _git(workspace.root / "vendor/submodule", "checkout", safe_commit)
+        with pytest.raises(WorkspaceError) as staged_only:
+            workspace.inspect_changes()
 
     assert captured.value.code is WorkspaceErrorCode.CREDENTIAL_DETECTED
+    assert staged_only.value.code is WorkspaceErrorCode.GIT_FAILED
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX executable mode contract")

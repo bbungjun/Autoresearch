@@ -283,6 +283,8 @@ def _inspect_changes(root: Path, base_sha: str) -> CandidateChangeReceipt:
 def _changed_path_groups(
     root: Path,
     base_ref: str,
+    *,
+    exclude_harness_paths: bool = True,
 ) -> tuple[tuple[str, ...], frozenset[str]]:
     common = (
         "-c",
@@ -305,11 +307,13 @@ def _changed_path_groups(
         sorted(
             path
             for path in set((*indexed, *worktree, *untracked))
-            if not _is_harness_path(path)
+            if not exclude_harness_paths or not _is_harness_path(path)
         )
     )
     return changed_paths, frozenset(
-        path for path in indexed if not _is_harness_path(path)
+        path
+        for path in indexed
+        if not exclude_harness_paths or not _is_harness_path(path)
     )
 
 
@@ -331,6 +335,7 @@ def _require_credential_free(
             _canonical_submodule_state(
                 path,
                 _base_gitlink_oid(root, base_ref, relative_path),
+                _index_gitlink_oid(index_records),
             )
             continue
         _require_payload_credential_free(_current_payload(path))
@@ -389,6 +394,29 @@ def _index_mode(records: bytes) -> str | None:
     return None
 
 
+def _index_gitlink_oid(records: bytes) -> str | None:
+    for record in records.split(b"\0"):
+        if not record:
+            continue
+        try:
+            header, _path = record.split(b"\t", maxsplit=1)
+            mode, object_id, stage = header.split(b" ", maxsplit=2)
+        except ValueError:
+            raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "index_parse") from None
+        if stage != b"0" or mode != b"160000":
+            continue
+        try:
+            candidate = object_id.decode("ascii")
+        except UnicodeDecodeError:
+            raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "index_parse") from None
+        if len(candidate) != _SHA_LENGTH or any(
+            character not in "0123456789abcdef" for character in candidate
+        ):
+            raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "index_parse")
+        return candidate
+    return None
+
+
 def _base_gitlink_oid(root: Path, base_ref: str, relative_path: str) -> str | None:
     record = _run_git(
         root,
@@ -424,19 +452,45 @@ def _worktree_entry(
             return "160000-unavailable", b""
         return "deleted", b""
     if path.is_dir() and _index_mode(index_records) == "160000":
-        return "160000", _canonical_submodule_state(path, submodule_base_ref)
+        return "160000", _canonical_submodule_state(
+            path,
+            submodule_base_ref,
+            _index_gitlink_oid(index_records),
+        )
     return _current_mode(path), _current_payload(path)
 
 
-def _canonical_submodule_state(root: Path, base_ref: str | None) -> bytes:
+def _canonical_submodule_state(
+    root: Path,
+    base_ref: str | None,
+    expected_head: str | None,
+) -> bytes:
+    top_level = _run_git_result(root, "rev-parse", "--show-toplevel")
+    try:
+        is_exact_repository = (
+            top_level.returncode == 0
+            and Path(top_level.stdout.decode("utf-8").strip()).resolve()
+            == root.resolve()
+        )
+    except (OSError, RuntimeError, UnicodeError):
+        raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "submodule_root") from None
+    if not is_exact_repository:
+        if expected_head is not None and expected_head != base_ref:
+            raise WorkspaceError(
+                WorkspaceErrorCode.GIT_FAILED,
+                "submodule_unavailable",
+            )
+        return b"uninitialized"
     head_result = _run_git_result(root, "rev-parse", "--verify", "HEAD^{commit}")
     if head_result.returncode != 0:
         return b"uninitialized"
     head = head_result.stdout.strip()
     try:
-        head.decode("ascii")
+        head_ref = head.decode("ascii")
     except UnicodeDecodeError:
         raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "submodule_head") from None
+    if expected_head is None or head_ref != expected_head:
+        raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "submodule_head_mismatch")
     digest = sha256()
     _update_digest(digest, b"submodule-head", head)
     if base_ref is None:
@@ -463,7 +517,11 @@ def _canonical_submodule_state(root: Path, base_ref: str | None) -> bytes:
             sorted(set((*indexed_paths, *worktree_paths, *untracked_paths)))
         )
     else:
-        changed_paths, indexed_paths = _changed_path_groups(root, base_ref)
+        changed_paths, indexed_paths = _changed_path_groups(
+            root,
+            base_ref,
+            exclude_harness_paths=False,
+        )
     for relative_path in changed_paths:
         records = _index_records(root, relative_path)
         if relative_path in indexed_paths:

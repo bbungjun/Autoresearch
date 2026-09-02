@@ -753,10 +753,12 @@ metadata 회수 실패 은폐, Git remove 직후 교체 경로 삭제, patch 표
 fingerprint 변동, index-only secret과 gitlink 상태 누락을 발견했다. 이를 봉인 `base_sha`
 기준 base→index/index→working tree 비교, ignored 파일의 상태·mode·type·bytes와 gitlink
 상태의 canonical hash, index blob credential 검사, worktree identity 재검증과 fail-closed
-cleanup으로 수정했다. Task 3 집중 테스트 27개 통과·POSIX mode 테스트 1개 환경 의존 skip으로 정확한
+cleanup으로 수정했다. 추가 리뷰에서 submodule 내부의 harness 예약명 제외 우회와 staged
+gitlink/checkout HEAD 불일치를 발견해, 예약명 제외를 최상위로 한정하고 불일치는 fail-closed했다.
+Task 3 집중 테스트 28개 통과·POSIX mode 테스트 1개 환경 의존 skip으로 정확한
 SHA, validation-only 데이터, 환경 격리, commit·uncommitted secret 거부, 삭제된 secret 허용,
 `.parquet`·`pyproject.toml` 변경 허용, 설정 독립 fingerprint와 교체 경로 보존을 검증했다.
-전체 Research Harness 회귀 테스트는 최종 수정 뒤 399개 통과·7개 환경 의존 skip이었다.
+전체 Research Harness 회귀 테스트는 최종 수정 뒤 400개 통과·7개 환경 의존 skip이었다.
 이는 완전한 OS sandbox가 아니라 실수와 자기 채점 오염을 줄이는 MVP 경계이며, 실제
 subprocess 회수와 final 단일 소비는 각각 Task 5a와 Task 4/5b에 남는다.
 
