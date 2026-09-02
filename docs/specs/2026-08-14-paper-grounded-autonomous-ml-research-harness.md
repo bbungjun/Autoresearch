@@ -213,8 +213,9 @@ candidate는 주어진 seed를 split·sampling·모델 초기화를 포함한 �
 - 영속 Trial Ledger와 checkpoint
 
 LocalRunner는 candidate를 새 process group/session으로 시작한다. 정상 종료·timeout·취소·
-예외의 모든 경로에서 TERM grace 뒤 KILL과 최종 wait를 수행해 child·grandchild를 완전히
-회수하며, 남은 프로세스가 있으면 trial을 성공으로 기록하지 않는다. 재사용 출발점은 현행
+예외의 모든 경로에서 TERM grace 뒤 KILL과 최종 wait를 수행해 소유 group/Job을 상속한
+child·grandchild를 회수하며, 남은 프로세스가 있으면 trial을 성공으로 기록하지 않는다.
+재사용 출발점은 현행
 Codex worker의 process-group 회수 계약이다
 (`applications/experiment_platform/executor/codex_worker.py:537-574,624-670`).
 
@@ -345,6 +346,12 @@ cleanup 실패가 아니다. 정상 parent
 wait한 후 마지막에 Job handle을 닫는다. Job handle은 start·success·failure·cancellation의
 모든 경로에서 닫고 gate pipe도 start failure를 포함한 모든 경로에서 닫는다.
 
+launcher는 candidate `Popen` 성공 여부를 candidate가 알지 못하는 parent 소유 임시 status
+artifact에 `started|failed`로 한 번 기록한다. Runner는 이 private status를 확인해 launcher 내부
+start 실패를 `runner_start_failed`로 분류하고, 정상적으로 시작한 candidate의 실제 exit 127은
+`predict_crash`로 구분한다. status artifact 생성·읽기·정리 실패도 start/cleanup 실패 계약에
+포함하며 오류 문자열에는 그 경로를 노출하지 않는다.
+
 timeout·취소·내부 예외를 포함한 모든 종료 경로는 살아 있는 tree에 가능한 TERM-equivalent를
 요청하고 짧은 grace 뒤 KILL-equivalent를 적용한 다음 final wait를 수행한다. Windows에서
 이미 parent가 끝나 descendant만 남은 경우에는 일반적인 tree-wide graceful signal이 없으므로
@@ -366,6 +373,11 @@ MVP 자원 상한은 wall-clock timeout과 stdout/stderr tail 메모리 상한�
 CPU·RSS·filesystem quota와 별도 OS 사용자/container에 의한 적대적 격리는 Task 5a의 로컬
 실행 경계가 보장한다고 주장하지 않으며, 실제 E2E 측정 뒤 Kubernetes/container runner에서
 보강한다.
+
+POSIX 소유 경계는 새 session의 process group이다. Candidate가 의도적으로 `setsid()`·double
+fork 등으로 새 session을 만들면 이 경계를 벗어날 수 있으며, Task 5a가 완전한 적대적 OS
+격리를 제공한다고 주장하지 않는다. 이 탈출까지 막는 요구는 별도 OS 사용자와 PID namespace,
+cgroup/container를 쓰는 후속 runner 범위다. Windows Job은 breakaway를 허용하지 않는다.
 
 Task 5a는 실제 사용되지 않는 `CandidateArtifact`, `TrialResult`, 비동기
 `ExperimentRunner` 계층을 미리 만들지 않는다. Task 5b Controller가 receipt와 ledger를 실제로

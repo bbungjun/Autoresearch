@@ -23,6 +23,7 @@ import signal
 import stat
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import threading
 import time
 from typing import Any, BinaryIO, Protocol
@@ -107,8 +108,15 @@ class _ValidatedRequest:
     process: CandidateProcessContext
     environment: dict[str, str]
     cwd_identity: _PathIdentity
+    input_identity: _PathIdentity
     slate_identity: _PathIdentity
     output_identity: _PathIdentity
+
+
+@dataclass(frozen=True, slots=True)
+class _TerminationResult:
+    cleanup_ok: bool
+    process_leaked: bool = False
 
 
 class _TreeOwner(Protocol):
@@ -116,7 +124,7 @@ class _TreeOwner(Protocol):
 
     def is_alive(self, process: subprocess.Popen[bytes]) -> bool: ...
 
-    def terminate(self, process: subprocess.Popen[bytes]) -> bool: ...
+    def terminate(self, process: subprocess.Popen[bytes]) -> _TerminationResult: ...
 
     def close(self) -> bool: ...
 
@@ -160,6 +168,7 @@ class _PipeReader:
     pipe: BinaryIO
     buffer: _TailBuffer = field(default_factory=_TailBuffer)
     failed: bool = False
+    started: bool = False
     thread: threading.Thread = field(init=False)
 
     def __post_init__(self) -> None:
@@ -167,6 +176,7 @@ class _PipeReader:
 
     def start(self) -> None:
         self.thread.start()
+        self.started = True
 
     def _drain(self) -> None:
         try:
@@ -176,6 +186,12 @@ class _PipeReader:
             self.failed = True
 
     def finish(self) -> bool:
+        if not self.started:
+            try:
+                self.pipe.close()
+            except OSError:
+                self.failed = True
+            return not self.failed
         self.thread.join(timeout=_TERMINATION_GRACE_SECONDS)
         if self.thread.is_alive():
             try:
@@ -202,7 +218,7 @@ class _PosixTreeOwner:
             return False
         return True
 
-    def terminate(self, process: subprocess.Popen[bytes]) -> bool:
+    def terminate(self, process: subprocess.Popen[bytes]) -> _TerminationResult:
         try:
             _send_posix_signal(process.pid, signal.SIGTERM)
             _poll_absent(lambda: self.is_alive(process), _TERMINATION_GRACE_SECONDS)
@@ -211,8 +227,8 @@ class _PosixTreeOwner:
                 _poll_absent(lambda: self.is_alive(process), _TERMINATION_GRACE_SECONDS)
             _final_wait(process)
         except (OSError, subprocess.SubprocessError):
-            return False
-        return not self.is_alive(process)
+            return _TerminationResult(False)
+        return _TerminationResult(True, self.is_alive(process))
 
     def close(self) -> bool:
         return True
@@ -232,16 +248,16 @@ class _WindowsTreeOwner:
             return False
         return self._api.active_processes(self._handle) > 0
 
-    def terminate(self, process: subprocess.Popen[bytes]) -> bool:
+    def terminate(self, process: subprocess.Popen[bytes]) -> _TerminationResult:
         if self._closed:
-            return True
-        if process.poll() is None:
-            try:
-                process.send_signal(signal.CTRL_BREAK_EVENT)
-            except (OSError, ValueError):
-                pass
-        _poll_absent(lambda: self.is_alive(process), _TERMINATION_GRACE_SECONDS)
+            return _TerminationResult(True)
         try:
+            if process.poll() is None:
+                try:
+                    process.send_signal(signal.CTRL_BREAK_EVENT)
+                except (OSError, ValueError):
+                    pass
+            _poll_absent(lambda: self.is_alive(process), _TERMINATION_GRACE_SECONDS)
             if self.is_alive(process):
                 self._api.terminate(self._handle)
                 _poll_absent(
@@ -249,9 +265,10 @@ class _WindowsTreeOwner:
                     _TERMINATION_GRACE_SECONDS,
                 )
             _final_wait(process)
+            leaked = self.is_alive(process)
         except (OSError, subprocess.SubprocessError):
-            return False
-        return not self.is_alive(process)
+            return _TerminationResult(False)
+        return _TerminationResult(True, leaked)
 
     def close(self) -> bool:
         if self._closed:
@@ -364,6 +381,7 @@ def _validate_request(request: LocalRunRequest) -> _ValidatedRequest:
         raise _invalid_request()
     try:
         cwd_identity = _require_path(process.cwd, stat.S_ISDIR)
+        input_identity = _require_path(process.slate.parent, stat.S_ISDIR)
         slate_identity = _require_path(process.slate, stat.S_ISREG)
         output_identity = _require_path(process.predictions.parent, stat.S_ISDIR)
     except OSError:
@@ -372,6 +390,7 @@ def _validate_request(request: LocalRunRequest) -> _ValidatedRequest:
         process=process,
         environment=dict(environment),
         cwd_identity=cwd_identity,
+        input_identity=input_identity,
         slate_identity=slate_identity,
         output_identity=output_identity,
     )
@@ -386,7 +405,15 @@ def _require_path(
     expected_type: Callable[[int], bool],
 ) -> _PathIdentity:
     status = path.lstat()
-    if not expected_type(status.st_mode):
+    is_reparse = bool(getattr(status, "st_file_attributes", 0) & 0x400)
+    resolved = path.resolve(strict=True)
+    lexical = path.absolute()
+    if (
+        not expected_type(status.st_mode)
+        or stat.S_ISLNK(status.st_mode)
+        or is_reparse
+        or os.path.normcase(str(resolved)) != os.path.normcase(str(lexical))
+    ):
         raise OSError("unexpected path type")
     return _PathIdentity(status.st_dev, status.st_ino, status.st_mode)
 
@@ -417,13 +444,23 @@ def _execute(
         "--seed",
         str(seed),
     )
-    worker = Path(__file__).with_name("_runner_worker.py").resolve(strict=True)
-    launcher_argv = (sys.executable, "-I", str(worker), *candidate_argv)
     started_at = time.monotonic()
     owner: _TreeOwner | None = None
     launcher: subprocess.Popen[bytes] | None = None
     readers: tuple[_PipeReader, _PipeReader] | None = None
+    status_directory: TemporaryDirectory[str] | None = None
+    status_path: Path | None = None
     try:
+        worker = Path(__file__).with_name("_runner_worker.py").resolve(strict=True)
+        status_directory = TemporaryDirectory(prefix="autoresearch-runner-")
+        status_path = Path(status_directory.name) / "candidate-start.status"
+        launcher_argv = (
+            sys.executable,
+            "-I",
+            str(worker),
+            str(status_path),
+            *candidate_argv,
+        )
         owner = _new_tree_owner()
         launcher = subprocess.Popen(
             launcher_argv,
@@ -450,67 +487,103 @@ def _execute(
         launcher.stdin.flush()
         launcher.stdin.close()
     except (OSError, RuntimeError):
-        cleanup_ok = _cleanup_started(owner, launcher, readers)
+        cleanup = _cleanup_started(owner, launcher, readers)
+        status_ok = _cleanup_status_directory(status_directory)
+        if not cleanup.cleanup_ok or not status_ok:
+            code = RunnerErrorCode.CLEANUP_FAILED
+            stage = "start_cleanup"
+        elif cleanup.process_leaked:
+            code = RunnerErrorCode.PROCESS_LEAKED
+            stage = "start_process_leak"
+        else:
+            code = RunnerErrorCode.START_FAILED
+            stage = "launcher_start"
         raise RunnerError(
-            RunnerErrorCode.START_FAILED if cleanup_ok else RunnerErrorCode.CLEANUP_FAILED,
-            "launcher_start" if cleanup_ok else "start_cleanup",
+            code,
+            stage,
             duration_ms=_duration_ms(started_at),
             **_tails(readers),
         ) from None
+    except BaseException as error:
+        cleanup = _cleanup_started(owner, launcher, readers)
+        status_ok = _cleanup_status_directory(status_directory)
+        _annotate_cleanup_failure(error, cleanup, status_ok)
+        raise
 
     try:
+        assert status_directory is not None
+        assert status_path is not None
         try:
-            exit_code = _wait_for_exit(launcher, timeout_seconds)
+            remaining_seconds = timeout_seconds - (time.monotonic() - started_at)
+            if remaining_seconds <= 0:
+                raise subprocess.TimeoutExpired(launcher.args, timeout_seconds)
+            exit_code = _wait_for_exit(launcher, remaining_seconds)
         except subprocess.TimeoutExpired:
-            cleanup_ok = owner.terminate(launcher)
-            readers_ok = _finish_readers(readers)
-            close_ok = owner.close()
-            if not cleanup_ok or not readers_ok or not close_ok:
-                raise _run_error(
-                    RunnerErrorCode.CLEANUP_FAILED,
-                    "timeout_cleanup",
-                    started_at,
-                    launcher.returncode,
-                    readers,
-                )
-            raise _run_error(
-                RunnerErrorCode.PREDICT_TIMEOUT,
-                "candidate_wait",
+            primary = (
+                RunnerErrorCode.PREDICT_TIMEOUT
+                if _launch_status(status_path) == b"S"
+                else RunnerErrorCode.START_FAILED
+            )
+            raise _failure_after_cleanup(
+                primary,
+                "candidate_wait" if primary is RunnerErrorCode.PREDICT_TIMEOUT else "candidate_start",
                 started_at,
                 launcher.returncode,
+                owner,
+                launcher,
                 readers,
-            ) from None
+                status_directory,
+            )
         except BaseException as error:
-            cleanup_ok = owner.terminate(launcher)
-            readers_ok = _finish_readers(readers)
-            close_ok = owner.close()
-            if not cleanup_ok or not readers_ok or not close_ok:
-                error.add_note(RunnerErrorCode.CLEANUP_FAILED.value)
+            cleanup = _cleanup_started(owner, launcher, readers)
+            status_ok = _cleanup_status_directory(status_directory)
+            _annotate_cleanup_failure(error, cleanup, status_ok)
             raise
 
-        if owner.is_alive(launcher):
-            cleanup_ok = owner.terminate(launcher)
-            readers_ok = _finish_readers(readers)
-            close_ok = owner.close()
-            if not cleanup_ok or not readers_ok or not close_ok:
-                raise _run_error(
-                    RunnerErrorCode.CLEANUP_FAILED,
-                    "leak_cleanup",
-                    started_at,
-                    exit_code,
-                    readers,
-                )
-            raise _run_error(
+        if _launch_status(status_path) != b"S":
+            raise _failure_after_cleanup(
+                RunnerErrorCode.START_FAILED,
+                "candidate_start",
+                started_at,
+                exit_code,
+                owner,
+                launcher,
+                readers,
+                status_directory,
+            )
+        try:
+            tree_alive = owner.is_alive(launcher)
+        except (OSError, RuntimeError):
+            raise _failure_after_cleanup(
+                RunnerErrorCode.CLEANUP_FAILED,
+                "descendant_query",
+                started_at,
+                exit_code,
+                owner,
+                launcher,
+                readers,
+                status_directory,
+            ) from None
+        if tree_alive:
+            raise _failure_after_cleanup(
                 RunnerErrorCode.PROCESS_LEAKED,
                 "descendant_check",
                 started_at,
                 exit_code,
+                owner,
+                launcher,
                 readers,
+                status_directory,
             )
 
-        readers_ok = _finish_readers(readers)
-        close_ok = owner.close()
-        if not readers_ok or not close_ok:
+        try:
+            readers_ok = _finish_readers(readers)
+            close_ok = owner.close()
+        except BaseException:
+            readers_ok = False
+            close_ok = False
+        status_ok = _cleanup_status_directory(status_directory)
+        if not readers_ok or not close_ok or not status_ok:
             raise _run_error(
                 RunnerErrorCode.CLEANUP_FAILED,
                 "success_cleanup",
@@ -543,9 +616,13 @@ def _execute(
             stderr_tail=stderr_tail,
         )
     except BaseException as error:
-        cleanup_ok = _cleanup_started(owner, launcher, readers)
+        cleanup = _cleanup_started(owner, launcher, readers)
+        status_ok = _cleanup_status_directory(status_directory)
         if isinstance(error, RunnerError):
-            if not cleanup_ok and error.code is not RunnerErrorCode.CLEANUP_FAILED:
+            if (
+                (not cleanup.cleanup_ok or not status_ok)
+                and error.code is not RunnerErrorCode.CLEANUP_FAILED
+            ):
                 raise _run_error(
                     RunnerErrorCode.CLEANUP_FAILED,
                     "exception_cleanup",
@@ -553,13 +630,20 @@ def _execute(
                     launcher.returncode,
                     readers,
                 ) from None
+            if cleanup.process_leaked and error.code is not RunnerErrorCode.PROCESS_LEAKED:
+                raise _run_error(
+                    RunnerErrorCode.PROCESS_LEAKED,
+                    "exception_process_leak",
+                    started_at,
+                    launcher.returncode,
+                    readers,
+                ) from None
             raise
-        if not cleanup_ok:
-            error.add_note(RunnerErrorCode.CLEANUP_FAILED.value)
+        _annotate_cleanup_failure(error, cleanup, status_ok)
         raise
     finally:
-        if owner is not None:
-            owner.close()
+        _safe_close_owner(owner)
+        _cleanup_status_directory(status_directory)
 
 
 def _new_tree_owner() -> _TreeOwner:
@@ -578,33 +662,115 @@ def _cleanup_started(
     owner: _TreeOwner | None,
     process: subprocess.Popen[bytes] | None,
     readers: tuple[_PipeReader, _PipeReader] | None,
-) -> bool:
+) -> _TerminationResult:
     ok = True
+    leaked = False
     if process is not None:
         if process.stdin is not None:
             try:
                 process.stdin.close()
-            except OSError:
+            except BaseException:
                 ok = False
         if owner is not None:
-            ok = owner.terminate(process) and ok
+            try:
+                termination = owner.terminate(process)
+            except BaseException:
+                termination = _TerminationResult(False)
+            ok = termination.cleanup_ok and ok
+            leaked = termination.process_leaked
         elif process.poll() is None:
             try:
                 process.kill()
                 _final_wait(process)
-            except (OSError, subprocess.SubprocessError):
+            except BaseException:
                 ok = False
         if readers is None:
             for pipe in (process.stdout, process.stderr):
                 if pipe is not None:
                     try:
                         pipe.close()
-                    except OSError:
+                    except BaseException:
                         ok = False
-    ok = _finish_readers(readers) and ok
+    try:
+        readers_ok = _finish_readers(readers)
+    except BaseException:
+        readers_ok = False
+    ok = readers_ok and ok
     if owner is not None:
-        ok = owner.close() and ok
-    return ok
+        try:
+            close_ok = owner.close()
+        except BaseException:
+            close_ok = False
+        ok = close_ok and ok
+    return _TerminationResult(ok, leaked)
+
+
+def _failure_after_cleanup(
+    primary_code: RunnerErrorCode,
+    stage: str,
+    started_at: float,
+    exit_code: int | None,
+    owner: _TreeOwner,
+    process: subprocess.Popen[bytes],
+    readers: tuple[_PipeReader, _PipeReader],
+    status_directory: TemporaryDirectory[str],
+) -> RunnerError:
+    cleanup = _cleanup_started(owner, process, readers)
+    status_ok = _cleanup_status_directory(status_directory)
+    if not cleanup.cleanup_ok or not status_ok:
+        code = RunnerErrorCode.CLEANUP_FAILED
+        failure_stage = "failure_cleanup"
+    elif cleanup.process_leaked:
+        code = RunnerErrorCode.PROCESS_LEAKED
+        failure_stage = "failure_process_leak"
+    else:
+        code = primary_code
+        failure_stage = stage
+    return _run_error(
+        code,
+        failure_stage,
+        started_at,
+        exit_code,
+        readers,
+    )
+
+
+def _launch_status(path: Path) -> bytes | None:
+    try:
+        payload = path.read_bytes()
+    except OSError:
+        return None
+    return payload if payload in {b"S", b"F"} else None
+
+
+def _cleanup_status_directory(directory: TemporaryDirectory[str] | None) -> bool:
+    if directory is None:
+        return True
+    try:
+        directory.cleanup()
+    except OSError:
+        return False
+    return True
+
+
+def _annotate_cleanup_failure(
+    error: BaseException,
+    cleanup: _TerminationResult,
+    status_ok: bool,
+) -> None:
+    if not cleanup.cleanup_ok or not status_ok:
+        error.add_note(RunnerErrorCode.CLEANUP_FAILED.value)
+    elif cleanup.process_leaked:
+        error.add_note(RunnerErrorCode.PROCESS_LEAKED.value)
+
+
+def _safe_close_owner(owner: _TreeOwner | None) -> None:
+    if owner is None:
+        return
+    try:
+        owner.close()
+    except BaseException:
+        pass
 
 
 def _finish_readers(readers: tuple[_PipeReader, _PipeReader] | None) -> bool:
@@ -649,6 +815,7 @@ def _valid_predictions(validated: _ValidatedRequest) -> bool:
     process = validated.process
     if (
         not _same_path_identity(process.cwd, validated.cwd_identity)
+        or not _same_path_identity(process.slate.parent, validated.input_identity)
         or not _same_path_identity(process.slate, validated.slate_identity)
         or not _same_path_identity(process.predictions.parent, validated.output_identity)
     ):

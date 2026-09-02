@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import NoReturn
 import pytest
 
 import autoresearch.research_harness.runner as runner_module
+import autoresearch.research_harness._runner_worker as worker_module
 from autoresearch.research_harness import (
     CandidateProcessContext,
     LocalRunRequest,
@@ -281,6 +283,36 @@ def test_runner_classifies_nonzero_exit_and_hides_tails_from_repr(tmp_path: Path
     assert str(process.cwd) not in repr(error)
 
 
+def test_candidate_exit_127_is_a_crash_not_a_start_failure(tmp_path: Path) -> None:
+    process = _candidate(tmp_path, "raise SystemExit(127)\n")
+
+    with pytest.raises(RunnerError) as captured:
+        _run(process)
+
+    assert captured.value.code is RunnerErrorCode.PREDICT_CRASH
+    assert captured.value.exit_code == 127
+
+
+def test_worker_reports_candidate_popen_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = tmp_path / "start.status"
+
+    class GateInput:
+        buffer = io.BytesIO(b"\0")
+
+    def fail_candidate_start(*args: object, **kwargs: object) -> NoReturn:
+        raise OSError("candidate executable unavailable")
+
+    monkeypatch.setattr(worker_module.sys, "stdin", GateInput())
+    monkeypatch.setattr(worker_module.sys, "argv", ["worker", str(status), "candidate"])
+    monkeypatch.setattr(worker_module.subprocess, "Popen", fail_candidate_start)
+
+    assert worker_module.main() == 127
+    assert status.read_bytes() == b"F"
+
+
 def test_runner_classifies_missing_and_nonregular_predictions(tmp_path: Path) -> None:
     missing = _candidate(tmp_path / "missing", "pass\n")
     with pytest.raises(RunnerError) as captured_missing:
@@ -340,10 +372,13 @@ def test_runner_does_not_release_candidate_when_tree_attach_fails(
         def is_alive(self, launcher: subprocess.Popen[bytes]) -> bool:
             return launcher.poll() is None
 
-        def terminate(self, launcher: subprocess.Popen[bytes]) -> bool:
+        def terminate(
+            self,
+            launcher: subprocess.Popen[bytes],
+        ) -> runner_module._TerminationResult:
             launcher.kill()
             launcher.wait(timeout=5)
-            return True
+            return runner_module._TerminationResult(True)
 
         def close(self) -> bool:
             return True
@@ -355,6 +390,111 @@ def test_runner_does_not_release_candidate_when_tree_attach_fails(
 
     assert captured.value.code is RunnerErrorCode.START_FAILED
     assert not (process.cwd / "candidate-started").exists()
+
+
+def test_startup_cancellation_reclaims_gated_launcher(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _candidate(
+        tmp_path,
+        "Path('candidate-started').write_text('bad', encoding='utf-8')\n",
+    )
+    events: list[str] = []
+
+    class CancelAttachOwner:
+        def attach(self, launcher: subprocess.Popen[bytes]) -> NoReturn:
+            events.append("attach")
+            raise KeyboardInterrupt
+
+        def is_alive(self, launcher: subprocess.Popen[bytes]) -> bool:
+            return launcher.poll() is None
+
+        def terminate(
+            self,
+            launcher: subprocess.Popen[bytes],
+        ) -> runner_module._TerminationResult:
+            events.append("terminate")
+            launcher.kill()
+            launcher.wait(timeout=5)
+            return runner_module._TerminationResult(True)
+
+        def close(self) -> bool:
+            events.append("close")
+            return True
+
+    monkeypatch.setattr(runner_module, "_new_tree_owner", CancelAttachOwner)
+
+    with pytest.raises(KeyboardInterrupt):
+        _run(process)
+
+    assert events[:3] == ["attach", "terminate", "close"]
+    assert not (process.cwd / "candidate-started").exists()
+
+
+def test_cleanup_exception_is_typed_and_does_not_replace_start_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _candidate(tmp_path, "raise AssertionError('must not execute')\n")
+
+    class CleanupFailureOwner:
+        def attach(self, launcher: subprocess.Popen[bytes]) -> NoReturn:
+            raise OSError("attach failed")
+
+        def is_alive(self, launcher: subprocess.Popen[bytes]) -> bool:
+            return launcher.poll() is None
+
+        def terminate(
+            self,
+            launcher: subprocess.Popen[bytes],
+        ) -> runner_module._TerminationResult:
+            launcher.kill()
+            launcher.wait(timeout=5)
+            raise OSError("cleanup path detail")
+
+        def close(self) -> bool:
+            return True
+
+    monkeypatch.setattr(runner_module, "_new_tree_owner", CleanupFailureOwner)
+
+    with pytest.raises(RunnerError) as captured:
+        _run(process)
+
+    assert captured.value.code is RunnerErrorCode.CLEANUP_FAILED
+    assert "detail" not in str(captured.value)
+
+
+def test_persistent_process_after_successful_cleanup_is_process_leak(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _candidate(tmp_path, "pass\n")
+
+    class PersistentLeakOwner:
+        def attach(self, launcher: subprocess.Popen[bytes]) -> None:
+            del launcher
+
+        def is_alive(self, launcher: subprocess.Popen[bytes]) -> bool:
+            del launcher
+            return False
+
+        def terminate(
+            self,
+            launcher: subprocess.Popen[bytes],
+        ) -> runner_module._TerminationResult:
+            del launcher
+            return runner_module._TerminationResult(True, True)
+
+        def close(self) -> bool:
+            return True
+
+    monkeypatch.setattr(runner_module, "_new_tree_owner", PersistentLeakOwner)
+
+    with pytest.raises(RunnerError) as captured:
+        _run(process)
+
+    assert captured.value.code is RunnerErrorCode.PROCESS_LEAKED
 
 
 def test_runner_rejects_replaced_output_directory_identity(tmp_path: Path) -> None:
@@ -372,6 +512,35 @@ Path(args.out).write_text("candidate-output", encoding="utf-8")
         _run(process)
 
     assert captured.value.code is RunnerErrorCode.INVALID_PREDICTIONS
+
+
+def test_runner_rejects_workspace_ancestor_symlink(tmp_path: Path) -> None:
+    _require_symlink(tmp_path)
+    real = _candidate(tmp_path / "real", "raise AssertionError('must not execute')\n")
+    linked_root = tmp_path / "linked-candidate"
+    linked_root.symlink_to(real.cwd, target_is_directory=True)
+    process = CandidateProcessContext(
+        cwd=linked_root,
+        slate=linked_root / "harness_in" / "slate.parquet",
+        predictions=linked_root / "harness_out" / "predictions.csv",
+        environment=real.environment,
+    )
+
+    with pytest.raises(RunnerError) as captured:
+        _run(process)
+
+    assert captured.value.code is RunnerErrorCode.INVALID_REQUEST
+
+
+@pytest.mark.skipif(os.name != "posix", reason="FIFO exists only on POSIX")
+def test_runner_rejects_stale_fifo(tmp_path: Path) -> None:
+    process = _candidate(tmp_path, "raise AssertionError('must not execute')\n")
+    os.mkfifo(process.predictions)
+
+    with pytest.raises(RunnerError) as captured:
+        _run(process)
+
+    assert captured.value.code is RunnerErrorCode.INVALID_REQUEST
 
 
 def test_timeout_reclaims_candidate_grandchild(tmp_path: Path) -> None:

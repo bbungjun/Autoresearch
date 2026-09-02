@@ -857,8 +857,9 @@ Linux `OSError`에 `winerror`가 없다는 이식성 오류가 드러났다. fil
 - [x] exit 0 뒤 exact output이 새 regular file인지 확인한다. CSV 의미 검증과 Judge copy는
       기존 `seal_prediction_copy()`에 남겨 runner가 Sealed Judge 책임을 침범하지 않게 한다
 - [x] candidate를 새 process group/session으로 시작한다. 정상 종료·timeout·취소·예외 모두
-      TERM grace 뒤 KILL과 최종 wait를 거쳐 child/grandchild까지 완전히 회수하고, 남은
-      process가 있으면 실행 실패로 처리한다. 기존 패턴은
+      TERM grace 뒤 KILL과 최종 wait를 거쳐 소유 group/Job을 상속한 child/grandchild를
+      회수하고, 남은 process가 있으면 실행 실패로 처리한다. POSIX에서 의도적으로 새 session을
+      만드는 적대적 탈출은 container/PID namespace 후속 범위다. 기존 패턴은
       `applications/experiment_platform/executor/codex_worker.py:537-574,624-670`이다
 - [x] POSIX는 새 session/process group, Windows는 kill-on-close Job Object를 사용한다.
       Windows는 candidate workspace 밖 절대 경로의 `-I` trusted launcher를 Job에 먼저 붙이고
@@ -867,6 +868,9 @@ Linux `OSError`에 `winerror`가 없다는 이식성 오류가 드러났다. fil
       best-effort `CTRL_BREAK_EVENT` grace 뒤
       `TerminateJobObject`, active process count 0 확인, 모든 경로의 handle close 순서를
       지킨다
+- [x] launcher는 parent 소유 임시 status artifact로 candidate `Popen`의 started/failed를
+      보고해 내부 start 실패와 candidate 실제 exit 127을 구분한다. status 실패·cleanup은
+      start/cleanup 오류 우선순위에 포함하고 경로를 노출하지 않는다
 - [x] cleanup 실패는 timeout·crash·invalid prediction보다 우선한다. 정상 parent 종료 뒤
       descendant를 발견해 성공적으로 회수했으면 `runner_process_leaked`다. cancellation에서는
       회수 후 `KeyboardInterrupt`/`SystemExit`를 다시 발생시키고 cleanup 실패는 sanitized
@@ -909,7 +913,7 @@ timeout·정상 parent 선종료·cancellation 뒤 실제 grandchild 회수를 �
 461개 통과·9개 환경 의존 skip, 저장소 전체 Ruff는 통과했다. 독립 spec 검토에서 발견한
 Windows pre-assignment spawn race, console 없는 host의 `CTRL_BREAK_EVENT` 실패, 환경 재주입,
 stdin/handle 상속과 복합 오류 모호성을 구현 전에 계약과 반례로 보강했다. 이 단계는
-wall-clock·로그 메모리·process-tree 수명만 제한하며 CPU/RSS/filesystem quota와 적대적 격리는
+wall-clock·로그 메모리·소유 group/Job 수명만 제한하며 CPU/RSS/filesystem quota와 적대적 격리는
 실제 E2E 측정 후 별도 container/Kubernetes runner에서 판단한다.
 
 ---
