@@ -269,6 +269,47 @@ def test_committed_candidate_change_is_still_compared_with_sealed_base_sha(
     assert secret not in str(captured.value)
 
 
+def test_staged_secret_is_rejected_even_when_worktree_content_is_safe(
+    repository,
+    candidate_fixture,
+    tmp_path: Path,
+) -> None:
+    _, source = candidate_fixture
+    secret = "ghp_" + "d" * 36
+
+    with open_candidate_workspace(
+        _request(repository, candidate_fixture, tmp_path / "candidate"), source=source
+    ) as workspace:
+        readme = workspace.root / "README.md"
+        readme.write_text(secret, encoding="utf-8")
+        _git(workspace.root, "add", "README.md")
+        readme.write_text("baseline\n", encoding="utf-8")
+        with pytest.raises(WorkspaceError) as captured:
+            workspace.inspect_changes()
+
+    assert captured.value.code is WorkspaceErrorCode.CREDENTIAL_DETECTED
+    assert secret not in str(captured.value)
+
+
+def test_staged_addition_deleted_from_worktree_remains_in_fingerprint(
+    repository,
+    candidate_fixture,
+    tmp_path: Path,
+) -> None:
+    _, source = candidate_fixture
+
+    with open_candidate_workspace(
+        _request(repository, candidate_fixture, tmp_path / "candidate"), source=source
+    ) as workspace:
+        staged = workspace.root / "staged-only.txt"
+        staged.write_text("candidate", encoding="utf-8")
+        _git(workspace.root, "add", "staged-only.txt")
+        staged.unlink()
+        receipt = workspace.inspect_changes()
+
+    assert receipt.changed_paths == ("staged-only.txt",)
+
+
 def test_aws_secret_assignment_is_rejected(
     repository,
     candidate_fixture,
@@ -514,6 +555,56 @@ def test_fingerprint_is_independent_of_git_patch_prefix_configuration(
         unprefixed = workspace.inspect_changes()
 
     assert prefixed == unprefixed
+
+
+def test_gitlink_object_id_changes_fingerprint(
+    repository,
+    candidate_fixture,
+    tmp_path: Path,
+) -> None:
+    repository_root, first_commit = repository
+    _git(repository_root, "commit", "--allow-empty", "-m", "second object")
+    second_commit = _git(repository_root, "rev-parse", "HEAD")
+    _git(
+        repository_root,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        "160000",
+        first_commit,
+        "vendor/model",
+    )
+    _git(repository_root, "commit", "-m", "add gitlink")
+    base_sha = _git(repository_root, "rev-parse", "HEAD")
+    receipt, source = candidate_fixture
+    request = CandidateWorkspaceRequest(
+        repository_root=repository_root,
+        base_sha=base_sha,
+        workspace_root=tmp_path / "candidate",
+        judge=receipt.judge,
+    )
+
+    with open_candidate_workspace(request, source=source) as workspace:
+        _git(
+            workspace.root,
+            "update-index",
+            "--cacheinfo",
+            "160000",
+            second_commit,
+            "vendor/model",
+        )
+        second = workspace.inspect_changes().diff_fingerprint
+        _git(
+            workspace.root,
+            "update-index",
+            "--cacheinfo",
+            "160000",
+            base_sha,
+            "vendor/model",
+        )
+        base = workspace.inspect_changes().diff_fingerprint
+
+    assert second != base
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX executable mode contract")

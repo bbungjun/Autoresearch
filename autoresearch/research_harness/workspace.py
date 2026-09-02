@@ -78,7 +78,7 @@ class WorkspaceErrorCode(StrEnum):
     CLEANUP_FAILED = "workspace_cleanup_failed"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class WorkspaceError(Exception):
     """로컬 경로나 credential 값을 노출하지 않는 workspace 오류."""
 
@@ -251,46 +251,23 @@ def _candidate_environment(host: Mapping[str, str]) -> tuple[tuple[str, str], ..
 
 
 def _inspect_changes(root: Path, base_sha: str) -> CandidateChangeReceipt:
-    tracked_paths = _nul_paths(
-        _run_git(
-            root,
-            "-c",
-            "core.filemode=true",
-            "-c",
-            "diff.renames=false",
-            "diff",
-            "--no-renames",
-            "--name-only",
-            "--diff-filter=ACDMRTUXB",
-            "-z",
-            base_sha,
-        )
-    )
-    untracked_paths = _nul_paths(
-        _run_git(root, "ls-files", "--others", "-z")
-    )
-    changed_paths = tuple(
-        sorted(
-            path
-            for path in set((*tracked_paths, *untracked_paths))
-            if not _is_harness_path(path)
-        )
-    )
-    _require_credential_free(root, changed_paths)
+    changed_paths, indexed_paths = _changed_path_groups(root, base_sha)
+    _require_credential_free(root, changed_paths, indexed_paths)
 
     digest = sha256()
     _update_digest(digest, b"base-sha", base_sha.encode("ascii"))
     for relative_path in changed_paths:
-        path = root.joinpath(*relative_path.split("/"))
-        if not path.exists() and not path.is_symlink():
-            mode = "deleted"
-            payload = b""
-        else:
-            mode = _current_mode(path)
-            payload = _current_payload(path)
+        index_records = _index_records(root, relative_path)
         _update_digest(
             digest,
-            f"{mode}:{relative_path}".encode("utf-8"),
+            f"index:{relative_path}".encode("utf-8"),
+            index_records,
+        )
+        path = root.joinpath(*relative_path.split("/"))
+        mode, payload = _worktree_entry(path, index_records)
+        _update_digest(
+            digest,
+            f"worktree:{mode}:{relative_path}".encode("utf-8"),
             payload,
         )
     return CandidateChangeReceipt(
@@ -299,21 +276,152 @@ def _inspect_changes(root: Path, base_sha: str) -> CandidateChangeReceipt:
     )
 
 
-def _require_credential_free(root: Path, changed_paths: tuple[str, ...]) -> None:
+def _changed_path_groups(
+    root: Path,
+    base_ref: str,
+) -> tuple[tuple[str, ...], frozenset[str]]:
+    common = (
+        "-c",
+        "core.filemode=true",
+        "-c",
+        "diff.renames=false",
+        "diff",
+        "--no-renames",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--name-only",
+        "--diff-filter=ACDMRTUXB",
+        "-z",
+    )
+    indexed = _nul_paths(_run_git(root, *common, "--cached", base_ref))
+    worktree = _nul_paths(_run_git(root, *common))
+    untracked = _nul_paths(_run_git(root, "ls-files", "--others", "-z"))
+    changed_paths = tuple(
+        sorted(
+            path
+            for path in set((*indexed, *worktree, *untracked))
+            if not _is_harness_path(path)
+        )
+    )
+    return changed_paths, frozenset(
+        path for path in indexed if not _is_harness_path(path)
+    )
+
+
+def _require_credential_free(
+    root: Path,
+    changed_paths: tuple[str, ...],
+    indexed_paths: frozenset[str],
+) -> None:
     for relative_path in changed_paths:
+        index_records = _index_records(root, relative_path)
+        if relative_path in indexed_paths:
+            for payload in _index_blob_payloads(root, index_records):
+                _require_payload_credential_free(payload)
         path = root.joinpath(*relative_path.split("/"))
         if not path.exists() and not path.is_symlink():
             continue
-        payload = _current_payload(path)
-        text = payload.decode("utf-8", errors="replace")
-        if contains_credential_value(text) or any(
-            pattern.search(text) is not None
-            for pattern in _ADDITIONAL_CREDENTIAL_PATTERNS
-        ):
-            raise WorkspaceError(
-                WorkspaceErrorCode.CREDENTIAL_DETECTED,
-                "candidate_change_scan",
-            )
+        if path.is_dir() and _index_mode(index_records) == "160000":
+            _canonical_submodule_state(path)
+            continue
+        _require_payload_credential_free(_current_payload(path))
+
+
+def _require_payload_credential_free(payload: bytes) -> None:
+    text = payload.decode("utf-8", errors="replace")
+    if contains_credential_value(text) or any(
+        pattern.search(text) is not None
+        for pattern in _ADDITIONAL_CREDENTIAL_PATTERNS
+    ):
+        raise WorkspaceError(
+            WorkspaceErrorCode.CREDENTIAL_DETECTED,
+            "candidate_change_scan",
+        )
+
+
+def _index_records(root: Path, relative_path: str) -> bytes:
+    return _run_git(
+        root,
+        "ls-files",
+        "--stage",
+        "-z",
+        "--",
+        f":(literal){relative_path}",
+    )
+
+
+def _index_blob_payloads(root: Path, records: bytes) -> tuple[bytes, ...]:
+    payloads: list[bytes] = []
+    for record in records.split(b"\0"):
+        if not record:
+            continue
+        try:
+            header, _path = record.split(b"\t", maxsplit=1)
+            mode, object_id, _stage = header.split(b" ", maxsplit=2)
+        except ValueError:
+            raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "index_parse") from None
+        if mode == b"160000":
+            continue
+        payloads.append(_run_git(root, "cat-file", "blob", object_id.decode("ascii")))
+    return tuple(payloads)
+
+
+def _index_mode(records: bytes) -> str | None:
+    for record in records.split(b"\0"):
+        if not record:
+            continue
+        try:
+            header, _path = record.split(b"\t", maxsplit=1)
+            mode, _object_id, stage = header.split(b" ", maxsplit=2)
+        except ValueError:
+            raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "index_parse") from None
+        if stage == b"0":
+            return mode.decode("ascii")
+    return None
+
+
+def _worktree_entry(path: Path, index_records: bytes) -> tuple[str, bytes]:
+    if not path.exists() and not path.is_symlink():
+        if _index_mode(index_records) == "160000":
+            return "160000-unavailable", b""
+        return "deleted", b""
+    if path.is_dir() and _index_mode(index_records) == "160000":
+        return "160000", _canonical_submodule_state(path)
+    return _current_mode(path), _current_payload(path)
+
+
+def _canonical_submodule_state(root: Path) -> bytes:
+    head_result = _run_git_result(root, "rev-parse", "--verify", "HEAD^{commit}")
+    if head_result.returncode != 0:
+        return b"uninitialized"
+    head = head_result.stdout.strip()
+    try:
+        head_ref = head.decode("ascii")
+    except UnicodeDecodeError:
+        raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "submodule_head") from None
+    digest = sha256()
+    _update_digest(digest, b"submodule-head", head)
+    changed_paths, indexed_paths = _changed_path_groups(root, head_ref)
+    for relative_path in changed_paths:
+        records = _index_records(root, relative_path)
+        if relative_path in indexed_paths:
+            for payload in _index_blob_payloads(root, records):
+                _require_payload_credential_free(payload)
+        _update_digest(
+            digest,
+            f"submodule-index:{relative_path}".encode("utf-8"),
+            records,
+        )
+        path = root.joinpath(*relative_path.split("/"))
+        mode, payload = _worktree_entry(path, records)
+        if mode != "160000":
+            _require_payload_credential_free(payload)
+        _update_digest(
+            digest,
+            f"submodule-worktree:{mode}:{relative_path}".encode("utf-8"),
+            payload,
+        )
+    return digest.digest()
 
 
 def _current_payload(path: Path) -> bytes:
