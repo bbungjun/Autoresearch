@@ -841,10 +841,16 @@ Linux `OSError`에 `winerror`가 없다는 이식성 오류가 드러났다. fil
       양수 timeout만 받고, 호출자 지정 command·argv·환경 확장은 허용하지 않는다
 - [ ] workspace에서 현재 Python interpreter의 고정 진입점
       (`-m autoresearch.cli harness-predict --slate <in> --out <out> --seed <n>`)을
-      subprocess로 실행한다. stale output은 실행 전에 거부한다
+      subprocess로 실행한다. stale output은 실행 전에 거부하고 stdin은 항상 `DEVNULL`로
+      닫으며 불필요한 handle을 상속하지 않는다. stale 검사는 broken symlink를 포함한
+      `lexists` 의미를 사용한다
+- [ ] 자유 생성 가능한 `CandidateProcessContext`를 provenance로 신뢰하지 않는다. 환경의
+      중복·NUL을 거부하고 실행 시점 allowlist OS 값과 고정 Python 설정을 재계산해 exact
+      equality를 확인한 뒤에만 candidate에 전달한다
 - [ ] stdout/stderr pipe를 계속 비우되 각각 마지막 64 KiB만 보존하고, wall-clock timeout을
-      적용한다. MVP의 candidate 자원 상한은 이 둘이며 CPU·RSS·filesystem quota와 적대적
-      격리는 E2E 측정 뒤 별도 runner에서 보강한다
+      적용한다. 상한은 decode 전 bytes 기준이고 UTF-8 replacement decode한다. tail 필드는
+      `repr=False`로 implicit 로그 노출을 막는다. MVP의 candidate 자원 상한은 이 둘이며
+      CPU·RSS·filesystem quota와 적대적 격리는 E2E 측정 뒤 별도 runner에서 보강한다
 - [ ] 실패는 `runner_invalid_request`, `runner_start_failed`, `predict_timeout`,
       `predict_crash`, `invalid_predictions`, `runner_process_leaked`,
       `runner_cleanup_failed`로 분류한다. 오류 문자열에는 로그·로컬 경로를 넣지 않는다
@@ -855,13 +861,24 @@ Linux `OSError`에 `winerror`가 없다는 이식성 오류가 드러났다. fil
       process가 있으면 실행 실패로 처리한다. 기존 패턴은
       `applications/experiment_platform/executor/codex_worker.py:537-574,624-670`이다
 - [ ] POSIX는 새 session/process group, Windows는 kill-on-close Job Object를 사용한다.
-      cancellation에서는 회수 후 `KeyboardInterrupt`/`SystemExit`를 다시 발생시킨다
+      Windows는 candidate workspace 밖 절대 경로의 `-I` trusted launcher를 Job에 먼저 붙이고
+      private stdin gate를 release한 뒤 candidate를 만드는 방식으로 pre-assignment spawn race를
+      없앤다. gate 전 candidate import를 금지하고 모든 gate/Job handle을 회수한다.
+      best-effort `CTRL_BREAK_EVENT` grace 뒤
+      `TerminateJobObject`, active process count 0 확인, 모든 경로의 handle close 순서를
+      지킨다
+- [ ] cleanup 실패는 timeout·crash·invalid prediction보다 우선한다. 정상 parent 종료 뒤
+      descendant를 발견해 성공적으로 회수했으면 `runner_process_leaked`다. cancellation에서는
+      회수 후 `KeyboardInterrupt`/`SystemExit`를 다시 발생시키고 cleanup 실패는 sanitized
+      exception note로 함께 보존한다
 - [ ] 테스트용 임시 `autoresearch.cli` candidate package를 public interface로 실행해
       command·seed·최소 환경 전달, 정상 실행, bounded tail, invalid request/stale output,
       start 실패, timeout, 비정상 종료, 산출물 미생성의 reason code를 검증한다
-- [ ] timeout과 정상 parent 종료 뒤 descendant가 남는 두 경로에서 grandchild가 실제로
-      회수되는지 검증한다. 가능하면 OS별 process-tree 구현을 직접 실행하고, OS 전용
-      저수준 helper는 좁은 단위 테스트로 실패 경로를 보강한다
+- [ ] stale broken symlink·FIFO/directory와 성공 뒤 symlink/non-regular output을 나눠 검증하고,
+      receipt/error `repr`에 tail·경로·credential이 나타나지 않는지 확인한다
+- [ ] timeout, 정상 parent 선종료, cancellation에서 즉시 spawn한 grandchild가 실제로
+      회수되는지 POSIX·Windows 각각 통합 검증한다. Windows에서는 candidate release 전 Job
+      결속 실패도 검증한다. 활성 Ubuntu CI와 로컬 Windows의 OS별 실행 근거를 PR에 남긴다
 - [ ] spec의 문제·해결·결과 기록을 실제 검증 근거로 갱신한다. `TrialResult`와 공통
       `ExperimentRunner`는 Task 5b 소비 형태가 생길 때까지 만들지 않는다
 
