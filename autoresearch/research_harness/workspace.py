@@ -251,30 +251,11 @@ def _candidate_environment(host: Mapping[str, str]) -> tuple[tuple[str, str], ..
 
 
 def _inspect_changes(root: Path, base_sha: str) -> CandidateChangeReceipt:
-    tracked_patch = _run_git(
-        root,
-        "-c",
-        "core.filemode=true",
-        "-c",
-        "diff.renames=false",
-        "-c",
-        "diff.algorithm=myers",
-        "diff",
-        "--no-renames",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--binary",
-        "--full-index",
-        base_sha,
-        "--",
-        ".",
-        ":(exclude)harness_in",
-        ":(exclude)harness_out",
-        ":(exclude).harness-in.lock",
-    )
     tracked_paths = _nul_paths(
         _run_git(
             root,
+            "-c",
+            "core.filemode=true",
             "-c",
             "diff.renames=false",
             "diff",
@@ -298,15 +279,18 @@ def _inspect_changes(root: Path, base_sha: str) -> CandidateChangeReceipt:
     _require_credential_free(root, changed_paths)
 
     digest = sha256()
-    _update_digest(digest, b"tracked-patch", tracked_patch)
-    for relative_path in sorted(
-        path for path in untracked_paths if not _is_harness_path(path)
-    ):
+    _update_digest(digest, b"base-sha", base_sha.encode("ascii"))
+    for relative_path in changed_paths:
         path = root.joinpath(*relative_path.split("/"))
-        payload = _current_payload(path)
+        if not path.exists() and not path.is_symlink():
+            mode = "deleted"
+            payload = b""
+        else:
+            mode = _current_mode(path)
+            payload = _current_payload(path)
         _update_digest(
             digest,
-            f"{_current_mode(path)}:{relative_path}".encode("utf-8"),
+            f"{mode}:{relative_path}".encode("utf-8"),
             payload,
         )
     return CandidateChangeReceipt(
@@ -440,9 +424,14 @@ def _remove_worktree(
         str(workspace),
     )
     if workspace.exists() or workspace.is_symlink():
+        if removal.returncode == 0:
+            raise WorkspaceError(
+                WorkspaceErrorCode.CLEANUP_FAILED,
+                "worktree_replaced_after_remove",
+            )
         if (
-            removal.returncode != 0
-            and (identity is None or not _worktree_identity_matches(workspace, identity))
+            identity is None
+            or not _worktree_identity_matches(workspace, identity)
         ):
             raise WorkspaceError(
                 WorkspaceErrorCode.CLEANUP_FAILED,

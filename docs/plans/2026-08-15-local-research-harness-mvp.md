@@ -749,9 +749,10 @@ untracked bytes를 길이 구분해 ledger용 SHA-256 fingerprint를 계산했�
 
 **결과.** 독립 리뷰가 가변 `HEAD` 때문에 commit된 candidate와 credential이 누락되는 문제,
 ignored 파생 데이터가 fingerprint에서 빠지는 문제, 소유권을 잃은 교체 경로 삭제와 Git
-metadata 회수 실패 은폐를 발견했다. 이를 봉인 `base_sha` 비교, ignored 파일의
-mode·type·bytes 포함, Git diff 설정 고정, worktree identity 재검증과 fail-closed cleanup으로
-수정했다. Task 3 집중 테스트 21개 통과·POSIX mode 테스트 1개 환경 의존 skip으로 정확한
+metadata 회수 실패 은폐, Git remove 직후 교체 경로 삭제와 patch 표현 설정에 따른
+fingerprint 변동을 발견했다. 이를 봉인 `base_sha` 비교, ignored 파일의
+상태·mode·type·bytes canonical hash, worktree identity 재검증과 fail-closed cleanup으로
+수정했다. Task 3 집중 테스트 23개 통과·POSIX mode 테스트 1개 환경 의존 skip으로 정확한
 SHA, validation-only 데이터, 환경 격리, commit·uncommitted secret 거부, 삭제된 secret 허용,
 `.parquet`·`pyproject.toml` 변경 허용, 설정 독립 fingerprint와 교체 경로 보존을 검증했다.
 전체 Research Harness 회귀 테스트는 최종 수정 뒤 393개 통과·7개 환경 의존 skip이었다.

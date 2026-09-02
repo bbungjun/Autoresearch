@@ -253,9 +253,10 @@ symlink, dependency 변경을 별도 정책으로 차단하지 않는다. 이는
 secret assignment를 찾는 MVP 검사이며 범용 secret classifier라고 주장하지 않는다.
 
 diff fingerprint는 차단 판단이 아닌 ledger 증거다. 가변 `HEAD`가 아니라 봉인된 기준
-commit 대비 tracked diff의 binary patch와 ignored 파일을 포함해 Git이 추적하지 않는
-파일의 정렬된 상대 경로·mode·type·현재 bytes를 길이 구분해 SHA-256으로 계산한다. Git
-rename·diff 설정은 Harness가 고정해 같은 변경은 같은 fingerprint를 만들고,
+commit에서 달라진 tracked 경로와 ignored 파일을 포함해 Git이 추적하지 않는 경로를 모은다.
+그 정렬된 경로별 현재 상태(존재/삭제)·mode·type·bytes를 길이 구분해 SHA-256으로 계산하며,
+Git patch 표현은 fingerprint 입력으로 쓰지 않는다. rename 탐지는 끄고 경로를 정렬하므로
+repository의 diff 출력 설정과 무관하게 같은 변경은 같은 fingerprint를 만들고,
 파일명·내용·삭제·mode 변경은 fingerprint를 바꾼다.
 
 ## 5. 목표 아키텍처

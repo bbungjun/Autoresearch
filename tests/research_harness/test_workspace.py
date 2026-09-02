@@ -444,6 +444,39 @@ def test_cleanup_preserves_a_replacement_directory_it_does_not_own(
     assert marker.read_text(encoding="utf-8") == "keep"
 
 
+def test_cleanup_preserves_replacement_created_after_git_remove(
+    repository,
+    candidate_fixture,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, source = candidate_fixture
+    root = tmp_path / "candidate"
+    marker = root / "post-remove-owner.txt"
+
+    with pytest.raises(WorkspaceError) as captured:
+        with open_candidate_workspace(
+            _request(repository, candidate_fixture, root), source=source
+        ):
+            original = workspace_module._run_git_result
+
+            def replace_after_remove(path: Path, *arguments: str):
+                result = original(path, *arguments)
+                if arguments[:3] == ("worktree", "remove", "--force"):
+                    root.mkdir()
+                    marker.write_text("keep", encoding="utf-8")
+                return result
+
+            monkeypatch.setattr(
+                workspace_module,
+                "_run_git_result",
+                replace_after_remove,
+            )
+
+    assert captured.value.code is WorkspaceErrorCode.CLEANUP_FAILED
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
 def test_fingerprint_is_independent_of_git_rename_configuration(
     repository,
     candidate_fixture,
@@ -462,6 +495,25 @@ def test_fingerprint_is_independent_of_git_rename_configuration(
 
     assert enabled == disabled
     assert enabled.changed_paths == ("README.md", "renamed.md")
+
+
+def test_fingerprint_is_independent_of_git_patch_prefix_configuration(
+    repository,
+    candidate_fixture,
+    tmp_path: Path,
+) -> None:
+    _, source = candidate_fixture
+
+    with open_candidate_workspace(
+        _request(repository, candidate_fixture, tmp_path / "candidate"), source=source
+    ) as workspace:
+        (workspace.root / "README.md").write_text("candidate\n", encoding="utf-8")
+        _git(workspace.root, "config", "diff.noprefix", "false")
+        prefixed = workspace.inspect_changes()
+        _git(workspace.root, "config", "diff.noprefix", "true")
+        unprefixed = workspace.inspect_changes()
+
+    assert prefixed == unprefixed
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX executable mode contract")
