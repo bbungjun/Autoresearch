@@ -7,6 +7,7 @@ production 일일 action log 4개를 생성하고 P0-2가 소비할 검증된 Ju
 derived path·lock alias 검증, content-addressed write-once fixture 게시와 완성 target
 재검증 및 candidate source의 outer fixture provenance·canonical Judge state root 결속을
 제공한다. 알려진 하위 오류의 public Stage C 번역에서는 원래 exception context를 숨긴다.
+원본 artifact와 별개인 현재 final 소비 marker만 선택적 상태 파일로 허용한다.
 
 [비책임] candidate data view·workspace·argv·환경 구성과 metric/Judge 판정은 후속 Stage C 및
 P0-2 모듈이 담당한다. 임의 hostile filesystem actor와의 경쟁 방어도 담당하지 않는다.
@@ -704,6 +705,15 @@ def _fixture_tree_is_exact(
             for path in _SNAPSHOT_DIRS
         ),
     }
+    # Registry의 고정 root는 이 fixture의 snapshot root 상위다. 소비 상태는 원본
+    # content identity에 포함하지 않지만, 허용 이름과 파일 종류는 계속 제한한다.
+    registry_name = "final-holdout-consumed"
+    registry = _io_path(root / registry_name)
+    if os.path.lexists(registry):
+        directories.add(registry_name)
+        marker_name = str(handoff.final_holdout_id)
+        if os.path.lexists(registry / marker_name):
+            files.add(f"{registry_name}/{marker_name}")
     return _tree_is_exact(root, frozenset(files), frozenset(directories))
 
 

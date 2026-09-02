@@ -1,16 +1,17 @@
-"""검증 전용 candidate data view의 local materializer.
+"""Validation과 권한이 확인된 final candidate data view의 local materializer.
 
 [파이프라인] Stage B 평가 snapshot 게시 뒤와 격리된 candidate 학습·실행 앞에서
-Judge handoff를 재검증하고 validation slate와 과거 action log만 별도 root에 게시한다.
+Judge handoff를 재검증하고 선택한 slate와 과거 action log를 별도 root에 게시한다.
 
 [기능] source provenance·Judge state/source와 destination의 격리·filesystem identity·
 Parquet receipt를 fail-closed로 확인하고, candidate-safe canonical manifest와 독립 byte
 copy를 write-once atomic directory로 materialize한다.
 명시적으로 선택한 v2 경로는 검증된 fixture의 metadata를 한 번 준비하고 동일한 게시
-검증을 거쳐 두 metadata 파일을 추가한다. 기존 v1 interface는 그대로 유지한다.
+검증을 거쳐 두 metadata 파일을 추가한다. Final 전용 interface는 실제 소비 grant를
+게시·재사용 직전에 재확인하며, 기존 validation v1/v2 interface는 그대로 유지한다.
 
-[비책임] git worktree·subprocess argv·환경·credential 구성, final holdout 소비 권한과
-소비 registry, metric/Judge 판정은 후속 Task 3/P0-2가 담당한다.
+[비책임] git worktree·subprocess 구성은 workspace, final 소비 권한 발급은
+consumption_registry, metric/Judge 판정은 judge가 담당한다.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from autoresearch.research_harness.candidate_metadata import (
     _USER_SCHEMA, _VIDEO_SCHEMA,
     normalize_user_metadata, normalize_video_metadata, select_metadata_as_of,
 )
+from autoresearch.research_harness.consumption_registry import FinalConsumptionGrant
 from autoresearch.research_harness.evaluation_artifacts import WRITER_OPTIONS, canonical_json_bytes
 from autoresearch.research_harness.evaluation_snapshot_models import (
     ArtifactReceipt,
@@ -114,11 +116,44 @@ def materialize_candidate_data_view_v2(
     return _materialize_candidate_data_view(request, source=source, metadata=metadata)
 
 
+def materialize_final_candidate_data_view(
+    request: CandidateDataViewRequest,
+    *,
+    source: ActionLogSource,
+    metadata: PreparedCandidateMetadata,
+    grant: FinalConsumptionGrant,
+) -> CandidateDataViewReceipt:
+    """유효한 소비 grant에 결속된 final slate와 metadata v2를 게시한다.
+
+    Args:
+        request: Judge handoff와 독립 destination root.
+        source: snapshot과 동일한 action log source.
+        metadata: Judge가 같은 final 평가용으로 미리 준비한 불변 bundle.
+        grant: 기존 registry가 발급한 동일 snapshot의 소비 권한.
+
+    Returns:
+        final 입력의 전체 manifest와 불변 파일 receipt.
+
+    Raises:
+        StageCError: grant·marker·입력 identity 또는 게시 무결성이 잘못된 경우.
+    """
+    _require_final_grant(grant, request.judge)
+    if not isinstance(metadata, PreparedCandidateMetadata):
+        raise _error(StageCErrorCode.CANDIDATE_VIEW_CONFLICT, "metadata_bundle_required")
+    return _materialize_candidate_data_view(request, source=source, metadata=metadata, grant=grant)
+
+
+def _require_final_grant(grant: FinalConsumptionGrant, judge: JudgeSnapshotHandoff) -> None:
+    if not isinstance(grant, FinalConsumptionGrant) or not grant._authorizes(judge):
+        raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "final_candidate_grant")
+
+
 def _materialize_candidate_data_view(
     request: CandidateDataViewRequest,
     *,
     source: ActionLogSource,
     metadata: PreparedCandidateMetadata | None,
+    grant: FinalConsumptionGrant | None = None,
 ) -> CandidateDataViewReceipt:
     destination_root = request.destination_root
     _require_safe_request(destination_root, request.judge.snapshot_root)
@@ -128,6 +163,7 @@ def _materialize_candidate_data_view(
     )
     if handoff != request.judge:
         raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "judge_handoff_identity")
+    split = manifest.validation if grant is None else manifest.final_holdout
     history = manifest.window.candidate_history_partitions
     if any(
         receipt.dt >= manifest.window.evaluation_start_date
@@ -150,7 +186,7 @@ def _materialize_candidate_data_view(
         _require_disjoint_root(destination_root, judge_state_root)
     history_payloads = _load_history_payloads(source, history)
     slate_source = request.judge.snapshot_root.joinpath(
-        *manifest.validation.artifacts.slate.relative_path.split("/")
+        *split.artifacts.slate.relative_path.split("/")
     )
     slate_identity = _safe_regular_file_identity(_io_path(slate_source))
     if slate_identity is None:
@@ -158,15 +194,15 @@ def _materialize_candidate_data_view(
 
     candidate_manifest = CandidateDataManifest(
         contract_version="candidate-data-view-v1",
-        evaluation_id=manifest.validation.evaluation_id,
+        evaluation_id=split.evaluation_id,
         evaluation_start_date=manifest.window.evaluation_start_date,
         complete_history_label_end_date=(
             manifest.window.complete_history_label_end_date
         ),
         slate=ArtifactReceipt(
             relative_path="slate.parquet",
-            rows=manifest.validation.artifacts.slate.rows,
-            sha256=manifest.validation.artifacts.slate.sha256,
+            rows=split.artifacts.slate.rows,
+            sha256=split.artifacts.slate.sha256,
         ),
         history_partitions=tuple(
             CandidateHistoryReceipt(
@@ -194,8 +230,8 @@ def _materialize_candidate_data_view(
                 "user_metadata": asdict(metadata.users.receipt),
                 "video_metadata": asdict(metadata.videos.receipt),
             })
-            requests = _validation_requests(
-                _read_verified_local(slate_source, manifest.validation.artifacts.slate),
+            requests = _metadata_requests(
+                _read_verified_local(slate_source, split.artifacts.slate),
                 history_payloads,
             )
             for key, artifact in (("user_id", metadata.users), ("video_id", metadata.videos)):
@@ -226,6 +262,8 @@ def _materialize_candidate_data_view(
                             StageCErrorCode.CANDIDATE_VIEW_CONFLICT,
                             "candidate_existing_view",
                         ) from None
+                    if grant is not None:
+                        _require_final_grant(grant, request.judge)
                     return CandidateDataViewReceipt(
                         root=target,
                         manifest=candidate_manifest,
@@ -239,7 +277,7 @@ def _materialize_candidate_data_view(
                     _write_staging(
                         staging,
                         request.judge.snapshot_root,
-                        manifest.validation.artifacts.slate,
+                        split.artifacts.slate,
                         history,
                         history_payloads,
                         manifest_bytes,
@@ -257,6 +295,8 @@ def _materialize_candidate_data_view(
                             StageCErrorCode.CANDIDATE_VIEW_CONFLICT,
                             "candidate_staging_validation",
                         ) from None
+                    if grant is not None:
+                        _require_final_grant(grant, request.judge)
                     staging.rename(target)
                 finally:
                     if staging.exists():
@@ -629,6 +669,30 @@ def prepare_candidate_metadata(
     Raises:
         StageCError: fixture·snapshot·원본 receipt·metadata schema가 잘못된 경우.
     """
+    return _prepare_candidate_metadata(judge, source=source, final=False)
+
+
+def prepare_final_candidate_metadata(
+    judge: JudgeSnapshotHandoff, *, source: ActionLogSource,
+) -> PreparedCandidateMetadata:
+    """Judge 측에서 final용 metadata를 준비하되 소비하거나 candidate에 게시하지 않는다.
+
+    Args:
+        judge: 검증할 평가 snapshot의 Harness 소유 handoff.
+        source: 같은 fixture의 FixtureActionLogSource.
+
+    Returns:
+        final 평가 ID에 결속된 불변 metadata bytes와 receipt.
+
+    Raises:
+        StageCError: fixture·snapshot·원본 receipt·metadata schema가 잘못된 경우.
+    """
+    return _prepare_candidate_metadata(judge, source=source, final=True)
+
+
+def _prepare_candidate_metadata(
+    judge: JudgeSnapshotHandoff, *, source: ActionLogSource, final: bool,
+) -> PreparedCandidateMetadata:
     try:
         handoff, snapshot = _validated_judge_snapshot(
             judge.snapshot_root, expected_fingerprint=str(judge.snapshot_fingerprint),
@@ -641,8 +705,9 @@ def prepare_candidate_metadata(
             raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "metadata_descriptor_identity")
         descriptor = FixtureDescriptor.model_validate_json(descriptor_bytes)
         history = _load_history_payloads(source, snapshot.window.candidate_history_partitions)
-        slate = snapshot.validation.artifacts.slate
-        requests = _validation_requests(
+        split = snapshot.final_holdout if final else snapshot.validation
+        slate = split.artifacts.slate
+        requests = _metadata_requests(
             _read_verified_local(judge.snapshot_root / slate.relative_path, slate), history,
         )
         users = normalize_user_metadata(pq.read_table(pa.BufferReader(_read_verified_local(
@@ -661,7 +726,7 @@ def prepare_candidate_metadata(
         )
         bundle = PreparedCandidateMetadata(
             snapshot_fingerprint=judge.snapshot_fingerprint,
-            evaluation_id=judge.validation_id,
+            evaluation_id=split.evaluation_id,
             users=_metadata_artifact(_eligible_metadata(users, requests, "user_id"), "metadata/users.parquet"),
             videos=_metadata_artifact(_eligible_metadata(videos, requests, "video_id"), "metadata/videos.parquet"),
         )
@@ -691,7 +756,7 @@ def _read_verified_local(
     return payload
 
 
-def _validation_requests(slate: bytes, history: tuple[_SourcePayload, ...]) -> pa.Table:
+def _metadata_requests(slate: bytes, history: tuple[_SourcePayload, ...]) -> pa.Table:
     columns = ["user_id", "video_id", "event_timestamp"]
     table = pq.read_table(pa.BufferReader(slate)).select(columns)
     rows = table.to_pylist()
