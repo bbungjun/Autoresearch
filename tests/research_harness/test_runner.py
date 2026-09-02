@@ -169,7 +169,7 @@ payload = {
     "slate": args.slate,
     "out": args.out,
     "seed": args.seed,
-    "environment": sorted(os.environ),
+    "environment": {name: os.environ[name] for name in sorted(os.environ)},
     "stdin": sys.stdin.read(),
 }
 Path(args.out).write_text(json.dumps(payload), encoding="utf-8")
@@ -186,7 +186,11 @@ os.write(2, b"y" * 70000 + b"stderr-end")
     assert payload["slate"] == str(process.slate)
     assert payload["out"] == str(process.predictions)
     assert payload["seed"] == 1937
-    assert payload["environment"] == [name for name, _ in process.environment]
+    expected_environment = dict(process.environment)
+    assert {
+        name: payload["environment"][name] for name in expected_environment
+    } == expected_environment
+    assert set(payload["environment"]) - set(expected_environment) <= {"LC_CTYPE"}
     assert secret_name not in payload["environment"]
     assert payload["stdin"] == ""
     assert receipt.predictions == process.predictions
@@ -312,6 +316,49 @@ def test_worker_reports_candidate_popen_failure(
 
     assert worker_module.main() == 127
     assert status.read_bytes() == b"F"
+
+
+def test_worker_filters_interpreter_environment_before_candidate_spawn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = tmp_path / "start.status"
+    captured_environment: dict[str, str] = {}
+
+    class GateInput:
+        buffer = io.BytesIO(b"\0")
+
+    class SuccessfulProcess:
+        def wait(self) -> int:
+            return 0
+
+        def kill(self) -> None:
+            raise AssertionError("successful candidate must not be killed")
+
+    def capture_candidate_start(
+        *args: object,
+        **kwargs: object,
+    ) -> SuccessfulProcess:
+        del args
+        environment = kwargs["env"]
+        assert isinstance(environment, dict)
+        captured_environment.update(environment)
+        return SuccessfulProcess()
+
+    monkeypatch.setenv("LC_CTYPE", "interpreter-added-locale")
+    monkeypatch.setenv("RUNNER_TEST_HOST_SECRET", "must-not-be-inherited")
+    expected_environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name in worker_module._ALLOWED_ENVIRONMENT
+    }
+    monkeypatch.setattr(worker_module.sys, "stdin", GateInput())
+    monkeypatch.setattr(worker_module.sys, "argv", ["worker", str(status), "candidate"])
+    monkeypatch.setattr(worker_module.subprocess, "Popen", capture_candidate_start)
+
+    assert worker_module.main() == 0
+    assert status.read_bytes() == b"S"
+    assert captured_environment == expected_environment
 
 
 def test_runner_classifies_missing_and_nonregular_predictions(tmp_path: Path) -> None:

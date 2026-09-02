@@ -288,7 +288,10 @@ host 환경을 합치는 기능은 제공하지 않는다. `CandidateProcessCont
 dataclass이므로 provenance를 신뢰하지 않는다. Runner는 환경 이름의 중복, 이름·값의 NUL과 허용
 값을 검사하고, 실행 시점 host의 OS 경로 allowlist와 고정
 `PYTHONDONTWRITEBYTECODE=1`, `PYTHONUNBUFFERED=1`로 다시 계산한 값과 정확히 일치할 때만
-실행한다. `PYTHONPATH`, credential 변수와 그 밖의 추가 환경은 거부한다. candidate stdin은
+실행한다. trusted launcher는 candidate의 `Popen(env=...)` 경계에서 이 allowlist만 전달한다.
+Python candidate가 시작된 뒤 interpreter 자체가 locale 정규화를 위해 `LC_CTYPE` 같은 변수를
+추가할 수 있으나, 이는 host 환경 상속으로 간주하지 않는다. `PYTHONPATH`, credential 변수와
+그 밖의 추가 host 환경은 candidate 생성 경계에서 거부한다. candidate stdin은
 항상 `DEVNULL`이며 Harness stdin을 상속하지 않는다. subprocess는 필요한 세 pipe 외의 handle을
 상속하지 않도록 `close_fds=True`로 시작한다. trusted launcher의 stdin gate pipe만 parent와
 launcher 사이의 추가 private handle이며 candidate에는 전달하지 않는다. stale output은
