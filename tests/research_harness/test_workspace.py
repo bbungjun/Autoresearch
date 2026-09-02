@@ -607,6 +607,67 @@ def test_gitlink_object_id_changes_fingerprint(
     assert second != base
 
 
+def test_secret_in_new_clean_submodule_commit_is_rejected(
+    repository,
+    candidate_fixture,
+    tmp_path: Path,
+) -> None:
+    submodule = tmp_path / "submodule-source"
+    submodule.mkdir()
+    _git(submodule, "init")
+    _git(submodule, "config", "user.email", "test@example.com")
+    _git(submodule, "config", "user.name", "Test User")
+    (submodule / "model.txt").write_text("safe\n", encoding="utf-8")
+    _git(submodule, "add", "model.txt")
+    _git(submodule, "commit", "-m", "safe")
+    safe_commit = _git(submodule, "rev-parse", "HEAD")
+    (submodule / "credential.txt").write_text(
+        "ghp_" + "e" * 36,
+        encoding="utf-8",
+    )
+    _git(submodule, "add", "credential.txt")
+    _git(submodule, "commit", "-m", "credential")
+    credential_commit = _git(submodule, "rev-parse", "HEAD")
+    _git(submodule, "checkout", safe_commit)
+
+    repository_root, _ = repository
+    _git(
+        repository_root,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        str(submodule),
+        "vendor/submodule",
+    )
+    _git(repository_root, "commit", "-m", "add submodule")
+    base_sha = _git(repository_root, "rev-parse", "HEAD")
+    receipt, source = candidate_fixture
+    request = CandidateWorkspaceRequest(
+        repository_root=repository_root,
+        base_sha=base_sha,
+        workspace_root=tmp_path / "candidate",
+        judge=receipt.judge,
+    )
+
+    with open_candidate_workspace(request, source=source) as workspace:
+        _git(
+            workspace.root,
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "update",
+            "--init",
+        )
+        _git(workspace.root / "vendor/submodule", "checkout", credential_commit)
+        _git(workspace.root, "add", "vendor/submodule")
+        _git(workspace.root, "config", "diff.ignoreSubmodules", "all")
+        with pytest.raises(WorkspaceError) as captured:
+            workspace.inspect_changes()
+
+    assert captured.value.code is WorkspaceErrorCode.CREDENTIAL_DETECTED
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX executable mode contract")
 def test_untracked_executable_mode_changes_fingerprint(
     repository,

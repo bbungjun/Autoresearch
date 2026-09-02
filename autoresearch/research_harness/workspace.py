@@ -252,7 +252,7 @@ def _candidate_environment(host: Mapping[str, str]) -> tuple[tuple[str, str], ..
 
 def _inspect_changes(root: Path, base_sha: str) -> CandidateChangeReceipt:
     changed_paths, indexed_paths = _changed_path_groups(root, base_sha)
-    _require_credential_free(root, changed_paths, indexed_paths)
+    _require_credential_free(root, base_sha, changed_paths, indexed_paths)
 
     digest = sha256()
     _update_digest(digest, b"base-sha", base_sha.encode("ascii"))
@@ -264,7 +264,11 @@ def _inspect_changes(root: Path, base_sha: str) -> CandidateChangeReceipt:
             index_records,
         )
         path = root.joinpath(*relative_path.split("/"))
-        mode, payload = _worktree_entry(path, index_records)
+        mode, payload = _worktree_entry(
+            path,
+            index_records,
+            submodule_base_ref=_base_gitlink_oid(root, base_sha, relative_path),
+        )
         _update_digest(
             digest,
             f"worktree:{mode}:{relative_path}".encode("utf-8"),
@@ -287,6 +291,7 @@ def _changed_path_groups(
         "diff.renames=false",
         "diff",
         "--no-renames",
+        "--ignore-submodules=none",
         "--no-ext-diff",
         "--no-textconv",
         "--name-only",
@@ -310,6 +315,7 @@ def _changed_path_groups(
 
 def _require_credential_free(
     root: Path,
+    base_ref: str,
     changed_paths: tuple[str, ...],
     indexed_paths: frozenset[str],
 ) -> None:
@@ -322,7 +328,10 @@ def _require_credential_free(
         if not path.exists() and not path.is_symlink():
             continue
         if path.is_dir() and _index_mode(index_records) == "160000":
-            _canonical_submodule_state(path)
+            _canonical_submodule_state(
+                path,
+                _base_gitlink_oid(root, base_ref, relative_path),
+            )
             continue
         _require_payload_credential_free(_current_payload(path))
 
@@ -380,28 +389,81 @@ def _index_mode(records: bytes) -> str | None:
     return None
 
 
-def _worktree_entry(path: Path, index_records: bytes) -> tuple[str, bytes]:
+def _base_gitlink_oid(root: Path, base_ref: str, relative_path: str) -> str | None:
+    record = _run_git(
+        root,
+        "ls-tree",
+        "-z",
+        base_ref,
+        "--",
+        f":(literal){relative_path}",
+    ).rstrip(b"\0")
+    if not record:
+        return None
+    try:
+        header, _path = record.split(b"\t", maxsplit=1)
+        mode, object_type, object_id = header.split(b" ", maxsplit=2)
+    except ValueError:
+        raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "base_tree_parse") from None
+    if mode != b"160000" or object_type != b"commit":
+        return None
+    try:
+        return object_id.decode("ascii")
+    except UnicodeDecodeError:
+        raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "base_tree_parse") from None
+
+
+def _worktree_entry(
+    path: Path,
+    index_records: bytes,
+    *,
+    submodule_base_ref: str | None,
+) -> tuple[str, bytes]:
     if not path.exists() and not path.is_symlink():
         if _index_mode(index_records) == "160000":
             return "160000-unavailable", b""
         return "deleted", b""
     if path.is_dir() and _index_mode(index_records) == "160000":
-        return "160000", _canonical_submodule_state(path)
+        return "160000", _canonical_submodule_state(path, submodule_base_ref)
     return _current_mode(path), _current_payload(path)
 
 
-def _canonical_submodule_state(root: Path) -> bytes:
+def _canonical_submodule_state(root: Path, base_ref: str | None) -> bytes:
     head_result = _run_git_result(root, "rev-parse", "--verify", "HEAD^{commit}")
     if head_result.returncode != 0:
         return b"uninitialized"
     head = head_result.stdout.strip()
     try:
-        head_ref = head.decode("ascii")
+        head.decode("ascii")
     except UnicodeDecodeError:
         raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "submodule_head") from None
     digest = sha256()
     _update_digest(digest, b"submodule-head", head)
-    changed_paths, indexed_paths = _changed_path_groups(root, head_ref)
+    if base_ref is None:
+        indexed_paths = frozenset(
+            _nul_paths(_run_git(root, "ls-files", "-z"))
+        )
+        worktree_paths = _nul_paths(
+            _run_git(
+                root,
+                "-c",
+                "core.filemode=true",
+                "diff",
+                "--ignore-submodules=none",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--name-only",
+                "-z",
+            )
+        )
+        untracked_paths = _nul_paths(
+            _run_git(root, "ls-files", "--others", "-z")
+        )
+        changed_paths = tuple(
+            sorted(set((*indexed_paths, *worktree_paths, *untracked_paths)))
+        )
+    else:
+        changed_paths, indexed_paths = _changed_path_groups(root, base_ref)
     for relative_path in changed_paths:
         records = _index_records(root, relative_path)
         if relative_path in indexed_paths:
@@ -413,7 +475,15 @@ def _canonical_submodule_state(root: Path) -> bytes:
             records,
         )
         path = root.joinpath(*relative_path.split("/"))
-        mode, payload = _worktree_entry(path, records)
+        mode, payload = _worktree_entry(
+            path,
+            records,
+            submodule_base_ref=(
+                _base_gitlink_oid(root, base_ref, relative_path)
+                if base_ref is not None
+                else None
+            ),
+        )
         if mode != "160000":
             _require_payload_credential_free(payload)
         _update_digest(

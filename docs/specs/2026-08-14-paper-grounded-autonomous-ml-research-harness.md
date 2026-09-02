@@ -257,8 +257,8 @@ commit에서 달라진 tracked 경로와 ignored 파일을 포함해 Git이 추�
 base→index와 index→working tree를 각각 비교하고, 정렬된 경로별 index record와 현재
 상태(존재/삭제)·mode·type·bytes를 길이 구분해 SHA-256으로 계산한다. gitlink는 index object
 ID를 포함하고 초기화된 submodule은 HEAD와 내부 dirty 상태를 재귀적으로 포함한다. Git patch
-표현은 fingerprint 입력으로 쓰지 않는다. rename 탐지는 끄고 경로를 정렬하므로 repository의
-diff 출력 설정과 무관하게 같은 변경은 같은 fingerprint를 만들고,
+표현은 fingerprint 입력으로 쓰지 않는다. rename 탐지는 끄고 submodule ignore는 무효화하며
+경로를 정렬하므로 repository의 diff 출력 설정과 무관하게 같은 변경은 같은 fingerprint를 만들고,
 파일명·내용·삭제·mode 변경은 fingerprint를 바꾼다. credential 검사는 현재 bytes뿐 아니라
 commit될 index blob에도 동일하게 적용한다.
 
