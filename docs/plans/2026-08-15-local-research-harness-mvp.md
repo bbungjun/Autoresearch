@@ -1182,6 +1182,78 @@ bytes 동일성, 파일 변조/누락/alias 및 부분 게시 거부, workspace 
 final metadata·권한 연결, checkpoint 영속화, 피처/임베딩·학습은 남아 있다. 품질·자율성·비용
 개선은 아직 측정하지 않았고, GPU 설치·모델 다운로드·GCP 작업은 하지 않았다.
 
+### 2026-09-03 goal 실행 순서 — Task 6 잔여와 Task 7
+
+사용자가 1~5단계 전체의 구현·검증·머지를 goal로 승인했다. 의존성은 프로젝트 격리
+환경에 설치하고 공개 사전학습 모델을 준비할 수 있다. 유료 API/GCP 자원 생성/시스템
+드라이버 변경은 승인 범위가 아니다. 각 단계는 이슈 연결 브랜치와 작은 PR로 진행하며,
+독립 리뷰 차단 사항이 없고 CI가 통과하면 별도 머지 승인 질문 없이 squash merge한다.
+
+| 순서 | PR 범위와 완료 증거 | 상태 |
+| --- | --- | --- |
+| 1 (#44) | 로컬 21개 피처, 최소 embedding interface, 손 계산 및 시간 경계 테스트 | 진행 중 |
+| 2 | 실제 로컬 GPU adapter, 모델 고정 revision/파일 해시, 캐시 분리, CUDA 추론·OOM 검증 | 대기 |
+| 3 | 재학습 CLI, seed별 학습·예측, 입력 무결성과 완전 라벨 기간 검증 | 대기 |
+| 4 | final 권한/metadata, checkpoint identity, 실제 coding agent·독립 Judge·REPORT 연결 (필요하면 여러 PR) | 대기 |
+| 5 | 5회 독립 재학습 calibration, E2E·복구·판정 시나리오와 품질/자율성/비용 실측 | 대기 |
+
+완료는 테스트 adapter의 성공이 아니라 실제 로컬 모델·agent의 완주와 증거 보존, 모든
+관련 PR의 main 머지다. 성능 개선은 성공 조건으로 강제하지 않는다. 합성 환경 결과를
+실제 사용자 성능이나 미측정 비용 절감으로 표현하지 않는다. Task 7의 parser 자원 실측,
+final 1회 소비 및 checkpoint 검증도 유지하며 작은 부분 구현으로 전체 완료를 대체하지 않는다.
+
+### Task 6 로컬 피처 조립 — #44
+
+**문제:** metadata 파일을 candidate workspace에 게시할 수 있지만 CTR 학습 입력으로
+조립하는 로컬 경로가 없다. 기존 assembly helper를 그대로 쓰면 Vertex AI 의존성과
+wide-event 기반 view/전체 이벤트 수 근사가 들어간다. 기존 21개 컬럼명을 만드는 것만으로
+시간 누수 방지나 운영 계산 동일성을 증명할 수 없다.
+
+**해결 계획:** spec 4.6에 계산식을 고정하고, 순수 Arrow 조립 함수와 최소 임베딩
+interface로 계산·추론을 분리한다. raw event_type을 직접 집계하며 KST 일 경계와
+metadata as-of를 각각 검증한다. GPU/모델 설치·CLI·final 연결은 후속 PR로 분리한다.
+운영 Feast import/조회나 범용 plugin registry를 추가하지 않는다.
+
+- [x] 손 계산 21개 피처 golden을 구현 전 실행하여 RED 확인
+- [x] 요청/이벤트 시점, KST 당일 제외, 7일/30일 경계, future metadata 불사용 검증
+- [x] 빈 입력, cold-start, raw view count, category tie, 순서/중복 요청 검증
+- [x] 임베딩 역할/차원/유한값/영벡터/정규화 실패 검증
+- [ ] 독립 리뷰와 Harness 회귀·Ruff·CI 후 merge 및 결과 기록
+
+**검증 중간 기록:** 구현 전 `test_local_features.py`와 `test_embedding.py`는 **22 failed**로
+새 module 부재를 확인했다. 별도 실제 fixture→v2 Parquet→피처 통합 테스트도 module
+부재로 **1 failed**였다. 손 계산 golden은 0초 view도 1건으로 세는지, 7일 watch 합 13,
+전체 이벤트 5, 1/3·2/3 비율, 관측 기준 영상 나이 29일과 cosine 0.96을 검증한다.
+이는 RED 증거이며 동작 성공이 아니다.
+
+**트러블슈팅:** 30일 경계 테스트를 추가하며 영상 관측 시각만 과거로 옮겨 게시 시각보다
+앞서게 만든 입력 오류를 확인했다(**1 failed, 68 passed**). 게시 시각도 명시적으로 더
+과거로 옮겨 정상 입력에서 window 경계를 검증하도록 수정했다. 제품의 관측 검증을
+완화하지 않았다. KST 날짜 변환의 최대 연도 overflow와 int64 시청시간 합 overflow도
+안전한 계약 오류로 처리하며 회귀 테스트를 추가했다.
+첫 전체 회귀는 수정 전 날짜 경계 입력을 수집한 실행에서 **1 failed, 687 passed,
+11 skipped**였고, 실패는 위 영상 관측/게시 순서 오류였다. 파일 수정과 동시에 회귀를
+실행한 검증 절차의 문제이므로, 최종 파일을 고정한 뒤 전체 회귀를 다시 실행한다.
+
+**결과·한계:** 신규 세 테스트 파일을 실행해 **71 passed**를 확인했다. 독립 리뷰 worker도
+동일한 최종 파일에서 71개를 직접 실행했고 차단 사항을 발견하지 못했다. 저장소 전체
+Ruff와 `git diff --check`가 통과했다. 최종 파일을 고정한 전체 Harness 회귀는
+**689 passed, 11 skipped (128.63초)**였다. skip은 기존 플랫폼 조건이며 신규 테스트에
+skip을 추가하지 않았다. 전체 저장소 pytest/이미지 검증은 PR의 Linux CI에서 확인한다.
+기존 helper의 근사와 달리 실제 v2 파일에서 raw view 수·시청시간·전체 이벤트 수를
+검증했고, 첫 history 학습일에 이후 행동이 섞이지 않는 것도 확인했다. 임베딩 테스트
+adapter는 의미 유사도나 실제 GPU 추론을 증명하지 않는다. CTR 재학습·실험 완주·품질과
+자율성·비용 실측은 후속 단계다. 이 PR은 계측 가능한 실험 입력을 마련한 결과다.
+
+재현 명령(저장소 dev 환경):
+
+```bash
+uv run python -m pytest tests/research_harness/test_local_features.py tests/research_harness/test_embedding.py tests/research_harness/test_local_feature_view.py -q
+uv run python -m pytest tests/research_harness -q
+uv run --no-sync ruff check applications autoresearch tests tools
+git diff --check
+```
+
 ## Task 7: 지표별 baseline σ 측정 + end-to-end 완주
 
 앞선 Task가 전부 머지된 뒤에만 가능하다. σ 측정에 `harness-predict`(Task 6)와
