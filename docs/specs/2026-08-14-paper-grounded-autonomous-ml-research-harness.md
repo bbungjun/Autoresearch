@@ -519,6 +519,46 @@ collected_at과 trending 시각 중 최댓값인 available_at만 전달하므로
 사용자 활동이 존재한다는 뜻이 아니다. 기간 밖의 짧은 history를 완전한 관측으로 표시하지
 않는다. 상위 재학습/REPORT 경로가 이 진단을 집계·보존한다.
 
+### 4.7 로컬 GPU 임베딩 adapter와 캐시 (#46)
+
+`research_harness.local_embedding`은 §4.5의 실제 모델 실행 adapter다. 설정은 모델
+ID·고정 revision·준비된 모델 디렉터리·캐시 디렉터리·실행 장치(cpu/cuda)·배치 크기·
+최대 토큰 길이·query/document 접두어·텍스트 전처리를 명시한다. 기본 역할 접두어는
+E5의 `query: `와 `passage: `이며 다른 모델은 그 모델에 맞게 설정을 바꾼다.
+MVP는 정규화된 dense sentence embedding만 지원하고 파인튜닝·원격 API는 지원하지 않는다.
+
+Sentence Transformers를 **local_files_only**, **trust_remote_code=False**,
+**safetensors 사용**으로 로드한다. 모델과 의존성 다운로드는 준비 단계에서 수행하고,
+MVP 입력은 safetensors 전용 snapshot이다. 하위 Dense 모듈의 legacy weight fallback도
+막기 위해 `.bin`, `.pt`, `.pth`, `.pkl`, `.pickle` 파일이 섞이면 loader 호출 전에
+거부한다(대소문자 무관). 원본을 삭제·변환하지 않으며 SentencePiece tokenizer의
+`.model`은 허용한다. 임의 custom checkpoint 형식 지원은 범위 밖이다.
+adapter는 파일 부재를 네트워크 요청으로 해결하지 않는다. GPU 없음·CUDA OOM·모델 로딩
+오류를 안전한 고정 code의 실패로 전달하고 CPU/다른 모델/cloud로 자동 재시도하지 않는다.
+OOM 검증을 위해 실제 장치를 고의로 고갈시키지 않고, 실제 GPU 성공 smoke와 주입한
+OOM 실패 경로 테스트를 별도의 증거로 남긴다.
+
+**identity와 캐시.** 모델 디렉터리의 모델 실행 파일 목록과 SHA-256, model ID/revision,
+역할 접두어, 최대 길이, 전처리 버전, L2 정규화 정책, 장치와 실행 라이브러리 버전을
+설정 identity에 포함한다. 로컬 절대 경로는 재현 identity에 넣지 않는다. 각 텍스트의
+캐시 key는 이 identity와 원본 텍스트·query/document 역할로 정한다. 모델 또는 처리
+설정을 바꾸면 양쪽 역할의 cache namespace가 함께 바뀐다. pickle 기반 캐시는 사용하지
+않고, 읽은 벡터의 차원·유한성·정규화를 검사한다. 손상된 캐시를 조용히 사용하거나
+다른 모델의 벡터로 채우지 않는다. 동일 입력의 중복은 한 번 계산하고 반환 순서는 유지한다.
+캐시는 파생 산출물이며 Judge 정답이나 평가 판정의 정본이 아니다.
+
+**자원과 검증.** 로컬 GPU 의존성은 기본 dev/배포 환경과 분리한 선택 그룹으로 관리한다.
+Windows baseline은 CUDA 12.8 wheel을 사용하여 시스템 CUDA/드라이버를 변경하지 않는다.
+첫 후보는 한국어를 포함하는 `intfloat/multilingual-e5-small`, revision
+`614241f622f53c4eeff9890bdc4f31cfecc418b3`이다. 이 값은 Hub 조회로 확인한 준비 좌표이며
+추론 성공·적합성의 증거가 아니다. 실제 tensor 연산, query/document 추론, 반복 cache
+hit, 처리 시간·GPU 할당 peak를 측정하고 모델 파일 해시와 함께 기록한다. 단위 테스트는
+모델을 다운로드하지 않고 loader/추론 seam을 대체한다. 재학습·E2E·품질 판정은 후속이다.
+
+근거: [E5 모델 카드](https://huggingface.co/intfloat/multilingual-e5-small),
+[SentenceTransformer 로딩 계약](https://sbert.net/docs/package_reference/sentence_transformer/model.html),
+[PyTorch 2.10 CUDA wheel](https://pytorch.org/get-started/previous-versions/#v2100).
+
 ## 5. 목표 아키텍처
 
 아래는 MVP 이후 논문 계층까지 포함한 최종 구조다. MVP에서는 사람이 준 가설과

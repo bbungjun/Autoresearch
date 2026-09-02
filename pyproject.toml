@@ -46,6 +46,13 @@ dependencies = [
 ]
 
 [dependency-groups]
+# 로컬 Research Harness GPU 추론 전용. 기본 dev/배포 설치에는 포함하지 않는다.
+# uv sync --no-default-groups --group local-embedding (프로젝트 .venv)
+local-embedding = [
+    "torch==2.10.0",
+    "sentence-transformers==6.0.1",
+    "safetensors>=0.7,<1",
+]
 # 개발/테스트 + virtual_users(실험) 의존성. `uv sync` 기본 포함.
 dev = [
     "pytest>=8.0",
@@ -132,3 +139,12 @@ conflicts = [
     [{ group = "feast" }, { group = "serving" }],
     [{ group = "feast" }, { group = "orchestration" }],
 ]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+# 승인된 Windows RTX 3070 Ti baseline. 시스템 드라이버/툴킷은 바꾸지 않는다.
+torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]

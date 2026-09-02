@@ -1016,13 +1016,13 @@ Task 6 전체 완료가 아니다.
 - [ ] 합성 fixture의 사용자 프로필·영상/채널 관측 정보를 candidate-safe 입력으로 추출한다.
       확정한 §18을 typed model·materializer·workspace에 구현한다. v1 manifest를 덮어쓰지 않고
       새 workspace에 v2를 게시한다. 문서 확정과 동작 구현을 구분한다
-- [ ] 과거 action log와 메타데이터로 기존 피처를 조립한다. 학습 행에도 당시 사용 가능한
+- [x] 과거 action log와 메타데이터로 기존 피처를 조립한다. 학습 행에도 당시 사용 가능한
       정보만 쓰고, 운영 Feast와 기존 로컬 helper의 계산 차이를 확인한다. 평가 action log,
       생성 seed·설정, 반복 중 final 전용 목록은 전달하지 않는다
-- [ ] 텍스트 묶음과 query/document 역할을 받아 벡터를 반환하는 최소 임베딩 interface와
+- [x] 텍스트 묶음과 query/document 역할을 받아 벡터를 반환하는 최소 임베딩 interface와
       모델 설정으로 교체 가능한 로컬 adapter를 구현한다. 모델 로딩·배치·정규화는 adapter가
       맡고 Codex는 모델·입력 텍스트·유사도 계산을 변경할 수 있다. 범용 plugin 체계는 만들지 않는다
-- [ ] 모델·revision·텍스트·역할·전처리·정규화별로 캐시를 구분한다. 모델 변경 시 사용자와
+- [x] 모델·revision·텍스트·역할·전처리·정규화별로 캐시를 구분한다. 모델 변경 시 사용자와
       카테고리 벡터를 함께 갱신한다. 평가에서는 준비된 모델 파일만 사용하며, 메모리 부족이나
       모델 부재를 다른 모델/클라우드로 조용히 우회하지 않고 실패로 기록한다
 - [ ] `autoresearch/cli.py`에
@@ -1191,8 +1191,8 @@ final metadata·권한 연결, checkpoint 영속화, 피처/임베딩·학습은
 
 | 순서 | PR 범위와 완료 증거 | 상태 |
 | --- | --- | --- |
-| 1 (#44) | 로컬 21개 피처, 최소 embedding interface, 손 계산 및 시간 경계 테스트 | 진행 중 |
-| 2 | 실제 로컬 GPU adapter, 모델 고정 revision/파일 해시, 캐시 분리, CUDA 추론·OOM 검증 | 대기 |
+| 1 (#44) | 로컬 21개 피처, 최소 embedding interface, 손 계산 및 시간 경계 테스트 | #45 CI 통과·머지 완료 |
+| 2 (#46) | 실제 로컬 GPU adapter, 모델 고정 revision/파일 해시, 캐시 분리, CUDA 추론·OOM 검증 | 진행 중 |
 | 3 | 재학습 CLI, seed별 학습·예측, 입력 무결성과 완전 라벨 기간 검증 | 대기 |
 | 4 | final 권한/metadata, checkpoint identity, 실제 coding agent·독립 Judge·REPORT 연결 (필요하면 여러 PR) | 대기 |
 | 5 | 5회 독립 재학습 calibration, E2E·복구·판정 시나리오와 품질/자율성/비용 실측 | 대기 |
@@ -1218,7 +1218,7 @@ metadata as-of를 각각 검증한다. GPU/모델 설치·CLI·final 연결은 �
 - [x] 요청/이벤트 시점, KST 당일 제외, 7일/30일 경계, future metadata 불사용 검증
 - [x] 빈 입력, cold-start, raw view count, category tie, 순서/중복 요청 검증
 - [x] 임베딩 역할/차원/유한값/영벡터/정규화 실패 검증
-- [ ] 독립 리뷰와 Harness 회귀·Ruff·CI 후 merge 및 결과 기록
+- [x] 독립 리뷰와 Harness 회귀·Ruff·CI 후 merge 및 결과 기록
 
 **검증 중간 기록:** 구현 전 `test_local_features.py`와 `test_embedding.py`는 **22 failed**로
 새 module 부재를 확인했다. 별도 실제 fixture→v2 Parquet→피처 통합 테스트도 module
@@ -1253,6 +1253,67 @@ uv run python -m pytest tests/research_harness -q
 uv run --no-sync ruff check applications autoresearch tests tools
 git diff --check
 ```
+
+**#45 최종 반영:** Python 3.11/3.12 전체 pytest, feast/postgres, lock/export, Ruff와
+app/train/feast/serving 이미지 및 fan-in CI가 통과했다. 변경 없는 mlflow/agent 이미지는
+기존 change detection으로 skip됐다. 미해결 리뷰 thread 없이 squash merge했으며,
+머지 커밋은 `01cb4b115a2847e37a8c4a800a66d12ec4c0c58c`다.
+
+### Task 6 실제 로컬 GPU 임베딩 — #46
+
+**문제:** #45는 주입된 테스트 벡터로 피처 계산만 검증하므로 실제 사전학습 모델 적재,
+CUDA 실행, 반복 실험의 캐시 호환성을 증명하지 못한다. 환경 변경이 기존 CI·배포로
+번지지 않게 하면서 후보 모델 교체를 가능하게 해야 한다.
+
+**해결 계획:** spec 4.7에 따라 local-files-only SentenceTransformer adapter를 추가하고,
+실행 파일/모델/설정 identity로 캐시를 분리한다. 고정 모델 revision을 준비한 뒤 별도
+선택 dependency group에서 CUDA smoke를 수행한다. CPU fallback·자동 모델 다운로드나
+새 범용 plugin registry는 추가하지 않는다.
+
+- [x] loader/캐시/역할/순서/변경 identity/OOM·모델 부재 실패의 RED→GREEN
+- [x] pyproject 선택 그룹 → uv lock → proxy export 갱신 및 환경 격리
+- [x] 실제 CUDA tensor·고정 모델 query/document 추론 및 cache hit 실측
+- [x] model/revision/file hash, 의존성, 시간/메모리 및 한계 기록
+- [ ] 독립 리뷰, Harness 회귀, Ruff, CI, PR·squash merge
+
+**구현·트러블슈팅:** 최초 40개 단위 테스트의 RED를 확인한 뒤 adapter를 구현했다.
+실제 smoke에서 ST 6의 구 dimension API 폐기 경고가 발생해 `get_embedding_dimension()`으로
+수정하고 테스트도 같은 계약에 맞췄다. 독립 리뷰는 Transformer의 safetensors 설정만으로
+하위 Dense 모듈의 legacy weight fallback이 막히지 않는 P2 계약 누락을 발견했다.
+legacy weight 확장자를 로딩 전에 거부하는 최소 수정과 mixed tree 회귀를 추가했다.
+이는 원격 코드 실행 취약성을 재현한 주장이 아니며 safetensors-only 입력 계약 보강이다.
+수정 후 독립 리뷰는 adapter 53개와 기존 embedding 18개, 총 **71 passed**를 확인했고
+추가 차단 사항을 발견하지 못했다. 선택 그룹 추가 후 기존 lock 패키지의 버전 변경·제거는
+없으며, proxy export 재생성 결과도 기존 내용과 같다.
+
+**실제 GPU 검증 (2026-09-03 KST):** RTX 3070 Ti 8 GiB, torch `2.10.0+cu128`,
+Sentence Transformers `6.0.1`, transformers `5.16.1`, tokenizers `0.23.1`, safetensors
+`0.8.0`, numpy `2.5.1`의 격리 환경에서 실행했다. 모델은 spec 4.7의 고정 E5 revision이며
+`model.safetensors`는 470,641,600 bytes, SHA-256
+`1a55775f53449dac10a2bcbc312469fac40b96d53198c407081a831f81c98477`이다.
+CUDA tensor 합 6을 확인하고 query 4행(중복 포함)·document 2행을 각각 384차원으로
+계산했다. 캐시 계수는 호출별 중복을 제거한 원문 기준이다.
+
+| 실행 | 첫 호출 hit / miss / inference | 모델 적재 | 첫 encode | 반복 encode |
+| --- | --- | --- | --- | --- |
+| batch 8, 빈 캐시 | 0 / 5 / 2 | 6.745초 | 0.334초 | 0.002초 |
+| batch 8, 새 프로세스·오프라인 재사용 | 5 / 0 / 0 | 6.634초 | 0.001초 | 0.001초 |
+| batch 4, 같은 DB·다른 identity | 0 / 5 / 2 | 6.825초 | 0.181초 | 0.002초 |
+
+batch 8 identity는 `99df5a4c76f3522375a6166db96bf542c153fc3aaf1fbab654b36a9e2cd866cd`,
+batch 4는 `a04ac30efea21b94bfa3a177f88915830932c764e51cd161418c8e7ec9876666`으로
+달랐다. 첫 실행 CUDA peak allocated는 **480,649,216 bytes (약 458 MiB)**,
+reserved는 507,510,784 bytes였다. 모델/캐시/JSON 원본은 ignored 산출물로 보존하고
+공개 문서에는 로컬 절대 경로·자격 증명을 넣지 않는다. 실행 명령은 README와
+`scripts/research_harness/embedding_smoke.py`에 있다.
+
+**결과·한계:** 실제 GPU 추론·영속 캐시·설정별 격리를 확인했다. OOM은 예외 주입으로만
+검증했으며 장치를 고갈시키지 않았다. 위 시간은 작은 고정 입력 1회의 smoke이지
+성능 benchmark나 학습/실험 전체 비용이 아니다. 품질·자율성·비용 개선은 아직 미측정이다.
+시스템 드라이버·기존 개발 환경·GCP를 변경하지 않았다. 최종 Harness 회귀는
+**742 passed, 11 skipped (132.89초)**, 전체 Ruff·`uv lock --check`·`git diff --check`는
+통과했다. skip은 기존 플랫폼 조건이며 신규 테스트는 모두 실행됐다. 전체 저장소
+pytest·이미지 빌드는 PR의 Linux CI에서 확인하며 후속 재학습·실험 연결은 계속 진행한다.
 
 ## Task 7: 지표별 baseline σ 측정 + end-to-end 완주
 
