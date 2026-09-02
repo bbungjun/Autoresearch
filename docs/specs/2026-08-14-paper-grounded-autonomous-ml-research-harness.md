@@ -506,6 +506,27 @@ coverage 또는 metric 값이 하나라도 기준에 미달하면 `promote/revis
 slate와 고유 key 입력의 row 순서 불변을 검증한다. 테스트가 구현의 동일 helper를 기대값
 계산에 재사용해서는 안 된다.
 
+##### Portfolio Record — P0-2A 결정적 리랭킹 지표
+
+**문제.** 자율 실험 에이전트가 candidate를 비교하려면 CTR 평균만으로는 실제 노출 순서가
+개선됐는지 알 수 없었다. 특히 click이 없는 slate를 0점으로 평균에 넣거나 click 수가
+`k`보다 클 때 Recall 분모를 잘못 자르면 데이터 구성에 따라 지표가 달라진다. 동점 순서와
+집계 순서도 고정하지 않으면 같은 prediction이 재실행마다 다른 증거를 만들 수 있다.
+
+**해결.** Judge와 분리된 순수 `ranking_metrics` module에 NDCG@K·Recall@K 두 interface만
+두고, score 내림차순·video ID 오름차순 tie-break, binary relevance, slate별 macro 평균을
+고정했다. zero-click slate는 점수에서 제외하되 `RankingMetricResult`의 유효/제외 slate 수와
+coverage로 손실을 드러낸다. 입력 계약 위반은 원본 값을 노출하지 않는 다섯 고정 reason
+code로 거부한다. key 고유성·score `[0,1]` 검증은 prediction 의미를 아는 P0-2B에 남겨 같은
+규칙을 두 계층이 중복 소유하지 않게 했다.
+
+**결과.** 구현 helper를 기대값 계산에 재사용하지 않은 손 계산 golden test 17개로 완전
+정답 `1.0`, click 1개가 3위인 NDCG `0.5`, 동점 click 2위
+`1/log2(3)`, Recall 분모 `3`일 때 `2/3`, zero-click 제외 coverage, 빈 입력,
+짧은 slate, row 순서 불변과 오류 코드를 검증했다. P0-2A 집중 테스트는 17개가 통과했고,
+Research Harness 회귀 테스트는 `291 passed, 3 skipped`였다. 아직 prediction 1:1 검증,
+제품 coverage gate와 sigma 기반 판정은 구현하지 않았으며 각각 P0-2B/C의 후속 범위다.
+
 #### P0-2B/C 평가 대상 선택과 prediction 신뢰 경계
 
 Candidate의 `predictions.csv`는 validation/final 대상을 선택하지 못한다. P0-2B/C의 공개

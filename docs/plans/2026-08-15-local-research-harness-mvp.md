@@ -545,28 +545,28 @@ git diff --check
 P0-2A PR이다. 의존이 없고 순수 계산이라 단독으로 완결하며 이 Task만으로 PR 1개를
 만든다. Judge 파일 I/O·prediction 1:1 검증·제품 coverage gate·판정은 포함하지 않는다.
 
-- [ ] `ranking_metrics.py` — 같은 길이의 `labels`, `scores`, `slate_ids`, `video_ids`와
+- [x] `ranking_metrics.py` — 같은 길이의 `labels`, `scores`, `slate_ids`, `video_ids`와
       양의 정수 `k`를 받는 `ndcg_at_k()`, `recall_at_k()`. grouping·정렬·집계를 숨기고
       공통 `RankingMetricResult(value, total_slates, scored_slates,
       skipped_zero_click_slates, coverage)`를 반환한다
-- [ ] binary relevance와 계산식을 spec §7의 P0-2A 계약대로 고정한다.
+- [x] binary relevance와 계산식을 spec §7의 P0-2A 계약대로 고정한다.
       `DCG@k = sum(rel_i/log2(i+1))`, `NDCG@k = DCG@k/IDCG@k`,
       `Recall@k = top-k click 수/slate 전체 click 수`이며 slate별 동일 가중치 macro 평균이다
-- [ ] **0-click slate 처리 규칙을 명시적으로 정한다** — ideal DCG가 0이라 NDCG가 정의되지
+- [x] **0-click slate 처리 규칙을 명시적으로 정한다** — ideal DCG가 0이라 NDCG가 정의되지
       않으므로 평균에서 제외하고, 제외 비율을 `coverage`로 함께 보고한다. 조용히 0점으로
       처리하면 지표가 데이터 구성에 따라 왜곡된다
-- [ ] ranking은 click 확률 추정치 `score` 내림차순, 동률은 `video_id` 오름차순으로 고정한다.
+- [x] ranking은 click 확률 추정치 `score` 내림차순, 동률은 `video_id` 오름차순으로 고정한다.
       `[0,1]` 범위 검사는 보정 품질의 증거가 아니며 LogLoss·Brier guardrail이 이를 감시한다
-- [ ] 길이 불일치, `k <= 0`, 비 binary label, 빈 식별자, NaN·Inf score는 typed
+- [x] 길이 불일치, `k <= 0`, 비 binary label, 빈 식별자, NaN·Inf score는 typed
       `RankingMetricError`와 고정 reason code로 거부한다. 식별자는 앞뒤 공백 없는 non-empty
       `str`이고, key 1:1 유일성과 score `[0,1]`은 P0-2B가 소유한다
-- [ ] `total_slates`는 고유 slate ID 수이고 `skipped_zero_click_slates = total_slates -
+- [x] `total_slates`는 고유 slate ID 수이고 `skipped_zero_click_slates = total_slates -
       scored_slates`다. slate ID 오름차순과 `math.fsum()`으로 P0-2B가 보장한 고유 key
       입력의 row 순서에 독립적인 macro 집계를 만든다
-- [ ] 손 계산 golden test: 완전 정답 순서 → 1.0, 역순 → 손 계산값, 0-click slate 제외,
+- [x] 손 계산 golden test: 완전 정답 순서 → 1.0, 역순 → 손 계산값, 0-click slate 제외,
       동점 처리, 고유 key 입력의 row 순서 불변, k보다 짧은 slate, click 수 > k인 slate,
       유효 slate 없음
-- [ ] Problem/Solution/Result 기록에 지표 왜곡 위험, macro/coverage 선택 근거, 손 계산 및
+- [x] Problem/Solution/Result 기록에 지표 왜곡 위험, macro/coverage 선택 근거, 손 계산 및
       회귀 테스트 결과를 남긴다
 
 **검증:** `uv run python -m pytest tests/research_harness/test_ranking_metrics.py -v`
