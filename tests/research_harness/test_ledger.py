@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 import errno
 import json
 import multiprocessing
+import os
 from pathlib import Path
 
 import pytest
@@ -370,8 +371,14 @@ def test_fsync_failure_is_ambiguous_but_retry_is_idempotent(
     trial = _trial(tmp_path)
     original_fsync = ledger_module.os.fsync
 
-    def fail_fsync(_: int) -> None:
-        raise OSError("sensitive detail")
+    calls = 0
+
+    def fail_fsync(descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("sensitive detail")
+        original_fsync(descriptor)
 
     monkeypatch.setattr(ledger_module.os, "fsync", fail_fsync)
     with pytest.raises(LedgerError) as captured:
@@ -395,6 +402,46 @@ def test_new_ledger_syncs_parent_directory(
     open_trial_ledger(path)
 
     assert synced == [path.parent]
+
+
+def test_directory_sync_failure_is_retried_before_open_succeeds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _ledger_path(tmp_path)
+    calls = 0
+
+    def fail_once(_: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("sensitive detail")
+
+    monkeypatch.setattr(ledger_module, "sync_directory", fail_once)
+    with pytest.raises(LedgerError) as captured:
+        open_trial_ledger(path)
+
+    resumed = open_trial_ledger(path)
+
+    assert captured.value.code is LedgerErrorCode.IO_FAILED
+    assert resumed.read_state().last_sequence == -1
+    assert calls >= 2
+
+
+def test_lock_hardlink_is_rejected_without_mutating_external_file(
+    tmp_path: Path,
+) -> None:
+    path = _ledger_path(tmp_path)
+    external = tmp_path / "external"
+    external.write_bytes(b"")
+    lock_path = path.with_name(f".{path.name}.lock")
+    os.link(external, lock_path)
+
+    with pytest.raises(LedgerError) as captured:
+        open_trial_ledger(path)
+
+    assert captured.value.code is LedgerErrorCode.IO_FAILED
+    assert external.read_bytes() == b""
 
 
 def test_windows_non_contention_lock_error_is_not_retried() -> None:

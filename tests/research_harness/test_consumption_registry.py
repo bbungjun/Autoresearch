@@ -208,6 +208,23 @@ def test_prior_evidence_verification_does_not_depend_on_new_request_time(
     assert captured.value.code is ConsumptionRegistryErrorCode.ALREADY_CONSUMED
 
 
+def test_wrong_runtime_request_and_evidence_types_are_typed_errors(
+    source_handoff,
+    tmp_path: Path,
+) -> None:
+    _, _, request = _case(source_handoff, tmp_path)
+    with pytest.raises(ConsumptionRegistryError) as invalid_request:
+        claim_final_consumption(replace(request, baseline_sha=123))
+
+    grant = claim_final_consumption(request)
+    invalid_evidence = replace(grant.evidence, marker_sha256=123)
+    with pytest.raises(ConsumptionRegistryError) as invalid_prior:
+        claim_final_consumption(request, prior_evidence=invalid_evidence)
+
+    assert invalid_request.value.code is ConsumptionRegistryErrorCode.INVALID_REQUEST
+    assert invalid_prior.value.code is ConsumptionRegistryErrorCode.INTEGRITY_VIOLATION
+
+
 @pytest.mark.parametrize("invalid", ["relative", "missing_registry", "foreign_snapshot"])
 def test_invalid_state_root_fails_before_marker(
     source_handoff,

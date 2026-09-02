@@ -232,7 +232,7 @@ def _validated_handoff(request: FinalConsumptionRequest) -> JudgeSnapshotHandoff
         ):
             raise ValueError
         return verified
-    except (AttributeError, OSError, RuntimeError, StageCError, ValueError):
+    except (AttributeError, OSError, RuntimeError, StageCError, TypeError, ValueError):
         raise ConsumptionRegistryError(
             ConsumptionRegistryErrorCode.INVALID_REQUEST,
             "request_validation",
@@ -299,7 +299,7 @@ def _verify_prior_evidence(
             != provided.marker_sha256
         ):
             raise ValueError
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, RuntimeError, TypeError, ValueError):
         raise ConsumptionRegistryError(
             ConsumptionRegistryErrorCode.INTEGRITY_VIOLATION,
             "prior_evidence_validation",

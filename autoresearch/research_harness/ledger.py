@@ -234,14 +234,18 @@ def _validated_path(path: Path) -> Path:
 def _locked_ledger(path: Path) -> Iterator[int]:
     lock_path = path.with_name(f".{path.name}.lock")
     lock_descriptor: int | None = None
+    lock_identity: tuple[int, int] | None = None
+    lock_acquired = False
     ledger_descriptor: int | None = None
     try:
-        lock_descriptor = _open_lock(lock_path)
+        lock_descriptor, lock_identity = _open_lock(lock_path)
         _acquire_lock(lock_descriptor)
-        ledger_descriptor, created = _open_data_file(path)
-        if created:
-            os.fsync(ledger_descriptor)
-            sync_directory(path.parent)
+        lock_acquired = True
+        if not _open_lock_matches(lock_path, lock_descriptor, lock_identity):
+            raise LedgerError(LedgerErrorCode.IO_FAILED, "lock_validation")
+        ledger_descriptor, _ = _open_data_file(path)
+        os.fsync(ledger_descriptor)
+        sync_directory(path.parent)
         yield ledger_descriptor
     except LedgerError:
         raise
@@ -253,29 +257,84 @@ def _locked_ledger(path: Path) -> Iterator[int]:
                 os.close(ledger_descriptor)
             except OSError:
                 pass
-        if lock_descriptor is not None:
+        if lock_descriptor is not None and lock_acquired:
             try:
                 _release_lock(lock_descriptor)
             except OSError:
                 pass
+        if lock_descriptor is not None:
             try:
                 os.close(lock_descriptor)
             except OSError:
                 pass
 
 
-def _open_lock(path: Path) -> int:
-    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0)
+def _open_lock(path: Path) -> tuple[int, tuple[int, int]]:
+    flags = os.O_RDWR | getattr(os, "O_BINARY", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags, 0o600)
+    for _ in range(100):
+        created = False
+        try:
+            descriptor = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+            created = True
+        except FileExistsError:
+            identity = _safe_regular_file_identity(path)
+            if identity is None:
+                raise LedgerError(LedgerErrorCode.IO_FAILED, "lock_validation") from None
+            descriptor = os.open(path, flags)
+        try:
+            identity = _safe_regular_file_identity(path)
+            if identity is None or not _open_lock_matches(path, descriptor, identity):
+                raise LedgerError(LedgerErrorCode.IO_FAILED, "lock_validation")
+            if created:
+                _write_all(descriptor, b"0")
+                os.fsync(descriptor)
+            elif os.fstat(descriptor).st_size == 0:
+                os.close(descriptor)
+                time.sleep(0.01)
+                continue
+            if not _open_lock_matches(path, descriptor, identity):
+                raise LedgerError(LedgerErrorCode.IO_FAILED, "lock_validation")
+            return descriptor, identity
+        except (LedgerError, OSError):
+            os.close(descriptor)
+            raise
+    raise LedgerError(LedgerErrorCode.IO_FAILED, "lock_prepare")
+
+
+def _open_lock_matches(
+    path: Path,
+    descriptor: int,
+    expected_identity: tuple[int, int],
+) -> bool:
     try:
-        if os.fstat(descriptor).st_size == 0:
-            os.write(descriptor, b"0")
-            os.fsync(descriptor)
-        return descriptor
+        opened = os.fstat(descriptor)
     except OSError:
-        os.close(descriptor)
-        raise
+        return False
+    return (
+        _safe_regular_file_identity(path) == expected_identity
+        and (opened.st_dev, opened.st_ino) == expected_identity
+        and stat.S_ISREG(opened.st_mode)
+        and opened.st_nlink == 1
+    )
+
+
+def _safe_regular_file_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        status = path.lstat()
+        resolved = path.resolve(strict=True)
+        absolute = path.absolute()
+    except (OSError, RuntimeError):
+        return None
+    reparse = getattr(status, "st_file_attributes", 0) & 0x400
+    if (
+        reparse
+        or not stat.S_ISREG(status.st_mode)
+        or status.st_nlink != 1
+        or os.path.normcase(resolved) != os.path.normcase(absolute)
+    ):
+        return None
+    return (status.st_dev, status.st_ino)
 
 
 def _acquire_lock(descriptor: int) -> None:
@@ -326,7 +385,8 @@ def _open_data_file(path: Path) -> tuple[int, bool]:
         descriptor = os.open(path, flags)
         created = False
     try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        identity = _safe_regular_file_identity(path)
+        if identity is None or not _open_lock_matches(path, descriptor, identity):
             raise LedgerError(LedgerErrorCode.INVALID_REQUEST, "ledger_file")
         return descriptor, created
     except (LedgerError, OSError):
