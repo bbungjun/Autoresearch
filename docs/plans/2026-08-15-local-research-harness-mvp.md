@@ -747,10 +747,15 @@ history만 주입했다. candidate에는 worktree·slate·prediction 경로와 �
 untracked bytes를 길이 구분해 ledger용 SHA-256 fingerprint를 계산했다. final 주입은 아직
 없는 registry 권한을 모사하지 않고 Task 4/5b의 별도 경계로 명시적으로 남겼다.
 
-**결과.** Task 3 집중 테스트 16개가 정상·예외 회수, 정확한 SHA, validation-only 데이터,
-환경 격리, secret 거부, 삭제된 secret 허용, `.parquet`·`pyproject.toml` 변경 허용과
-fingerprint 결정성을 검증했다. 전체 Research Harness 회귀 테스트는 388개 통과·6개
-환경 의존 skip이었다. 이는 완전한 OS sandbox가 아니라 실수와 자기 채점 오염을 줄이는
+**결과.** 독립 리뷰가 가변 `HEAD` 때문에 commit된 candidate와 credential이 누락되는 문제,
+ignored 파생 데이터가 fingerprint에서 빠지는 문제, 소유권을 잃은 교체 경로 삭제와 Git
+metadata 회수 실패 은폐를 발견했다. 이를 봉인 `base_sha` 비교, ignored 파일의
+mode·type·bytes 포함, Git diff 설정 고정, worktree identity 재검증과 fail-closed cleanup으로
+수정했다. Task 3 집중 테스트 21개 통과·POSIX mode 테스트 1개 환경 의존 skip으로 정확한
+SHA, validation-only 데이터, 환경 격리, commit·uncommitted secret 거부, 삭제된 secret 허용,
+`.parquet`·`pyproject.toml` 변경 허용, 설정 독립 fingerprint와 교체 경로 보존을 검증했다.
+수정 전 전체 Research Harness 회귀 테스트는 388개 통과·6개 환경 의존 skip이었으며 최종
+리뷰 뒤 다시 실행한다. 이는 완전한 OS sandbox가 아니라 실수와 자기 채점 오염을 줄이는
 MVP 경계이며, 실제 subprocess 회수와 final 단일 소비는 각각 Task 5a와 Task 4/5b에 남는다.
 
 ---

@@ -246,15 +246,17 @@ Task 3의 공개 API에는 final 주입 함수가 없고, Task 4의 registry와 
 
 Candidate는 저장소 코드와 데이터 파일을 자유롭게 바꿀 수 있다. `harness_out`은
 `predictions.csv`를 받아들이는 유일한 산출물 경계이지, worktree의 다른 변경을 금지하는
-경로 allowlist가 아니다. commit 직전 검사는 현재 존재하는 변경·추가 파일의 내용에
-`contains_credential_value()`를 적용하는 것만 수행한다. 삭제한 credential 문자열 때문에
-변경이 거부되어서는 안 되며, `.parquet`, `pyproject.toml`, symlink, dependency 변경을
-별도 정책으로 차단하지 않는다.
+경로 allowlist가 아니다. commit 직전 검사는 현재 존재하는 변경·추가 파일의 내용에 기존
+`contains_credential_value()`와 누락된 AWS access-key 형식 탐지만 적용한다. 삭제한
+credential 문자열 때문에 변경이 거부되어서는 안 되며, `.parquet`, `pyproject.toml`,
+symlink, dependency 변경을 별도 정책으로 차단하지 않는다. 이는 알려진 형식과 concrete
+secret assignment를 찾는 MVP 검사이며 범용 secret classifier라고 주장하지 않는다.
 
-diff fingerprint는 차단 판단이 아닌 ledger 증거다. 기준 commit 대비 tracked diff의 binary
-patch와 Git이 추적하지 않는 파일의 정렬된 상대 경로·현재 bytes를 길이 구분해 SHA-256으로
-계산한다. 같은 변경은 같은 fingerprint를 만들고, 파일명·내용·삭제·mode 변경은
-fingerprint를 바꾼다.
+diff fingerprint는 차단 판단이 아닌 ledger 증거다. 가변 `HEAD`가 아니라 봉인된 기준
+commit 대비 tracked diff의 binary patch와 ignored 파일을 포함해 Git이 추적하지 않는
+파일의 정렬된 상대 경로·mode·type·현재 bytes를 길이 구분해 SHA-256으로 계산한다. Git
+rename·diff 설정은 Harness가 고정해 같은 변경은 같은 fingerprint를 만들고,
+파일명·내용·삭제·mode 변경은 fingerprint를 바꾼다.
 
 ## 5. 목표 아키텍처
 

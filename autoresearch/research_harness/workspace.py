@@ -19,6 +19,7 @@ from enum import StrEnum, unique
 from hashlib import sha256
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -45,10 +46,24 @@ _INHERITED_ENVIRONMENT = (
     "SYSTEMROOT",
     "WINDIR",
 )
+_ADDITIONAL_CREDENTIAL_PATTERNS = (
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(
+        r"(?im)^\s*AWS_SECRET_ACCESS_KEY\s*=\s*"
+        r"(?:['\"]?[A-Za-z0-9/+=]{40}['\"]?)\s*$"
+    ),
+)
 
 
 class _Digest(Protocol):
     def update(self, payload: bytes) -> object: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _WorktreeIdentity:
+    root: tuple[int, int]
+    git_file: tuple[int, int]
+    git_file_sha256: str
 
 
 @unique
@@ -120,7 +135,7 @@ class CandidateWorkspace:
     def inspect_changes(self) -> CandidateChangeReceipt:
         """변경 파일의 credential을 검사하고 전체 diff fingerprint를 반환한다."""
 
-        return _inspect_changes(self.root)
+        return _inspect_changes(self.root, self.base_sha)
 
 
 @contextmanager
@@ -133,6 +148,7 @@ def open_candidate_workspace(
 
     repository, workspace = _validate_request(request)
     created = False
+    identity: _WorktreeIdentity | None = None
     try:
         _run_git(
             repository,
@@ -143,6 +159,7 @@ def open_candidate_workspace(
             request.base_sha,
         )
         created = True
+        identity = _worktree_identity(workspace)
         head = _run_git(workspace, "rev-parse", "HEAD").decode("ascii").strip()
         branch = _run_git(workspace, "branch", "--show-current").decode("utf-8").strip()
         if head != request.base_sha or branch:
@@ -179,7 +196,7 @@ def open_candidate_workspace(
         )
     finally:
         if created:
-            _remove_worktree(repository, workspace)
+            _remove_worktree(repository, workspace, identity)
 
 
 def _validate_request(request: CandidateWorkspaceRequest) -> tuple[Path, Path]:
@@ -233,13 +250,22 @@ def _candidate_environment(host: Mapping[str, str]) -> tuple[tuple[str, str], ..
     return tuple(sorted(environment.items()))
 
 
-def _inspect_changes(root: Path) -> CandidateChangeReceipt:
+def _inspect_changes(root: Path, base_sha: str) -> CandidateChangeReceipt:
     tracked_patch = _run_git(
         root,
+        "-c",
+        "core.filemode=true",
+        "-c",
+        "diff.renames=false",
+        "-c",
+        "diff.algorithm=myers",
         "diff",
+        "--no-renames",
+        "--no-ext-diff",
+        "--no-textconv",
         "--binary",
         "--full-index",
-        "HEAD",
+        base_sha,
         "--",
         ".",
         ":(exclude)harness_in",
@@ -249,15 +275,18 @@ def _inspect_changes(root: Path) -> CandidateChangeReceipt:
     tracked_paths = _nul_paths(
         _run_git(
             root,
+            "-c",
+            "diff.renames=false",
             "diff",
+            "--no-renames",
             "--name-only",
             "--diff-filter=ACDMRTUXB",
             "-z",
-            "HEAD",
+            base_sha,
         )
     )
     untracked_paths = _nul_paths(
-        _run_git(root, "ls-files", "--others", "--exclude-standard", "-z")
+        _run_git(root, "ls-files", "--others", "-z")
     )
     changed_paths = tuple(
         sorted(
@@ -275,7 +304,11 @@ def _inspect_changes(root: Path) -> CandidateChangeReceipt:
     ):
         path = root.joinpath(*relative_path.split("/"))
         payload = _current_payload(path)
-        _update_digest(digest, relative_path.encode("utf-8"), payload)
+        _update_digest(
+            digest,
+            f"{_current_mode(path)}:{relative_path}".encode("utf-8"),
+            payload,
+        )
     return CandidateChangeReceipt(
         diff_fingerprint=f"sha256:{digest.hexdigest()}",
         changed_paths=changed_paths,
@@ -288,7 +321,11 @@ def _require_credential_free(root: Path, changed_paths: tuple[str, ...]) -> None
         if not path.exists() and not path.is_symlink():
             continue
         payload = _current_payload(path)
-        if contains_credential_value(payload.decode("utf-8", errors="replace")):
+        text = payload.decode("utf-8", errors="replace")
+        if contains_credential_value(text) or any(
+            pattern.search(text) is not None
+            for pattern in _ADDITIONAL_CREDENTIAL_PATTERNS
+        ):
             raise WorkspaceError(
                 WorkspaceErrorCode.CREDENTIAL_DETECTED,
                 "candidate_change_scan",
@@ -305,6 +342,18 @@ def _current_payload(path: Path) -> bytes:
         return b""
     except (OSError, RuntimeError, UnicodeError):
         raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "change_read") from None
+
+
+def _current_mode(path: Path) -> str:
+    try:
+        mode = path.lstat().st_mode
+    except OSError:
+        raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "change_mode") from None
+    if stat.S_ISLNK(mode):
+        return "120000"
+    if stat.S_ISREG(mode):
+        return "100755" if mode & stat.S_IXUSR else "100644"
+    return f"special:{stat.S_IFMT(mode):o}"
 
 
 def _update_digest(digest: _Digest, name: bytes, payload: bytes) -> None:
@@ -330,30 +379,75 @@ def _is_harness_path(relative_path: str) -> bool:
     return first in _HARNESS_PATHS
 
 
-def _run_git(root: Path, *arguments: str, allow_failure: bool = False) -> bytes:
+def _run_git_result(root: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]:
     try:
-        result = subprocess.run(
+        return subprocess.run(
             ["git", "-C", str(root), *arguments],
             check=False,
             capture_output=True,
         )
     except OSError:
         raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "git_start") from None
+
+
+def _run_git(root: Path, *arguments: str, allow_failure: bool = False) -> bytes:
+    result = _run_git_result(root, *arguments)
     if result.returncode != 0 and not allow_failure:
         raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "git_command")
     return result.stdout
 
 
-def _remove_worktree(repository: Path, workspace: Path) -> None:
-    _run_git(
+def _worktree_identity(workspace: Path) -> _WorktreeIdentity:
+    git_file = workspace / ".git"
+    try:
+        root_stat = workspace.lstat()
+        git_stat = git_file.lstat()
+        git_payload = git_file.read_bytes()
+    except OSError:
+        raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "worktree_identity") from None
+    if not stat.S_ISDIR(root_stat.st_mode) or not stat.S_ISREG(git_stat.st_mode):
+        raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "worktree_identity")
+    return _WorktreeIdentity(
+        root=(root_stat.st_dev, root_stat.st_ino),
+        git_file=(git_stat.st_dev, git_stat.st_ino),
+        git_file_sha256=sha256(git_payload).hexdigest(),
+    )
+
+
+def _worktree_identity_matches(workspace: Path, expected: _WorktreeIdentity) -> bool:
+    try:
+        return _worktree_identity(workspace) == expected
+    except WorkspaceError:
+        return False
+
+
+def _remove_worktree(
+    repository: Path,
+    workspace: Path,
+    identity: _WorktreeIdentity | None,
+) -> None:
+    if workspace.exists() or workspace.is_symlink():
+        if identity is None or not _worktree_identity_matches(workspace, identity):
+            raise WorkspaceError(
+                WorkspaceErrorCode.CLEANUP_FAILED,
+                "worktree_identity",
+            )
+    removal = _run_git_result(
         repository,
         "worktree",
         "remove",
         "--force",
         str(workspace),
-        allow_failure=True,
     )
     if workspace.exists() or workspace.is_symlink():
+        if (
+            removal.returncode != 0
+            and (identity is None or not _worktree_identity_matches(workspace, identity))
+        ):
+            raise WorkspaceError(
+                WorkspaceErrorCode.CLEANUP_FAILED,
+                "worktree_identity",
+            )
         try:
             if workspace.is_symlink():
                 workspace.unlink()
@@ -361,4 +455,24 @@ def _remove_worktree(repository: Path, workspace: Path) -> None:
                 shutil.rmtree(workspace)
         except OSError:
             raise WorkspaceError(WorkspaceErrorCode.CLEANUP_FAILED, "worktree_remove") from None
-    _run_git(repository, "worktree", "prune", allow_failure=True)
+    prune = _run_git_result(repository, "worktree", "prune")
+    listing = _run_git_result(repository, "worktree", "list", "--porcelain")
+    if (
+        prune.returncode != 0
+        or listing.returncode != 0
+        or _worktree_is_registered(listing.stdout, workspace)
+    ):
+        raise WorkspaceError(WorkspaceErrorCode.CLEANUP_FAILED, "worktree_prune")
+
+
+def _worktree_is_registered(payload: bytes, workspace: Path) -> bool:
+    expected = workspace.resolve()
+    for line in payload.decode("utf-8", errors="replace").splitlines():
+        if not line.startswith("worktree "):
+            continue
+        try:
+            if Path(line.removeprefix("worktree ")).resolve() == expected:
+                return True
+        except (OSError, RuntimeError):
+            return True
+    return False

@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 
 import pytest
+import autoresearch.research_harness.workspace as workspace_module
 
 from autoresearch.research_harness import (
     CandidateWorkspaceRequest,
@@ -44,7 +45,8 @@ def repository(tmp_path: Path) -> tuple[Path, str]:
     (root / "pyproject.toml").write_text(
         "[project]\nname = 'baseline'\n", encoding="utf-8"
     )
-    _git(root, "add", "README.md", "pyproject.toml")
+    (root / ".gitignore").write_text("*.parquet\n", encoding="utf-8")
+    _git(root, "add", ".gitignore", "README.md", "pyproject.toml")
     _git(root, "commit", "-m", "baseline")
     return root, _git(root, "rev-parse", "HEAD")
 
@@ -198,6 +200,7 @@ def test_change_inspection_allows_data_and_dependency_changes_and_is_determinist
         first = workspace.inspect_changes()
         second = workspace.inspect_changes()
 
+        assert _git(workspace.root, "check-ignore", "derived.parquet") == "derived.parquet"
         assert first == second
         assert first.diff_fingerprint.startswith("sha256:")
         assert first.changed_paths == ("derived.parquet", "pyproject.toml")
@@ -243,6 +246,47 @@ def test_change_inspection_rejects_credential_value_without_exposing_it(
 
     assert captured.value.code is WorkspaceErrorCode.CREDENTIAL_DETECTED
     assert secret not in str(captured.value)
+
+
+def test_committed_candidate_change_is_still_compared_with_sealed_base_sha(
+    repository,
+    candidate_fixture,
+    tmp_path: Path,
+) -> None:
+    _, source = candidate_fixture
+    secret = "ghp_" + "c" * 36
+
+    with open_candidate_workspace(
+        _request(repository, candidate_fixture, tmp_path / "candidate"), source=source
+    ) as workspace:
+        (workspace.root / "committed.txt").write_text(secret, encoding="utf-8")
+        _git(workspace.root, "add", "committed.txt")
+        _git(workspace.root, "commit", "-m", "candidate commit")
+        with pytest.raises(WorkspaceError) as captured:
+            workspace.inspect_changes()
+
+    assert captured.value.code is WorkspaceErrorCode.CREDENTIAL_DETECTED
+    assert secret not in str(captured.value)
+
+
+def test_aws_secret_assignment_is_rejected(
+    repository,
+    candidate_fixture,
+    tmp_path: Path,
+) -> None:
+    _, source = candidate_fixture
+
+    with open_candidate_workspace(
+        _request(repository, candidate_fixture, tmp_path / "candidate"), source=source
+    ) as workspace:
+        (workspace.root / "aws.env").write_text(
+            "AWS_SECRET_ACCESS_KEY=" + "a" * 40,
+            encoding="utf-8",
+        )
+        with pytest.raises(WorkspaceError) as captured:
+            workspace.inspect_changes()
+
+    assert captured.value.code is WorkspaceErrorCode.CREDENTIAL_DETECTED
 
 
 def test_deleting_a_preexisting_credential_is_not_rejected(
@@ -353,6 +397,92 @@ def test_workspace_cannot_be_created_inside_source_repository(
 
     assert captured.value.code is WorkspaceErrorCode.WORKSPACE_CONFLICT
     assert not root.exists()
+
+
+def test_cleanup_fails_closed_when_git_metadata_cannot_be_released(
+    repository,
+    candidate_fixture,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, source = candidate_fixture
+
+    with pytest.raises(WorkspaceError) as captured:
+        with open_candidate_workspace(
+            _request(repository, candidate_fixture, tmp_path / "candidate"), source=source
+        ):
+            monkeypatch.setattr(
+                workspace_module,
+                "_run_git_result",
+                lambda *_args: subprocess.CompletedProcess(
+                    args=[], returncode=1, stdout=b"", stderr=b"failed"
+                ),
+            )
+
+    assert captured.value.code is WorkspaceErrorCode.CLEANUP_FAILED
+
+
+def test_cleanup_preserves_a_replacement_directory_it_does_not_own(
+    repository,
+    candidate_fixture,
+    tmp_path: Path,
+) -> None:
+    _, source = candidate_fixture
+    root = tmp_path / "candidate"
+    moved = tmp_path / "moved-worktree"
+    marker = root / "owned-by-other.txt"
+
+    with pytest.raises(WorkspaceError) as captured:
+        with open_candidate_workspace(
+            _request(repository, candidate_fixture, root), source=source
+        ):
+            root.rename(moved)
+            root.mkdir()
+            marker.write_text("keep", encoding="utf-8")
+
+    assert captured.value.code is WorkspaceErrorCode.CLEANUP_FAILED
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_fingerprint_is_independent_of_git_rename_configuration(
+    repository,
+    candidate_fixture,
+    tmp_path: Path,
+) -> None:
+    _, source = candidate_fixture
+
+    with open_candidate_workspace(
+        _request(repository, candidate_fixture, tmp_path / "candidate"), source=source
+    ) as workspace:
+        _git(workspace.root, "mv", "README.md", "renamed.md")
+        _git(workspace.root, "config", "diff.renames", "true")
+        enabled = workspace.inspect_changes()
+        _git(workspace.root, "config", "diff.renames", "false")
+        disabled = workspace.inspect_changes()
+
+    assert enabled == disabled
+    assert enabled.changed_paths == ("README.md", "renamed.md")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable mode contract")
+def test_untracked_executable_mode_changes_fingerprint(
+    repository,
+    candidate_fixture,
+    tmp_path: Path,
+) -> None:
+    _, source = candidate_fixture
+
+    with open_candidate_workspace(
+        _request(repository, candidate_fixture, tmp_path / "candidate"), source=source
+    ) as workspace:
+        script = workspace.root / "candidate-script"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        script.chmod(0o644)
+        regular = workspace.inspect_changes().diff_fingerprint
+        script.chmod(0o755)
+        executable = workspace.inspect_changes().diff_fingerprint
+
+    assert regular != executable
 
 
 def test_public_workspace_contract_has_no_final_or_judge_path(
