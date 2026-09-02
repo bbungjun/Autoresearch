@@ -559,6 +559,62 @@ hit, 처리 시간·GPU 할당 peak를 측정하고 모델 파일 해시와 함�
 [SentenceTransformer 로딩 계약](https://sbert.net/docs/package_reference/sentence_transformer/model.html),
 [PyTorch 2.10 CUDA wheel](https://pytorch.org/get-started/previous-versions/#v2100).
 
+### 4.8 로컬 재학습 CLI (#48)
+
+`python -m autoresearch.cli harness-predict --slate <in> --out <out> --seed <n>`은
+seed별 새 학습과 예측을 수행한다. 선택 `--config`의 기본값은 실행 디렉터리의
+`harness_config.json`이다. 이 로컬 JSON은 `embedding` 설정(§4.7의
+`LocalEmbeddingConfig`)과 선택 `training` 설정을 담는다. 고정 runner argv와 최소
+환경을 유지하며 모델 준비 좌표를 새로운 필수 환경 변수나 data manifest에 넣지 않는다.
+설정의 상대 모델/캐시 경로는 설정 파일 디렉터리 기준으로 해석한다. config와 모델·캐시,
+생성 산출물은 공개 커밋 대상이 아니다.
+
+**입력.** slate 옆 `candidate-view.json`의 v2 manifest를 요구한다. manifest가 지정한
+slate/history/users/videos를 같은 bytes에서 SHA-256·행수·스키마 검증 후 파싱한다.
+허용 루트 밖 경로, 링크/alias, manifest 불일치, 중복 이벤트, KST 파티션과 timestamp
+불일치는 실패다. history는 시작일부터 `T-1`까지 연속이어야 하며 `T-2` 이하의 학습일이
+하나 이상 있어야 한다. 비어 있는 파티션은 존재하는 파일로 증명하고 누락과 혼동하지 않는다.
+완전 라벨 출력 범위는 `[history 시작일,T-2]`, attribution 입력의 마지막 날은 `T-1`이다.
+기존 `attribute_clicks`의 최신 직전·30분 경계 포함·동시 시각 제외·event_id 동률 해소와
+slate 일치 계약을 재사용한다. `T-1`의 더 최근 impression이 click을 차지할 수 있으므로
+먼저 출력일 impression만 남겨 귀속하지 않는다. MVP 학습은 slate_id가 있는 이력만
+지원하고 없는 legacy 이력은 명시적으로 실패한다. 평가 action log/라벨은 읽지 않는다.
+
+입력 검증을 GPU 적재보다 먼저 수행한다. 검증한 Arrow 입력에서 §4.6의 과거 시점 피처를
+조립하며 ID·label·diagnostics는 모델 입력에서 제외한다. 지표 계산용 정답을 후보에 전달하는
+경로는 추가하지 않는다. 읽은 안전한 입력은 메모리에 보관하므로 검증 뒤 파일을 재읽지 않는다.
+
+**학습.** 기존 `LGBMModel`과 negative sampling 계산을 재사용하되 운영 `train.main`의
+MLflow/등록/원격 게시 orchestration은 호출하지 않는다. 기본 설정은 트리 200개,
+learning rate 0.05, leaves 31, sampling 1.0, scale_pos_weight auto다. 기존 학습과 같이
+stratified test 20% 분리 후 남은 데이터의 25%를 validation으로 분리한다(60/20/20).
+같은 seed를 split/sampler/model에 전달하며 `0 <= seed <= 2**32-1`이다. 전체 및 각
+split에 양·음성이 있어야 한다. train/validation union으로 categorical vocabulary를
+고정하고 평가 slate의 미관측 값은 missing으로 처리한다. 내부 test는 이번 단계에서
+변환·점수화하지 않으며 향후 소비할 때도 같은 vocabulary를 사용해야 한다. 평가 데이터로
+vocabulary를 확장하지 않는다. 내부 validation/test는 학습 fit에 넣지 않으며 이들의
+모델 선택/성능 보고를 이번 단계에서 추가하지 않는다.
+
+매 호출 새 모델을 생성해 fit한다. sampling 1.0은 no-op이라고 기록하고, 더 작은 비율을
+설정하면 train에만 적용해 scale_pos_weight=1 및 기존 실현 비율 확률 보정을 함께 적용한다.
+다른 수치 weight와의 이중 보정 설정은 실패다. sampling off의 auto weight는 train의
+negative/positive 비율이다. 같은 seed 재현 및 다른 seed split 변경을 검증하되 다른 seed의
+예측이 반드시 달라야 한다고 단언하지 않는다. 모델·split 캐시나 이전 모델 load는 없다.
+
+**출력·재현.** 기존 exact CSV `evaluation_id,slate_id,video_id,score`와 `[0,1]` 유한
+확률 계약을 유지한다. 출력 stem에 `.model.txt`, `.training.json`을 붙인 native 모델과
+receipt도 보존한다. 기존 파일을 덮어쓰지 않는다. 세 산출물 중 일부만 생긴 실패를 성공으로
+취급하지 않으며 CSV는 마지막에 게시한다. receipt는 seed·입력 manifest digest·split별
+행수/원천 event ID digest·sampling 실현값·모델 text hash·categorical 목록·피처 진단·
+embedding manifest/identity·실행 라이브러리·시간을 담고 로컬 절대 경로를 담지 않는다.
+모델 text의 확률을 재현할 때 sampling 보정은 receipt의 실현값을 함께 적용해야 한다.
+실제 CLI smoke와 fake adapter 테스트는 구분하며 5-seed 품질/σ calibration은 후속 단계다.
+`duration_seconds`는 설정 검증부터 예측 준비까지이며 Python import와 파일 게시 시간은
+포함하지 않는다(`timing_scope=prediction_call_before_publication`).
+`training_duration_seconds`는 피처 조립과 학습/예측을 함께 포함한다. 프로세스 전체 시간은
+후속 LocalRunner receipt에서 측정한다. 실패는 경로·원문 입력을 노출하지 않는 고정 코드와
+nonzero exit로 전달한다.
+
 ## 5. 목표 아키텍처
 
 아래는 MVP 이후 논문 계층까지 포함한 최종 구조다. MVP에서는 사람이 준 가설과

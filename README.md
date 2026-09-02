@@ -98,7 +98,7 @@ cooperating publisher에 한해 동일한 완성 target을 재사용하고, 불�
 target은 덮어쓰지 않고 실패합니다.
 
 이후 RuleBased fixture, candidate workspace, Sealed Judge, ledger·Controller,
-metadata v2와 로컬 피처 조립을 구현했습니다. 실제 agent·재학습·REPORT의 통합 실행은
+metadata v2, 로컬 피처/임베딩과 seed별 재학습 CLI를 구현했습니다. 실제 agent·REPORT 통합은
 후속 Task 6/7 범위입니다. snapshot 계약 정본은
 [`Research Harness P0-1 평가 snapshot`](docs/specs/2026-08-31-research-harness-evaluation-snapshot.md)입니다.
 
@@ -121,6 +121,39 @@ GPU 장치·할당 peak·처리 시간·cache hit 검증을 남깁니다. 새 �
 이 smoke는 모델 품질 실험이나 전체 agent loop의 완료 증거가 아닙니다. 설정·캐시·오류
 계약과 실제 검증 결과는 [Harness spec §4.7](docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md)와
 [구현 plan](docs/plans/2026-08-15-local-research-harness-mvp.md)을 따릅니다.
+
+### 로컬 seed별 재학습
+
+준비된 candidate v2 view(`candidate-view.json`, slate/history/metadata)에서만 학습합니다.
+`harness_config.json`을 로컬에 작성합니다. 아래 모델·캐시 경로는 **설정 파일 디렉터리
+기준**이며, 모델은 앞 단계에서 미리 준비해야 합니다. 로컬 설정 파일은 커밋하지 않습니다.
+
+```json
+{
+  "embedding": {
+    "model_id": "intfloat/multilingual-e5-small",
+    "revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+    "model_dir": "artifacts/models/multilingual-e5-small",
+    "cache_dir": "artifacts/embedding-cache",
+    "device": "cuda",
+    "batch_size": 8
+  }
+}
+```
+
+```bash
+uv run --no-sync python -m autoresearch.cli harness-predict --slate <candidate-view>/slate.parquet --out artifacts/trial-42/predictions.csv --seed 42 --config harness_config.json
+```
+
+`--seed`는 필수입니다. 매 호출 60/20/20 stratified split과 새로운 CPU LightGBM fit을
+수행하며, 동일 입력의 사전학습 임베딩만 캐시에서 재사용합니다. 완전 라벨은 평가 시작일
+`T-2`까지이며 `T-1` 로그는 자정 click 귀속 완결에 씁니다. `predictions.csv`,
+`predictions.model.txt`, `predictions.training.json`을 생성하고 기존 출력은 덮어쓰지 않습니다.
+일부 게시 실패 후에는 새 출력 경로로 재시도합니다. receipt의 입력·split·모델·embedding
+identity와 진단·시간은 재현 근거이며, native 모델을 별도로 사용할 때는 receipt의 sampling
+실현값에 따른 확률 보정도 적용해야 합니다. 이 명령은 모델 다운로드, MLflow 등록,
+평가 정답 조회 또는 승격 판정을 하지 않습니다. 자세한 계약은
+[Harness spec §4.8](docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md)을 따릅니다.
 
 ## 배포 이미지
 
