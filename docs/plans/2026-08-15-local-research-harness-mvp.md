@@ -781,8 +781,8 @@ subprocess 회수와 final 단일 소비는 각각 Task 5a와 Task 4/5b에 남�
 - [ ] registry는 검증된 handoff에서 final ID를 가져와 opaque `FinalConsumptionGrant`를 발급하고,
       `judge.build_final_target(handoff, grant)`만 같은 handoff의 final artifact를 열 수 있다.
       registry는 snapshot을 먼저 재검증하며 grant를 fingerprint·manifest digest·final ID·marker
-      evidence에 결속한다. grant 직접 생성, 다른 handoff 재사용, handoff 단독 final target
-      생성을 거부한다
+      evidence에 결속한다. snapshot이 정규화된 state root의 실제 하위 경로가 아니면 거부한다.
+      grant 직접 생성, 다른 handoff 재사용, handoff 단독 final target 생성을 거부한다
 - [ ] trial당 기록: `trial_id`, 기준/candidate SHA, diff fingerprint, `evaluation_id`,
       seed, 전체 지표, decision과 reason_code, 소요 시간, 실패 reason code, champion lineage
 - [ ] validation trial과 final holdout을 구분하고 ledger에는 registry marker의 경로·digest를

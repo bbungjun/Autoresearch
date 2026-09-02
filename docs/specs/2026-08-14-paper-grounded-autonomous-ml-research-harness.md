@@ -961,6 +961,8 @@ Task 4의 registry interface는 `claim_final_consumption(request, prior_evidence
 request는 `JudgeSnapshotHandoff`, 기준/candidate 40자리 commit SHA, timezone-aware 시작
 시각과 절대 Judge 상태 루트를 받는다. registry는 `_validated_judge_snapshot()`으로 snapshot
 전체를 다시 검증하고 반환 handoff가 입력과 동일한지 확인한 뒤에만 marker 생성을 시도한다.
+검증된 snapshot root는 정규화된 Judge 상태 루트의 실제 하위 경로여야 하며, 다른 상태 루트를
+지정해 같은 evaluation에 새 registry를 만드는 요청은 거부한다.
 호출자가 `evaluation_id`나 marker 경로를 따로 고르지 않으며 final ID는 handoff에서만 가져온다.
 marker는 canonical UTF-8 JSON 한 줄로
 `contract_version`, `evaluation_id`, UTC 시작 시각, 기준/candidate SHA를 기록한다. 성공 결과는
