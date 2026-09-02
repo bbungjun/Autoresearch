@@ -263,6 +263,68 @@ ID를 포함하고 초기화된 submodule은 staged gitlink와 HEAD 일치를 �
 파일명·내용·삭제·mode 변경은 fingerprint를 바꾼다. credential 검사는 현재 bytes뿐 아니라
 commit될 index blob에도 동일하게 적용한다.
 
+#### 4.4.2 LocalRunner 계약
+
+Task 5a의 공개 경계는 동기식 `LocalRunner.run(request) -> LocalRunReceipt` 하나다.
+`LocalRunRequest`는 `CandidateProcessContext`, 재학습 `seed`, wall-clock
+`timeout_seconds`만 받는다. 호출자는 실행 파일·module·argv·환경을 바꿀 수 없다. Runner는
+현재 Python interpreter로 아래 고정 명령을 조립하고, workspace가 만든 `cwd`와 최소 환경을
+그대로 사용한다.
+
+```text
+python -m autoresearch.cli harness-predict \
+  --slate <context.slate> \
+  --out <context.predictions> \
+  --seed <seed>
+```
+
+요청은 실행 전에 fail-closed 검증한다. `seed`는 bool이 아닌 0 이상 32-bit 정수이고
+timeout은 유한한 양수다. `cwd`는 존재하는 절대 디렉토리, slate는
+`cwd/harness_in/slate.parquet`, predictions는
+`cwd/harness_out/predictions.csv`여야 한다. stale prediction이 이미 있으면 삭제하거나
+덮어쓰지 않고 `runner_invalid_request`로 거부한다. 입력·출력 경로와 환경을 다시 선택하거나
+host 환경을 합치는 기능은 제공하지 않는다.
+
+성공 receipt는 prediction 경로, exit code, 실행 시간(ms), stdout/stderr의 마지막 64 KiB를
+담는다. 출력 pipe는 별도 reader가 계속 비우되 tail만 메모리에 보존하므로 candidate의 많은
+로그가 Harness 메모리를 무제한 소비하지 않는다. 성공은 parent exit code가 0이고 전체
+process tree가 종료됐으며, 정확한 predictions 경로에 symlink가 아닌 regular file이 새로
+생겼을 때만 가능하다. CSV schema·행 수·prediction 값의 의미 검증과 Judge 전용 copy는
+`seal_prediction_copy()`의 책임이다.
+
+안정된 실패 코드는 다음으로 제한한다.
+
+| 코드 | 의미 |
+| --- | --- |
+| `runner_invalid_request` | seed·timeout·context·stale output이 계약을 위반함 |
+| `runner_start_failed` | subprocess를 시작하거나 process-tree 격리 경계를 만들지 못함 |
+| `predict_timeout` | wall-clock timeout을 초과함 |
+| `predict_crash` | candidate parent가 0이 아닌 exit code로 종료함 |
+| `invalid_predictions` | exit 0 뒤 prediction regular file이 없음 |
+| `runner_process_leaked` | 종료·회수 뒤에도 child/grandchild가 남음 |
+| `runner_cleanup_failed` | TERM/KILL/final wait 또는 output reader 정리를 완료하지 못함 |
+
+`RunnerError`는 code, stage, exit code(있을 때), duration과 bounded log tail을 구조화해
+Controller가 다음 행동을 정하게 한다. 문자열 표현에는 candidate 로그와 로컬 경로를 넣지
+않는다. 예측 파일 내용이나 credential을 오류 문자열에 복사하지 않는다.
+
+candidate는 새 process group/session에서 시작한다. POSIX는 session process group을,
+Windows는 kill-on-close Job Object를 process-tree 소유 경계로 사용한다. 정상 parent 종료에도
+남은 descendant를 확인하며, timeout·취소·내부 예외를 포함한 모든 종료 경로는 살아 있는
+tree에 TERM-equivalent를 요청하고 짧은 grace 뒤 KILL-equivalent를 적용한 다음 final wait를
+수행한다. Python의 `KeyboardInterrupt`·`SystemExit`는 회수 후 원래 예외를 다시 발생시킨다.
+회수 실패를 성공이나 단순 candidate crash로 낮추지 않는다.
+
+MVP 자원 상한은 wall-clock timeout과 stdout/stderr tail 메모리 상한이다. prediction artifact는
+후속 sealed ingestion의 파일 크기·parser 메모리 상한을 통과해야 한다. candidate 전체의
+CPU·RSS·filesystem quota와 별도 OS 사용자/container에 의한 적대적 격리는 Task 5a의 로컬
+실행 경계가 보장한다고 주장하지 않으며, 실제 E2E 측정 뒤 Kubernetes/container runner에서
+보강한다.
+
+Task 5a는 실제 사용되지 않는 `CandidateArtifact`, `TrialResult`, 비동기
+`ExperimentRunner` 계층을 미리 만들지 않는다. Task 5b Controller가 receipt와 ledger를 실제로
+연결할 때 공통 runner Protocol을 가장 작은 소비자 인터페이스로 추출한다.
+
 ## 5. 목표 아키텍처
 
 아래는 MVP 이후 논문 계층까지 포함한 최종 구조다. MVP에서는 사람이 준 가설과
@@ -356,6 +418,10 @@ class ExperimentRunner(ABC):
 class LocalRunner(ExperimentRunner): ...
 class KubernetesJobRunner(ExperimentRunner): ...
 ```
+
+위 `ExperimentRunner` 계층은 Kubernetes 실행까지 포함한 목표 구조다. Task 5a MVP의 실제
+계약은 4.4.2의 동기식 `LocalRunner`이며, Task 5b에서 실제 소비 형태가 확인되기 전에는 위
+placeholder 타입을 구현하지 않는다.
 
 MVP에는 `YouTubeCTRDomain`과 `LocalRunner`만 실제 구현한다. `YouTubeCTRDomain`은 MVP가
 실제로 호출하는 `build_evaluation_snapshot()`, `validate_candidate()`, `evaluate()`,

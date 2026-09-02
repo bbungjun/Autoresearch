@@ -836,16 +836,34 @@ Linux `OSError`에 `winerror`가 없다는 이식성 오류가 드러났다. fil
 
 ## Task 5a: LocalRunner
 
-- [ ] `runner.py` — workspace에서 고정 진입점
-      (`harness-predict --slate <in> --out <out> --seed <n>`)을 subprocess로 실행.
-      timeout·자원 상한·stdout/stderr tail 수집. 실패는 reason code로 분류
-      (`predict_timeout`, `predict_crash`, `invalid_predictions`, …)
+- [ ] `runner.py` — 공개 경계를 `LocalRunner.run(LocalRunRequest) -> LocalRunReceipt`
+      하나로 제한한다. request는 `CandidateProcessContext`, 0 이상 32-bit `seed`, 유한한
+      양수 timeout만 받고, 호출자 지정 command·argv·환경 확장은 허용하지 않는다
+- [ ] workspace에서 현재 Python interpreter의 고정 진입점
+      (`-m autoresearch.cli harness-predict --slate <in> --out <out> --seed <n>`)을
+      subprocess로 실행한다. stale output은 실행 전에 거부한다
+- [ ] stdout/stderr pipe를 계속 비우되 각각 마지막 64 KiB만 보존하고, wall-clock timeout을
+      적용한다. MVP의 candidate 자원 상한은 이 둘이며 CPU·RSS·filesystem quota와 적대적
+      격리는 E2E 측정 뒤 별도 runner에서 보강한다
+- [ ] 실패는 `runner_invalid_request`, `runner_start_failed`, `predict_timeout`,
+      `predict_crash`, `invalid_predictions`, `runner_process_leaked`,
+      `runner_cleanup_failed`로 분류한다. 오류 문자열에는 로그·로컬 경로를 넣지 않는다
+- [ ] exit 0 뒤 exact output이 새 regular file인지 확인한다. CSV 의미 검증과 Judge copy는
+      기존 `seal_prediction_copy()`에 남겨 runner가 Sealed Judge 책임을 침범하지 않게 한다
 - [ ] candidate를 새 process group/session으로 시작한다. 정상 종료·timeout·취소·예외 모두
       TERM grace 뒤 KILL과 최종 wait를 거쳐 child/grandchild까지 완전히 회수하고, 남은
       process가 있으면 실행 실패로 처리한다. 기존 패턴은
       `applications/experiment_platform/executor/codex_worker.py:537-574,624-670`이다
-- [ ] 테스트: seed가 argv에 전달됨, 정상 실행, timeout, 비정상 종료, 산출물 미생성 각각의
-      reason code와 timeout 뒤 grandchild process가 남지 않음을 검증한다
+- [ ] POSIX는 새 session/process group, Windows는 kill-on-close Job Object를 사용한다.
+      cancellation에서는 회수 후 `KeyboardInterrupt`/`SystemExit`를 다시 발생시킨다
+- [ ] 테스트용 임시 `autoresearch.cli` candidate package를 public interface로 실행해
+      command·seed·최소 환경 전달, 정상 실행, bounded tail, invalid request/stale output,
+      start 실패, timeout, 비정상 종료, 산출물 미생성의 reason code를 검증한다
+- [ ] timeout과 정상 parent 종료 뒤 descendant가 남는 두 경로에서 grandchild가 실제로
+      회수되는지 검증한다. 가능하면 OS별 process-tree 구현을 직접 실행하고, OS 전용
+      저수준 helper는 좁은 단위 테스트로 실패 경로를 보강한다
+- [ ] spec의 문제·해결·결과 기록을 실제 검증 근거로 갱신한다. `TrialResult`와 공통
+      `ExperimentRunner`는 Task 5b 소비 형태가 생길 때까지 만들지 않는다
 
 **검증:** `uv run python -m pytest tests/research_harness/test_runner.py -v`
 
