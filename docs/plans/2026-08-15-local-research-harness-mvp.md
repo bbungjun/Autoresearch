@@ -303,8 +303,9 @@ REPORT evidence 위에 이어질 후속 구현이다.
 | Task 1-0 | `autoresearch/action_log_generation/schema.py:37-61`, `autoresearch/action_log_generation/pipeline.py:859-939`, `autoresearch/action_log_generation/daily.py:847-880`, `autoresearch/action_log_generation/llm_generator.py:149-171` | EventLog 계약, 유저별 후보 묶음 확장, 일일 1-day 생성 설정, API key 없는 결정적 fixture 생성 | 원천 `slate_id` 필드와 묶음별 결정적 ID 부여 |
 | Task 1 | `autoresearch/jobs/feature_store_build.py:295-370`, `autoresearch/model_training/training_provenance.py:38-45,96-180`, `autoresearch/model_training/training_snapshot_store.py:147-205` | 30분 click 귀속, immutable manifest, content-addressed write-once 게시 패턴 | label-free slate/봉인 labels 분리와 evaluation manifest |
 | Task 2a | `autoresearch/model_evaluation/evaluate.py:55-124` | 그룹 단위 metric과 coverage를 함께 반환하는 순수 계산 패턴 | 결정적 NDCG@k·Recall@k와 0-click coverage 규칙 |
-| Task 2b | `autoresearch/model_evaluation/evaluate.py:366-427`, `autoresearch/model_evaluation/seed_sweep.py:139-248` | ROC-AUC/PR-AUC/LogLoss/Brier/grouped ROC-AUC, seed 평균·표준편차 | 예측 schema 검증, ranking metric 결합, deterministic Judge decision |
-| Task 2c | `autoresearch/model_evaluation/evaluate.py:55-124,366-427`, `autoresearch/model_training/training_provenance.py:96-180` | YouTube 지표·coverage와 immutable snapshot/split/seed manifest 계약 | `ResearchDomain` ABC와 slate/Judge에 위임하는 `YouTubeCTRDomain` |
+| Task 2b | `autoresearch/model_evaluation/evaluate.py:55-124,366-427` | 기존 ROC-AUC/PR-AUC/LogLoss/Brier/grouped ROC-AUC 의미와 계산 primitive | labels/scores 순수 metric 추출, prediction schema 검증, ranking·probability metric 결합 |
+| Task 2c | `autoresearch/model_evaluation/seed_sweep.py:139-248`, `autoresearch/model_training/training_provenance.py:96-180` | seed 평균·표준편차와 immutable provenance | sealed prediction ingestion, 지표별 σ 기반 deterministic Judge decision |
+| Task 2d | `autoresearch/model_evaluation/evaluate.py:55-124,366-427`, `autoresearch/model_training/training_provenance.py:96-180` | YouTube 지표·coverage와 immutable snapshot/split/seed manifest 계약 | `ResearchDomain` ABC와 slate/Judge에 위임하는 `YouTubeCTRDomain` |
 | Task 3 | `applications/experiment_platform/executor/workspace.py:153-251`, `applications/experiment_platform/executor/finalizer.py:411-501`, `applications/experiment_platform/executor/safety.py:21-38` | credential-free Git 준비, content fingerprint·검증 tree commit 패턴, credential 값 탐지 | 기준 SHA의 disposable local worktree, 입출력 디렉터리, 시크릿만 남긴 commit guard |
 | Task 4 | `applications/experiment_platform/api/experiments/models.py:235-357`, `applications/experiment_platform/executor/results_store.py:91-145` | 멱등 event/log/Step 모델과 write-once 산출물 의미론 | append-only local Trial Ledger와 단계별 resume checkpoint |
 | Task 5a | `applications/experiment_platform/executor/codex_worker.py:253-281,537-574,624-670` | bounded output tail, timeout 시 process-group 회수, `Popen`·timeout 처리 패턴 | candidate `harness-predict` 실행 결과를 `TrialResult`로 정규화하는 `LocalRunner` |
@@ -541,43 +542,87 @@ git diff --check
 
 ## Task 2a: 리랭킹 지표 순수 함수
 
-의존이 없고 순수 계산이라 단독으로 완결된다. 이 Task만으로 PR 1개를 만든다.
+P0-2A PR이다. 의존이 없고 순수 계산이라 단독으로 완결하며 이 Task만으로 PR 1개를
+만든다. Judge 파일 I/O·prediction 1:1 검증·제품 coverage gate·판정은 포함하지 않는다.
 
-- [ ] `ranking_metrics.py` — `ndcg_at_k()`, `recall_at_k()`. binary relevance
-- [ ] **0-click slate 처리 규칙을 명시적으로 정한다** — ideal DCG가 0이라 NDCG가 정의되지
+- [x] `ranking_metrics.py` — 같은 길이의 `labels`, `scores`, `slate_ids`, `video_ids`와
+      양의 정수 `k`를 받는 `ndcg_at_k()`, `recall_at_k()`. grouping·정렬·집계를 숨기고
+      공통 `RankingMetricResult(value, total_slates, scored_slates,
+      skipped_zero_click_slates, coverage)`를 반환한다
+- [x] binary relevance와 계산식을 spec §7의 P0-2A 계약대로 고정한다.
+      `DCG@k = sum(rel_i/log2(i+1))`, `NDCG@k = DCG@k/IDCG@k`,
+      `Recall@k = top-k click 수/slate 전체 click 수`이며 slate별 동일 가중치 macro 평균이다
+- [x] **0-click slate 처리 규칙을 명시적으로 정한다** — ideal DCG가 0이라 NDCG가 정의되지
       않으므로 평균에서 제외하고, 제외 비율을 `coverage`로 함께 보고한다. 조용히 0점으로
       처리하면 지표가 데이터 구성에 따라 왜곡된다
-- [ ] NDCG@10·NDCG@24·Recall@10은 유효 slate가 전체의 20% 이상이면서 최소 30개여야 한다.
-      미달이면 `insufficient_metric_coverage`로 판정 불가다
-- [ ] ranking은 click 확률 추정치 `score` 내림차순, 동률은 `video_id` 오름차순으로 고정한다.
+- [x] ranking은 click 확률 추정치 `score` 내림차순, 동률은 `video_id` 오름차순으로 고정한다.
       `[0,1]` 범위 검사는 보정 품질의 증거가 아니며 LogLoss·Brier guardrail이 이를 감시한다
-- [ ] 테스트: 완전 정답 순서 → 1.0, 역순 → 최소값, 0-click slate 제외 동작, 동점 처리,
-      k보다 짧은 slate, 클릭 수 > k인 slate
+- [x] 길이 불일치, `k <= 0`, 비 binary label, 빈 식별자, NaN·Inf score는 typed
+      `RankingMetricError`와 고정 reason code로 거부한다. 식별자는 앞뒤 공백 없는 non-empty
+      `str`이고, key 1:1 유일성과 score `[0,1]`은 P0-2B가 소유한다
+- [x] `total_slates`는 고유 slate ID 수이고 `skipped_zero_click_slates = total_slates -
+      scored_slates`다. slate ID 오름차순과 `math.fsum()`으로 P0-2B가 보장한 고유 key
+      입력의 row 순서에 독립적인 macro 집계를 만든다
+- [x] 손 계산 golden test: 완전 정답 순서 → 1.0, 역순 → 손 계산값, 0-click slate 제외,
+      동점 처리, 고유 key 입력의 row 순서 불변, k보다 짧은 slate, click 수 > k인 slate,
+      유효 slate 없음
+- [x] Problem/Solution/Result 기록에 지표 왜곡 위험, macro/coverage 선택 근거, 손 계산 및
+      회귀 테스트 결과를 남긴다
 
 **검증:** `uv run python -m pytest tests/research_harness/test_ranking_metrics.py -v`
 
 ---
 
-## Task 2b: Sealed Judge
+## Task 2b: prediction 계약과 Judge scoring
 
-- [ ] `judge.py` — 입력은 봉인 라벨 + candidate `predictions.csv`
-- [ ] candidate 경로의 파일을 `O_RDONLY|O_NOFOLLOW`로 한 번만 열고 검증한 같은 FD에서
-      `64 MiB + 1` byte까지만 읽는다. 복사 전후 `fstat`의 identity·mode·size·mtime을
-      비교해 교체·성장을 검출하고, Judge 목적지는 `O_CREAT|O_EXCL`로 만든다. 경로를 다시
-      열지 않으며 schema와 지표 계산은 Judge 사본만 읽는다
-- [ ] parser를 격리 subprocess에서 실행해 정확히 4개 필드와 field byte 계약을 강제한다.
-      `evaluation_id`·`slate_id`·`video_id`는 comma·quote·개행 없는 ASCII 각 최대 64 byte,
-      `score` token은 최대 24 byte다. CRLF 기준 최악 행 221 byte와 header 39 byte에서
-      300,000행은 66,300,039 byte이므로 64 MiB 안에 든다. 행 수는 대상 slate와 같으면서
-      최대 300,000행, wall-clock 10초, 메모리 256 MiB여야 하며 상한 위반은
-      `invalid_predictions`다
+P0-2B PR이다. 공개 `build_validation_target()`이 검증된 Stage C handoff의 validation ID와
+정확한 slate/label artifact를 고정한 opaque `JudgeEvaluationTarget`을 만들고, Judge 소유
+prediction 사본과 함께 CSV parse, schema·1:1 key 계약 검증과 ranking·probability metric
+계산에 사용한다. target은 직접 생성할 수 없고 package에서 재수출하지 않는다. Candidate
+CSV의 `evaluation_id`는 대상을 선택하지 않고 target의 기대값과 일치하는지만 검증한다.
+P0-2B/C에는 final target factory를 두지 않으며, 후속 final registry Task가 발급한
+`FinalConsumptionGrant` 전용 factory가 추가되기 전 production scoring은 validation으로
+제한한다. candidate 경로에서 안전하게 사본을 만드는 ingestion과 σ 판정은 P0-2C가 소유한다.
+
+- [ ] `judge.py` — 입력은 `build_validation_target()`이 만든 trusted target + Judge 소유
+      prediction 사본. target은 expected validation ID·정확한 slate/label artifact를 고정하며
+      prediction 값으로 split을 선택하지 않는다. 직접 target 생성과 handoff만으로 final target
+      생성을 시도하면 typed 오류로 거부한다
+- [ ] Judge 소유 사본을 읽는 parser가 header·field byte·행 수 계약을 검증해 typed prediction
+      rows를 만들고, semantic validator와 scoring은 이 값만 소비한다
 - [ ] **predictions 스키마 강제 검증**: 컬럼은
       `evaluation_id, slate_id, video_id, score`. `evaluation_id`는 대상 split manifest와
       정확히 같고, 나머지 키는 slate와 정확히 1:1이어야 한다 — 누락 행, 중복 행,
       slate에 없는 행, NaN/Inf 또는 `[0,1]` 밖 score는
       전부 `invalid_predictions`로 거부. 거부는 실행 실패이지 지표 0점이 아니다
 - [ ] 지표 산출: primary `ndcg_at_10`, ranking guardrail `recall_at_10`·`ndcg_at_24`,
-      probability guardrail은 `evaluate.py`의 기존 구현 재사용
+      probability guardrail은 `labels/scores/groups`를 받는 순수
+      `model_evaluation/probability_metrics.py`로 기존 `evaluate.py` 계산을 동작 변경 없이 먼저
+      추출하고 기존 CLI와 Judge가 함께 사용한다. 구조 추출과 Judge 동작 추가는 별도 커밋이다
+- [ ] 테스트: schema·artifact 계약 위반, evaluation ID 불일치, key 누락·중복·extra,
+      `[0,1]` 범위 위반, prediction이 target split을 선택하지 못함, 직접 target 생성과 final
+      factory 부재, ranking metric 결합과 기존 probability metric 의미 보존
+
+**검증:** `uv run python -m pytest tests/research_harness/test_judge.py -v`
+
+---
+
+## Task 2c: sealed prediction ingestion과 deterministic 판정
+
+P0-2C PR이다. candidate 경로를 Judge 소유 사본으로 봉인하는 파일 ingestion과, P0-2B의
+metric 결과를 지표별 baseline σ에 비교하는 판정을 추가한다.
+
+- [ ] candidate 경로의 파일을 `O_RDONLY|O_NOFOLLOW`로 한 번만 열고 검증한 같은 FD에서
+      `64 MiB + 1` byte까지만 읽는다. 복사 전후 `fstat`의 identity·mode·size·mtime을
+      비교해 교체·성장을 검출하고, Judge 목적지는 `O_CREAT|O_EXCL`로 만든다. 경로를 다시
+      열지 않으며 schema와 지표 계산은 Judge 사본만 읽는다
+- [ ] P0-2B의 동일 parser entrypoint를 격리 subprocess에서 실행해 정확히 4개 필드와 field
+      byte 계약을 강제한다. P0-2C가 별도 parser·schema 정의를 만들지 않는다.
+      `evaluation_id`·`slate_id`·`video_id`는 comma·quote·개행 없는 ASCII 각 최대 64 byte,
+      `score` token은 최대 24 byte다. CRLF 기준 최악 행 221 byte와 header 39 byte에서
+      300,000행은 66,300,039 byte이므로 64 MiB 안에 든다. 행 수는 대상 slate와 같으면서
+      최대 300,000행, wall-clock 10초, 메모리 256 MiB여야 하며 상한 위반은
+      `invalid_predictions`다
 - [ ] `compare()` — 지표 방향을 정규화하고 D5 규칙(primary `≥2σ_primary` 개선 + 각
       guardrail `≥-1σ_metric`)으로
       `promote | revise | discard` + `reason_code` 산출. **임계값을 코드에 상수로 박지 않고
@@ -590,8 +635,9 @@ git diff --check
 - [ ] screening은 고정 seed의 same-seed baseline보다 primary가 좋아진 candidate만 확인
       실험으로 보내는 비용 gate다. champion 승격은 같은 5개 seed의 확인 실험에서 계산한
       paired normalized delta 평균만 확정한다
-- [ ] 테스트: 각 schema·artifact 계약 위반 거부, champion 동률 시 판정,
-      evaluation ID 불일치, symlink·64 MiB 초과·복사 중 성장·기존 목적지 거부,
+- [ ] NDCG@10·NDCG@24·Recall@10은 유효 slate가 전체의 20% 이상이면서 최소 30개여야 한다.
+      미달이면 `insufficient_metric_coverage`로 판정 불가다
+- [ ] 테스트: champion 동률 시 판정, symlink·64 MiB 초과·복사 중 성장·기존 목적지 거부,
       ID/score field byte 상한과 300,000행 경계, `[0,1]` 범위 위반,
       parser 행/시간/메모리 상한, higher/lower 방향 정규화,
       σ=0·`1e-6` 경계, metric `None`, 지표별 coverage 미달, 2σ 직전/직후와 guardrail
@@ -604,23 +650,24 @@ git diff --check
 
 ---
 
-## Task 2c: `ResearchDomain` ABC + `YouTubeCTRDomain`
+## Task 2d: `ResearchDomain` ABC + `YouTubeCTRDomain`
 
-Task 1(slate), Task 2a(지표), Task 2b(Judge)가 완료된 뒤 시작하고, Task 5b Controller보다
+Task 1(slate), Task 2a(지표), Task 2b(scoring), Task 2c(봉인·판정)가 완료된 뒤 시작하고,
+Task 5b Controller보다
 먼저 끝낸다. Controller는 구체 slate/Judge 구현이 아니라 이 interface를 통해 호출한다.
 
 - [ ] `domain.py`에 spec 5.1의 다섯 메서드
       (`describe_capabilities`, `build_evaluation_snapshot`, `validate_candidate`, `evaluate`,
       `compare`)를 가진 `ResearchDomain` ABC를 정의한다
 - [ ] `YouTubeCTRDomain`은 MVP에서 실제 필요한 `build_evaluation_snapshot()`,
-      `validate_candidate()`, `evaluate()`, `compare()`를 Task 1·2a·2b 구현에 위임한다.
+      `validate_candidate()`, `evaluate()`, `compare()`를 Task 1·2b·2c 구현에 위임한다.
       논문 발견이 없는 MVP에서 호출하지 않는 `describe_capabilities()`는 명시적 미지원
       오류를 내고, Paper Discovery 단계 전에는 빈 값이나 임시 capability를 꾸며 내지 않는다
 - [ ] `__init__.py`에서 공개 domain 타입을 재수출한다
 - [ ] 테스트: ABC가 다섯 메서드 계약을 강제함, YouTube adapter가 snapshot·검증·평가·비교를
       올바른 구현으로 전달함, `describe_capabilities()`가 명시적 미지원 오류를 냄
 
-**의존 순서:** `Task 1 + Task 2a + Task 2b → Task 2c → Task 5b`
+**의존 순서:** `Task 1 + Task 2a → Task 2b → Task 2c → Task 2d → Task 5b`
 
 **검증:** `uv run python -m pytest tests/research_harness/test_domain.py -v`
 
@@ -711,7 +758,7 @@ Task 1(slate), Task 2a(지표), Task 2b(Judge)가 완료된 뒤 시작하고, Ta
       - 이전 trial 이력 요약 (무엇을 시도했고 왜 기각됐는지)
       - 실패 시 stage + reason code + 로그 tail
       - **행 단위 정답과 지표 구현 코드는 포함하지 않는다**
-- [ ] `controller.py` — Task 2c의 `ResearchDomain` interface를 주입받아 snapshot·candidate
+- [ ] `controller.py` — Task 2d의 `ResearchDomain` interface를 주입받아 snapshot·candidate
       검증·평가·비교를 호출하고 예산(최대 시간/trial 수) 안에서 반복한다. 구체
       `YouTubeCTRDomain`의 slate/Judge 모듈을 Controller에서 직접 호출하지 않는다. spec 7장
       루프 구조를 따르되

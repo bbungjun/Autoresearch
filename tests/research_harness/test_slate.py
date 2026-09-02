@@ -144,6 +144,9 @@ def test_public_surface_exports_only_snapshot_entrypoint_contract() -> None:
         "JudgeSnapshotHandoff",
         "LocalEvaluationFixtureReceipt",
         "LocalEvaluationFixtureRequest",
+        "RankingMetricError",
+        "RankingMetricErrorCode",
+        "RankingMetricResult",
         "SnapshotErrorCode",
         "StageCError",
         "StageCErrorCode",
@@ -152,6 +155,8 @@ def test_public_surface_exports_only_snapshot_entrypoint_contract() -> None:
         "materialize_candidate_data_view",
         "canonical_fixture_dates",
         "descriptor_sha256",
+        "ndcg_at_k",
+        "recall_at_k",
         "select_fixture_user_ids",
     }
 

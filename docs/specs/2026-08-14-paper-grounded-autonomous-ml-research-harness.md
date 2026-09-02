@@ -471,6 +471,80 @@ coverage 또는 metric 값이 하나라도 기준에 미달하면 `promote/revis
 내지 않고 `insufficient_metric_coverage` 또는 `metric_unavailable`로 실행을 fail-closed한다.
 0-click slate 제외로 지표별 유효 표본 수가 다르므로 전체 row 수 하나로 대체하지 않는다.
 
+#### P0-2A ranking metric 계산 계약
+
+`autoresearch.research_harness.ranking_metrics`는 Judge 파일 I/O나 판정을 소유하지 않는
+순수 계산 module이다. 외부 interface는 `ndcg_at_k()`와 `recall_at_k()` 두 함수, 공통
+불변 결과 타입 `RankingMetricResult`, 안정적인 오류 타입 `RankingMetricError`와
+`RankingMetricErrorCode`로 제한한다. 두 함수는 같은 길이의 `labels`,
+`scores`, `slate_ids`, `video_ids`와 양의 정수 `k`를 받고, slate grouping·결정적 정렬·
+0-click 제외·macro 평균·coverage 집계를 module 내부에서 수행한다.
+
+- 각 slate는 `score` 내림차순, 동률이면 `video_id` 오름차순으로 정렬한다. P0-2B가 보장한
+  고유 `(slate_id, video_id)` 입력에서는 입력 row 순서가 결과에 영향을 주지 않는다.
+- rank를 1부터 셀 때 `DCG@k = sum(rel_i / log2(i + 1))`다. binary relevance에서
+  `rel_i`는 `0|1`이며, `IDCG@k`는 같은 slate의 click label을 내림차순으로 정렬해 계산한다.
+  `NDCG@k = DCG@k / IDCG@k`다.
+- `Recall@k = top-k 안의 click 수 / slate 전체 click 수`다. 전체 click 수가 `k`보다 커도
+  분모를 `k`로 자르지 않는다.
+- click이 없는 slate는 NDCG와 Recall 모두 정의되지 않으므로 0점으로 넣지 않고 제외한다.
+  최종 값은 `slate_id` 오름차순으로 정렬한 유효 slate별 값을 `math.fsum()`으로 더한 동일
+  가중치 macro 평균이다. 유효 slate가 없으면 `value=None`이다.
+- `RankingMetricResult`는 `value`, `total_slates`, `scored_slates`,
+  `skipped_zero_click_slates`, `coverage`를 담는다. `coverage = scored_slates / total_slates`이며
+  입력이 비면 `0.0`이다. `total_slates`는 고유한 non-empty `slate_id` 수이고,
+  `skipped_zero_click_slates = total_slates - scored_slates`다. 30개·20% 제품 gate의 통과
+  여부는 P0-2C가 이 결과로 판정한다.
+- `slate_ids`와 `video_ids`는 앞뒤 공백 없는 non-empty `str`이어야 한다. 이 module은 길이
+  불일치, `k <= 0`, 비 binary label, 잘못된 식별자, NaN·Inf score를 reason code가 있는
+  `RankingMetricError`로 거부한다. reason code는 `length_mismatch`, `invalid_k`,
+  `invalid_label`, `invalid_identifier`, `non_finite_score`로 고정한다.
+  `(slate_id, video_id)` 1:1 유일성과 score `[0,1]` 확률 범위는 P0-2B prediction 계약이
+  소유하며 여기서 중복 검증하지 않는다.
+
+손으로 계산한 고정 예제로 완전 정답·역순·동점·0-click·짧은 slate·click 수가 `k`보다 큰
+slate와 고유 key 입력의 row 순서 불변을 검증한다. 테스트가 구현의 동일 helper를 기대값
+계산에 재사용해서는 안 된다.
+
+##### Portfolio Record — P0-2A 결정적 리랭킹 지표
+
+**문제.** 자율 실험 에이전트가 candidate를 비교하려면 CTR 평균만으로는 실제 노출 순서가
+개선됐는지 알 수 없었다. 특히 click이 없는 slate를 0점으로 평균에 넣거나 click 수가
+`k`보다 클 때 Recall 분모를 잘못 자르면 데이터 구성에 따라 지표가 달라진다. 동점 순서와
+집계 순서도 고정하지 않으면 같은 prediction이 재실행마다 다른 증거를 만들 수 있다.
+
+**해결.** Judge와 분리된 순수 `ranking_metrics` module에 NDCG@K·Recall@K 두 interface만
+두고, score 내림차순·video ID 오름차순 tie-break, binary relevance, slate별 macro 평균을
+고정했다. zero-click slate는 점수에서 제외하되 `RankingMetricResult`의 유효/제외 slate 수와
+coverage로 손실을 드러낸다. 입력 계약 위반은 원본 값을 노출하지 않는 다섯 고정 reason
+code로 거부한다. key 고유성·score `[0,1]` 검증은 prediction 의미를 아는 P0-2B에 남겨 같은
+규칙을 두 계층이 중복 소유하지 않게 했다.
+
+**결과.** 구현 helper를 기대값 계산에 재사용하지 않은 손 계산 golden test 20개로 완전
+정답 `1.0`, click 1개가 3위인 NDCG `0.5`, 동점 click 2위
+`1/log2(3)`, Recall 분모 `3`일 때 `2/3`, zero-click 제외 coverage, 빈 입력,
+짧은 slate, row 순서 불변과 오류 코드를 검증했다. P0-2A 집중 테스트는 20개가 통과했고,
+Research Harness 회귀 테스트는 `294 passed, 3 skipped`였다. 아직 prediction 1:1 검증,
+제품 coverage gate와 sigma 기반 판정은 구현하지 않았으며 각각 P0-2B/C의 후속 범위다.
+
+#### P0-2B/C 평가 대상 선택과 prediction 신뢰 경계
+
+Candidate의 `predictions.csv`는 validation/final 대상을 선택하지 못한다. P0-2B/C의 공개
+interface는 검증된 Stage C handoff에서 validation ID와 정확한 slate/label artifact를 고정하는
+`build_validation_target()`만 제공한다. 반환되는 `JudgeEvaluationTarget`은 직접 생성할 수 없는
+opaque 내부 타입이며 package `__init__.py`에서 재수출하지 않는다. P0-2B는 CSV의
+`evaluation_id`가 target의 기대값과 같은지만 검증한다.
+
+P0-2B/C에는 final target factory가 없다. write-once final 소비 registry를 구현하는 후속
+Task가 `FinalConsumptionGrant`를 발급하고, 그 grant만 받는 `build_final_target()`을 추가한
+뒤에만 final 채점이 가능하다. Stage C handoff 단독 또는 임의 ID·path로 final target을 만드는
+interface는 제공하지 않으며, 직접 target 생성을 시도하면 typed 오류로 거부한다.
+
+P0-2B는 Judge 소유 사본의 CSV parser, field byte·schema·1:1 key 의미 검증과 metric scoring을
+소유한다. P0-2C는 candidate 경로에서 Judge 사본을 만드는 단일-FD ingestion과 **같은 P0-2B
+parser entrypoint**를 제한 subprocess에서 실행하는 책임만 소유한다. 두 단계가 서로 다른
+parser나 schema 정의를 갖지 않는다.
+
 | 판정 | 조건 |
 | --- | --- |
 | `promote` | `Δ_ndcg_at_10 ≥ 2σ_ndcg_at_10`이고 모든 guardrail `Δ_metric ≥ -1σ_metric` |
