@@ -445,8 +445,8 @@ interface는 기본 교체 지점이지 수정 파일 allowlist가 아니다. �
 **로컬 입력 확장.** 첫 검증은 기존 합성 fixture에서 허용된 사용자·영상 메타데이터를
 별도로 추출해 과거 action log와 조립한다. 필요한 재료는 다음과 같다. 이는 입력 의미의
 요약이며, 정확한 파일명·컬럼·manifest 목표는 evaluation snapshot spec §18을 따른다.
-#40에서 typed schema·순수 정규화·시점 선택을 구현했다. 실제 파일 게시와 workspace 연결은
-아직 구현하지 않았다.
+#40에서 typed schema·순수 정규화·시점 선택, #42에서 validation용 파일 게시·workspace
+opt-in 연결을 구현했다. final 전달·checkpoint 영속화와 피처 학습 연결은 아직 구현하지 않았다.
 
 - 사용자: ID, 나이, 직업, 시청 시간대, 관심 키워드, 선호 카테고리와 사용 가능 시점.
 - 영상·채널: 영상 ID, 카테고리, 길이, 게시 시각, 조회·좋아요·댓글 수, 채널 구독자·
