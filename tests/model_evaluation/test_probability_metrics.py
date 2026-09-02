@@ -19,6 +19,9 @@ def test_probability_metrics_matches_hand_calculated_fixture() -> None:
     )
 
     assert result == ProbabilityMetricResult(
+        row_count=4,
+        positive_count=2,
+        negative_count=2,
         roc_auc=pytest.approx(0.75),
         pr_auc=pytest.approx(5.0 / 6.0),
         log_loss=pytest.approx(0.8573992140459633),
@@ -43,7 +46,24 @@ def test_probability_metrics_can_omit_grouped_observation() -> None:
     assert result.grouped_roc_auc is None
 
 
+def test_probability_metrics_structures_single_class_as_unavailable() -> None:
+    result = probability_metrics(
+        labels=[1, 1],
+        scores=[0.9, 0.8],
+        groups=["user-a", "user-b"],
+    )
+
+    assert result.row_count == 2
+    assert result.positive_count == 2
+    assert result.negative_count == 0
+    assert result.roc_auc is None
+    assert result.pr_auc is None
+    assert result.log_loss is None
+    assert result.brier is None
+    assert result.grouped_roc_auc is not None
+    assert result.grouped_roc_auc.value is None
+
+
 def test_evaluate_reexports_the_extracted_probability_contract() -> None:
     assert evaluate.GroupedRocAuc is GroupedRocAuc
     assert evaluate.grouped_roc_auc is grouped_roc_auc
-

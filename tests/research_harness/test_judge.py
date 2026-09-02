@@ -180,6 +180,36 @@ def test_validation_target_rejects_forged_handoff(judge_handoff) -> None:
     assert error.value.code is JudgeErrorCode.INVALID_TARGET
 
 
+def test_validation_target_rejects_artifact_key_prediction_cannot_encode(
+    tmp_path: Path,
+) -> None:
+    artifact_input = _artifact_input()
+    invalid_row = replace(
+        artifact_input.validation.rows[0],
+        video_id="비디오",
+    )
+    artifact_input = replace(
+        artifact_input,
+        validation=replace(
+            artifact_input.validation,
+            rows=(invalid_row, artifact_input.validation.rows[1]),
+        ),
+    )
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    manifest = write_snapshot_artifacts(staging, artifact_input)
+    receipt = publish_snapshot(staging, tmp_path / "by-hash", manifest)
+    handoff = _validated_judge_handoff(
+        receipt.target_path,
+        expected_fingerprint=str(receipt.snapshot_fingerprint),
+    )
+
+    with pytest.raises(JudgeError) as error:
+        build_validation_target(handoff)
+
+    assert error.value.code is JudgeErrorCode.INVALID_TARGET
+
+
 def test_parser_accepts_lf_and_crlf_canonical_rows(
     judge_handoff,
     tmp_path: Path,
@@ -253,6 +283,53 @@ def test_parser_rejects_more_than_300_000_rows(tmp_path: Path) -> None:
     assert error.value.code is JudgeErrorCode.INVALID_PREDICTIONS
 
 
+def test_parser_accepts_exactly_300_000_rows(tmp_path: Path) -> None:
+    path = tmp_path / "predictions.csv"
+    evaluation_id = b"eval_" + b"a" * 64
+    row = evaluation_id + b",slate,video,0.5\n"
+    path.write_bytes(b"evaluation_id,slate_id,video_id,score\n" + row * 300_000)
+
+    rows = parse_prediction_copy(path)
+
+    assert len(rows) == 300_000
+
+
+def test_parser_accepts_exact_identifier_and_score_byte_limits(tmp_path: Path) -> None:
+    path = tmp_path / "predictions.csv"
+    evaluation_id = "eval_" + "a" * 64
+    slate_id = "s" * 64
+    video_id = "v" * 64
+    score = "0.1234567890123456789012"
+    assert len(score.encode("ascii")) == 24
+    path.write_bytes(
+        _prediction_bytes(
+            evaluation_id,
+            ((slate_id, video_id, score),),
+        )
+    )
+
+    rows = parse_prediction_copy(path)
+
+    assert rows[0].slate_id == slate_id
+    assert rows[0].video_id == video_id
+
+
+def test_parser_rejects_score_over_24_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "predictions.csv"
+    evaluation_id = "eval_" + "a" * 64
+    path.write_bytes(
+        _prediction_bytes(
+            evaluation_id,
+            (("slate", "video", "0.12345678901234567890123"),),
+        )
+    )
+
+    with pytest.raises(JudgeError) as error:
+        parse_prediction_copy(path)
+
+    assert error.value.code is JudgeErrorCode.INVALID_PREDICTIONS
+
+
 @pytest.mark.parametrize(
     "rows",
     [
@@ -313,6 +390,9 @@ def test_scoring_combines_ranking_and_probability_metrics(
     assert result.probability.pr_auc == pytest.approx(1.0)
     assert result.probability.log_loss == pytest.approx(0.10536051565782628)
     assert result.probability.brier == pytest.approx(0.01)
+    assert result.probability.row_count == 2
+    assert result.probability.positive_count == 1
+    assert result.probability.negative_count == 1
     assert result.probability.grouped_roc_auc is not None
     assert result.probability.grouped_roc_auc.value == pytest.approx(1.0)
 

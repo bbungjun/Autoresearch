@@ -559,6 +559,9 @@ P0-2B의 package 공개 interface는 `build_validation_target(handoff)`와
 만든다. ID field는 comma·quote·개행·앞뒤 공백 없는 ASCII이며 `evaluation_id`는 현재
 `eval_` + SHA-256 계약에 맞춰 정확히 69 byte, `slate_id`와 `video_id`는 각각 1~64 byte다.
 `score` token은 앞뒤 공백 없는 ASCII 최대 24 byte이고 finite float `[0,1]`이어야 한다.
+target factory는 slate artifact의 모든 key가 이 prediction 표현 계약으로 encode 가능한지도
+검증한다. 표현할 수 없는 trusted key를 candidate prediction 오류로 전가하지 않고 target을
+`invalid_judge_target`으로 거부한다.
 P0-2C의 ingestion byte 상한은 **65 MiB + 1 byte probe**로 고정한다. CRLF 최악 행은
 `69 + 64 + 64 + 24 + comma 3 + CRLF 2 = 226 byte`이고 300,000행과 39 byte header는
 `67,800,039 byte`라 65 MiB(`68,157,440 byte`) 안에 든다. 기존 64 MiB 계산은 실제
@@ -566,7 +569,10 @@ P0-2C의 ingestion byte 상한은 **65 MiB + 1 byte probe**로 고정한다. CRL
 
 `JudgeScoringResult`는 target evaluation ID와 row count, `ndcg_at_10`, `recall_at_10`,
 `ndcg_at_24`, 그리고 `ProbabilityMetricResult`를 담는다. probability 결과는 `roc_auc`,
-`pr_auc`, `log_loss`, `brier`, `GroupedRocAuc`를 포함한다. 기존 `evaluate.py`의 같은 계산을
+`row_count`, `positive_count`, `negative_count`, `roc_auc`, `pr_auc`, `log_loss`, `brier`,
+`GroupedRocAuc`를 포함한다. 양성·음성 중 한 클래스가 없으면 전역 probability metric은
+예외 대신 `None`으로 구조화해 P0-2C가 `metric_unavailable`로 판정할 수 있게 한다. 기존
+`evaluate.py`의 같은 계산을
 `model_evaluation/probability_metrics.py`의 순수 interface로 먼저 이동하고 기존 CLI가 이를
 호출하게 해 Judge와 정의가 갈라지지 않게 한다. 지표별 coverage gate와 `None` 판정은
 P0-2C가 결과를 소비하면서 적용한다.

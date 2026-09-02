@@ -601,9 +601,11 @@ P0-2B/C에는 final target factory를 두지 않으며, 후속 final registry Ta
       전부 `invalid_predictions`로 거부. 거부는 실행 실패이지 지표 0점이 아니다
   - [ ] 지표 산출: `JudgeScoringResult`에 primary `ndcg_at_10`, ranking guardrail
         `recall_at_10`·`ndcg_at_24`,
-      probability guardrail은 `labels/scores/groups`를 받는 순수
-      `model_evaluation/probability_metrics.py`로 기존 `evaluate.py` 계산을 동작 변경 없이 먼저
-      추출하고 기존 CLI와 Judge가 함께 사용한다. 구조 추출과 Judge 동작 추가는 별도 커밋이다
+        probability guardrail은 `labels/scores/groups`를 받는 순수
+        `model_evaluation/probability_metrics.py`로 기존 `evaluate.py` 계산을 동작 변경 없이 먼저
+        추출하고 기존 CLI와 Judge가 함께 사용한다. 결과에는 row·positive·negative count를
+        포함하고 단일 클래스 전역 지표는 `None`으로 구조화한다. 구조 추출과 Judge 동작 추가는
+        별도 커밋이다
 - [ ] 테스트: schema·artifact 계약 위반, evaluation ID 불일치, key 누락·중복·extra,
       `[0,1]` 범위 위반, prediction이 target split을 선택하지 못함, 직접 target 생성과 final
       factory 부재, ranking metric 결합과 기존 probability metric 의미 보존

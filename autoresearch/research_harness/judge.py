@@ -171,7 +171,9 @@ def build_validation_target(
         ) from None
     if verified_handoff != handoff:
         raise JudgeError(JudgeErrorCode.INVALID_TARGET, "target_identity")
-    return JudgeEvaluationTarget._from_verified(verified_handoff, manifest)
+    target = JudgeEvaluationTarget._from_verified(verified_handoff, manifest)
+    _load_verified_target_rows(target)
+    return target
 
 
 def parse_prediction_copy(prediction_copy: Path) -> tuple[PredictionRow, ...]:
@@ -294,7 +296,11 @@ def _join_target_rows(
     slate_by_key: dict[tuple[str, str], str] = {}
     for row in slate_rows:
         key = (str(row["slate_id"]), str(row["video_id"]))
-        if row["evaluation_id"] != evaluation_id or key in slate_by_key:
+        if (
+            row["evaluation_id"] != evaluation_id
+            or key in slate_by_key
+            or not all(_target_identifier_is_encodable(value) for value in key)
+        ):
             raise ValueError
         slate_by_key[key] = str(row["user_id"])
 
@@ -368,6 +374,18 @@ def _is_canonical_ascii(token: bytes) -> bool:
         all(0x20 <= byte <= 0x7E for byte in token)
         and b'"' not in token
         and token == token.strip()
+    )
+
+
+def _target_identifier_is_encodable(value: str) -> bool:
+    try:
+        token = value.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    return (
+        0 < len(token) <= _MAX_IDENTIFIER_BYTES
+        and _is_canonical_ascii(token)
+        and b"," not in token
     )
 
 

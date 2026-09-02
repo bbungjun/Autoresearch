@@ -39,10 +39,13 @@ class GroupedRocAuc:
 class ProbabilityMetricResult:
     """한 score 배열에서 함께 계산한 probability metric 결과."""
 
-    roc_auc: float
-    pr_auc: float
-    log_loss: float
-    brier: float
+    row_count: int
+    positive_count: int
+    negative_count: int
+    roc_auc: float | None
+    pr_auc: float | None
+    log_loss: float | None
+    brier: float | None
     grouped_roc_auc: GroupedRocAuc | None
 
 
@@ -53,11 +56,28 @@ def probability_metrics(
 ) -> ProbabilityMetricResult:
     """동일한 labels·scores에서 전역 및 선택적 그룹 확률 지표를 계산한다."""
 
+    if len(labels) != len(scores) or (
+        groups is not None and len(labels) != len(groups)
+    ):
+        raise ValueError("probability metric inputs must have equal lengths")
+    if any(label not in (0, 1) for label in labels):
+        raise ValueError("probability metric labels must be binary")
+    row_count = len(labels)
+    positive_count = sum(label == 1 for label in labels)
+    negative_count = row_count - positive_count
+    has_both_classes = positive_count > 0 and negative_count > 0
     return ProbabilityMetricResult(
-        roc_auc=float(roc_auc_score(labels, scores)),
-        pr_auc=float(average_precision_score(labels, scores)),
-        log_loss=float(log_loss(labels, scores)),
-        brier=float(brier_score_loss(labels, scores)),
+        row_count=row_count,
+        positive_count=positive_count,
+        negative_count=negative_count,
+        roc_auc=float(roc_auc_score(labels, scores)) if has_both_classes else None,
+        pr_auc=(
+            float(average_precision_score(labels, scores))
+            if has_both_classes
+            else None
+        ),
+        log_loss=float(log_loss(labels, scores)) if has_both_classes else None,
+        brier=float(brier_score_loss(labels, scores)) if has_both_classes else None,
         grouped_roc_auc=(
             grouped_roc_auc(labels, scores, groups) if groups is not None else None
         ),
