@@ -977,7 +977,7 @@ domain의 같은 `evaluate(..., final_grant=...)` interface로 접근하고 결�
 **결과.** seed에 따라 첫 candidate를 discard하고 두 번째 candidate를 promote하는 2-trial
 시나리오, candidate 생성 실패 후 다음 trial 계속, trial/time budget 종료 뒤 terminal final 실행,
 registry 거부 시 final 미실행, 동일 ledger 재개 시 planner memory 재생과 runner 무호출을 검증했다.
-집중 검증 50개와 Research Harness 전체 `478 passed, 11 skipped`가 통과했고 저장소 전체 Ruff와
+집중 검증 51개와 Research Harness 전체 `479 passed, 11 skipped`가 통과했고 저장소 전체 Ruff와
 `git diff --check`도 통과했다. 아직 실제 coding agent와 `LocalRunner`를 조립하는 production
 adapter, 재학습 `harness-predict` CLI, baseline sigma 실측은 없으며 각각 Task 6과 Task 7의
 의도적인 후속 범위다.
