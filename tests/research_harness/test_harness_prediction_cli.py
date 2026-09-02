@@ -1,21 +1,29 @@
 """로컬 재학습 CLI의 설정·배선·안전한 출력 계약을 검증한다."""
 
 import json
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
+from click import unstyle
 import pyarrow as pa
 import pytest
+from rich.console import Console
+from typer import rich_utils
 from typer.testing import CliRunner
 
 from autoresearch.cli import app
 from autoresearch.feature_engineering.model_contract import FeatureContractError
 
 
-def test_harness_predict_requires_seed() -> None:
-    result = CliRunner().invoke(app, ["harness-predict", "--slate", "slate.parquet", "--out", "out.csv"])
+@pytest.mark.parametrize("color", [False, True])
+def test_harness_predict_requires_seed(monkeypatch, color: bool) -> None:
+    monkeypatch.setattr(rich_utils, "Console", partial(Console, legacy_windows=False))
+    monkeypatch.setattr(rich_utils, "FORCE_TERMINAL", color)
+    monkeypatch.setattr(rich_utils, "COLOR_SYSTEM", "standard" if color else None)
+    result = CliRunner().invoke(app, ["harness-predict", "--slate", "slate.parquet", "--out", "out.csv"], color=color)
     assert result.exit_code == 2
-    assert "--seed" in result.output
+    assert "Missing option '--seed'" in unstyle(result.output)
 
 
 def test_baseline_defaults_match_existing_training_config() -> None:

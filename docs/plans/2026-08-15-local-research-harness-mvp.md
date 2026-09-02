@@ -1389,6 +1389,15 @@ pandas 2.3.3, PyArrow 21.0.0으로 오프라인 실행했다. 입력 manifest SH
 **797 passed, 11 skipped (137.91초)**였다. 독립 리뷰에서 추가 차단 사항은 없으며
 CI·PR 반영 결과는 확인 후 이어서 기록한다.
 
+**CI 발견·수정:** PR #50의 첫 Linux 전체 검사에서 새 seed 필수 옵션 테스트가 실패했다
+(Python 3.11: 3,606 passed, 123 skipped, 1 failed). CLI는 정상적으로 exit 2였지만
+Rich 색상 코드가 `--seed` 문자열 사이에 들어가 원시 출력 assertion이 실패했다.
+색상 출력/무색 출력을 명시한 회귀로 로컬에서도 **1 passed, 1 failed**를 재현했다.
+기존 CLI 테스트와 같은 `click.unstyle`로 장식만 제거하고 정확한 missing-option 메시지와
+exit code를 검사한다. 제품 오류 처리나 필수 seed 계약을 느슨하게 바꾸지 않았다.
+수정 후 신규 core/CLI는 **56 passed (9.70초)**이며 전체 Ruff·diff check를 통과했다.
+Python 3.12의 첫 CI도 같은 한 테스트만 실패했음을 확인했다.
+
 ## Task 7: 지표별 baseline σ 측정 + end-to-end 완주
 
 앞선 Task가 전부 머지된 뒤에만 가능하다. σ 측정에 `harness-predict`(Task 6)와
