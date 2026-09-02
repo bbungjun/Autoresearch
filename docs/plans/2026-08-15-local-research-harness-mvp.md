@@ -766,7 +766,9 @@ subprocess 회수와 final 단일 소비는 각각 Task 5a와 Task 4/5b에 남�
 
 ## Task 4: Trial Ledger + checkpoint
 
-- [ ] `ledger.py` — `experiment-ledger.jsonl` append-only
+- [ ] `ledger.py` — `experiment-ledger.jsonl` append-only. 공개 interface는
+      `open_trial_ledger(path)`, `append(TrialRecord | CheckpointRecord)`, `read_state()`로 제한하고
+      process lock, canonical JSONL, 연속 sequence, file `fsync`를 내부에서 소유한다
 - [ ] `consumption_registry.py` — 필수 harness 설정
       `harness-run --judge-state-root <absolute-path>`를 정규화한 **고정 절대 경로** 아래
       `final-holdout-consumed/<evaluation_id>` marker를 둔다. state root는
@@ -774,19 +776,30 @@ subprocess 회수와 final 단일 소비는 각각 Task 5a와 Task 4/5b에 남�
       읽기·marker 생성·`fsync` 불가는 모두 final 평가 시작 전 fail-closed하고, 임시 경로를
       만들거나 fallback하지 않는다
 - [ ] final 평가 시작 전에 marker를 `O_CREAT|O_EXCL`로 생성하고 metadata를 쓴 뒤 file과
-      parent directory를 `fsync`한다. 이미 있으면 두 번째 평가를 거부한다
+      parent directory를 `fsync`한다. 이미 있으면 두 번째 평가를 거부한다. `O_EXCL` 생성에
+      성공한 뒤 어떤 write/sync가 실패해도 marker는 삭제하지 않고 소비된 상태로 남긴다
+- [ ] registry는 검증된 handoff에서 final ID를 가져와 opaque `FinalConsumptionGrant`를 발급하고,
+      `judge.build_final_target(handoff, grant)`만 같은 handoff의 final artifact를 열 수 있다.
+      registry는 snapshot을 먼저 재검증하며 grant를 fingerprint·manifest digest·final ID·marker
+      evidence에 결속한다. grant 직접 생성, 다른 handoff 재사용, handoff 단독 final target
+      생성을 거부한다
 - [ ] trial당 기록: `trial_id`, 기준/candidate SHA, diff fingerprint, `evaluation_id`,
       seed, 전체 지표, decision과 reason_code, 소요 시간, 실패 reason code, champion lineage
 - [ ] validation trial과 final holdout을 구분하고 ledger에는 registry marker의 경로·digest를
       증거로 기록한다. 소비 권한은 ledger가 아니라 전역 registry가 소유한다
 - [ ] 단계별 idempotent checkpoint — 프로세스 종료 후 마지막 완료 단계부터 재개.
       **Job 전체 재실행을 기본 재시도 단위로 쓰지 않는다**(spec 7.2)
+- [ ] `read_state()`는 마지막 sequence, 순서 보존 record, 완료 checkpoint ID, registry evidence를
+      불변 `TrialLedgerState`로 반환한다. trial/checkpoint key의 동일 payload 재호출은 no-op,
+      다른 payload 재호출은 conflict로 거부한다. 마지막 newline 뒤 불완전 bytes만 복구하고
+      newline-terminated 오류·중간 손상·sequence 단절·중복 key는 fail-closed한다
 - [ ] 테스트: 중단 후 재개가 완료 단계를 건너뜀, 같은 trial 중복 append 방지,
       ledger의 손상된 마지막 줄 복구. 별도 테스트에서 새 run·새 ledger·동시 Controller가
       같은 `evaluation_id`를 소비하지 못함, marker 생성 뒤 crash해도 재평가 거부,
       손상 marker도 존재만으로 소비 처리함, root 부재·접근 불가 시 final 미시작을 고정한다.
       이전 evidence가 기록한 marker가 사라진 경우 상태 무결성 위반으로 fail-closed하고
-      marker를 재생성하지 않는다. ledger 마지막 줄 복구를 registry에 적용하지 않는다
+      marker를 재생성하지 않는다. Task 5는 복구한 evidence를 registry claim에 반드시 전달한다.
+      ledger 마지막 줄 복구를 registry에 적용하지 않는다
 
 **검증:** `uv run python -m pytest tests/research_harness/test_ledger.py -v`
 
