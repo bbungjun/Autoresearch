@@ -822,10 +822,11 @@ evidence 소실, Ledger의 thread·process 동시 append, 멱등 재시도, chec
 구현 후 측정하며, 동일 OS 사용자가 상태 루트를 삭제하는 공격 방지는 MVP 범위 밖에 남긴다.
 독립 리뷰에서는 상위 Judge root로 두 번째 registry를 만들 수 있는 문제, marker 없는 grant
 발급 우회, 새 재개 시각에 따른 정상 evidence 오판, 비정본 JSONL 수용, Windows 잠금 오류의
-무한 재시도, 동기화 실패 재시도 우회와 lock hardlink 변조를 발견했다. 이를 10개의 실패 반례로
+무한 재시도, 동기화 실패 재시도 우회, lock hardlink 변조와 crash 후 빈 lock의 영구 실패를
+발견했다. 이를 11개의 실패 반례로
 재현한 뒤, snapshot의 canonical state root 결속, 실제 marker digest 재검증, canonical physical
 line 비교, 잠금 오류 분류, lock path↔descriptor identity와 재시도 가능한 공통 directory sync
-경계로 수정했다. Task 4 최종 수정 뒤 Research Harness 전체 회귀는 440개 통과·7개 환경 의존
+경계로 수정했다. Task 4 최종 수정 뒤 Research Harness 전체 회귀는 441개 통과·7개 환경 의존
 skip이었고, 저장소 전체 Ruff 검사도 통과했다.
 
 ---
