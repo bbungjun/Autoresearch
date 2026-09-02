@@ -466,6 +466,59 @@ candidate view v2의 manifest/version·시점 선택·누락 처리·해시·fin
 테스트한다. 기존 피처 조립 helper가 운영 Feast의
 계산과 동일한지도 대조하여, 이름만 같은 21개 컬럼을 만들고 재현했다고 주장하지 않는다.
 
+### 4.6 Task 6 로컬 피처 조립 계약 (#44)
+
+이 절은 로컬 Harness baseline의 계산 계약이다. 운영 Feast/BQ를 호출하거나 운영
+champion을 재현하지 않는다. 공개 모델 입력 순서는 기존
+`feature_engineering.model_contract.MODEL_FEATURE_COLUMNS`의 21개 컬럼을 유지한다.
+사용자/영상 ID와 시각, 라벨, missing 진단은 모델 입력에 넣지 않는다.
+
+**입력과 출력.** `research_harness.local_features.build_local_features`는 요청 Arrow
+table과 허용 history, 정규화된 사용자/영상 metadata, 임베딩 adapter, history 시작일과
+평가 시작일을 받는다. 요청의 `user_id`, `video_id`, UTC-aware `event_timestamp`를
+기준으로 계산하고 순서·중복 요청을 보존한다. 결과는 21개 피처 table과 같은 순서의
+진단 table을 분리한 `LocalFeatureBatch`다. 파일·receipt 검증과 학습 라벨 생성은
+이 순수 계산 interface의 책임이 아니다. 상위 loader가 검증된 파티션 기간을 전달해야
+하며, history의 중복 event ID·잘못된 타입/값·허용 기간 밖 이벤트는 실패시킨다.
+
+**시점과 행동 집계.** 요청 시각을 KST 날짜로 바꾼 뒤 그날 자정 `d`를 구한다.
+최근 행동은 `[d-7일, d)`, 선호 이력은 `[d-30일, d)`이며 당일 행동은 제외한다.
+history는 항상 평가 시작일 `T` 미만이다. 평가 기간 후반의 요청에도 평가 행동을
+추가하지 않는다. 사용자/영상 metadata는 요청 시각 이하 최신 행, 과거 반응의 영상
+카테고리는 그 **반응 이벤트 시각 이하** 최신 행만 사용한다.
+
+| 피처 묶음 | 로컬 baseline 계산 |
+| --- | --- |
+| 정적 사용자 3개 | 나이를 10s/20s/30s/40s/50s+로 구분, 직업 원본 보존, 시청 시간대는 기존 morning/evening/night alias와 unknown 규칙 적용 |
+| 최근 행동 5개 | raw click/view/like 각각의 개수, view의 watch_time_sec 합, impression을 포함한 전체 이벤트 수 |
+| historical_category_affinity | 30일 raw click/view/like의 최빈 카테고리, 동률은 카테고리 문자열 오름차순, 미관측은 unknown |
+| 영상·채널 9개 | 관측된 category/duration/view/channel 값, like와 comment를 view로 나눈 비율(분모 0은 0), 관측 available_at과 published_at의 KST 날짜 차이 |
+| 상호작용 3개 | 키워드별 query 벡터와 카테고리 설명 document 벡터의 최대 cosine(소수 4자리), 원본 primary_categories 포함 여부, 과거 선호와 영상 카테고리 일치 여부 |
+
+**기존 경로와의 차이.** `assembly.compute_point_in_time_user_features`는 wide event에서
+시청 시간을 이용해 view 수와 전체 이벤트 수를 근사한다. 이 경로는 long-format의 실제
+event_type을 센다. 운영 BQ 집계는 snapshot 이전 최신 영상 카테고리를 과거 반응에
+조인하지만, Harness는 각 반응 시각 이하 관측만 사용하여 과거 카테고리를 소급하지 않는다.
+영상 비율은 기존 DuckDB helper의 소수 4자리 사전 반올림 없이 계산한다.
+운영 `jobs.feature_store_build`는 영상 나이에 collected_at의 UTC 날짜를 쓰지만, v2는
+collected_at과 trending 시각 중 최댓값인 available_at만 전달하므로 해당 관측의 KST
+날짜를 쓴다. 요청일을 사용해 오래된 영상 관측의 나이를 매번 갱신하지 않는다.
+이 차이들은 로컬 baseline의 명시적 정의이며 운영 동일성이나 품질 향상을 뜻하지 않는다.
+
+**누락과 임베딩.** 정상 미관측에는 모델 계약의 범주형 unknown/수치형 0을 적용한다.
+빈 관심 목록·미관측 영상의 similarity는 0이며, 임의의 기본 카테고리로 임베딩하지 않는다.
+원본 선호 카테고리를 키워드 fallback으로 덮어쓰지 않는다. 임베딩 adapter의
+`encode(texts, *, role)`은 query/document 역할과 입력 순서를 보존하는 2차원 NumPy
+배열을 반환한다. 소비 helper가 행 수·양의 차원·유한값·영벡터 여부를 검사하고 L2
+정규화를 수행하며, 두 역할의 차원도 일치해야 한다. 모델별 차원은 고정하지 않으며
+잘못된 벡터를 0으로 숨기지 않는다.
+테스트 adapter와 실제 GPU adapter의 검증 결과를 구분한다.
+
+**진단.** 각 요청의 사용자/영상 metadata 미관측 여부와 7일/30일 history 기간 충족 여부를
+별도로 반환한다. 기간 충족은 요청 window가 전달받은 history 기간 안에 있다는 뜻이지
+사용자 활동이 존재한다는 뜻이 아니다. 기간 밖의 짧은 history를 완전한 관측으로 표시하지
+않는다. 상위 재학습/REPORT 경로가 이 진단을 집계·보존한다.
+
 ## 5. 목표 아키텍처
 
 아래는 MVP 이후 논문 계층까지 포함한 최종 구조다. MVP에서는 사람이 준 가설과
