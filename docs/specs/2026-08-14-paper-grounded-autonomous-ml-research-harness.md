@@ -660,6 +660,32 @@ metric `None`, ranking·grouped·item coverage 부족, symlink, 65 MiB 초과, s
 | `revise` | `Δ_ndcg_at_10 ≥ 2σ_ndcg_at_10`이지만 하나 이상의 guardrail `Δ_metric < -1σ_metric` |
 | `discard` | 그 외 |
 
+#### P0-2D ResearchDomain interface
+
+MVP의 `ResearchDomain` interface는 후속 Controller가 알아야 하는 다섯 동작만 노출한다.
+아직 존재하지 않는 `CandidateArtifact`·`TrialResult` 임시 모델을 만들지 않고 완료된 P0-1/2의
+typed 계약을 그대로 사용한다.
+
+- `build_evaluation_snapshot(request, *, source=None) -> EvaluationSnapshotReceipt`
+- `validate_candidate(candidate_prediction, judge_copy) -> SealedPredictionReceipt`
+- `evaluate(handoff, sealed_prediction) -> JudgeScoringResult`
+- `compare(pair) -> ScreeningResult` 또는
+  `compare(pairs, *, baseline_sigmas) -> ConfirmationDecision`
+- `describe_capabilities() -> Never` — Paper Discovery 전에는
+  `DomainErrorCode.CAPABILITIES_UNAVAILABLE`로만 실패한다.
+
+`evaluate()`는 validation handoff에서 opaque target을 내부 생성해 봉인 receipt와 함께
+채점한다. 따라서 Controller가 `JudgeEvaluationTarget`이나 parser 행을 알 필요가 없다.
+`compare()`는 단일 `PairedJudgeResult`를 받으면 P0-2C의 screening 비용 gate를, sequence를
+받으면 5-seed confirmation 판정을 그대로 반환한다. confirmation에서 sigma map이 빠지면
+P0-2C의 기존 `invalid_comparison_input`으로 fail-closed한다. 이로써 Controller는 구체
+`screen_candidate()`·`compare_confirmation()`을 직접 알지 않고 실행 fidelity를 선택할 수 있다.
+
+`describe_capabilities()`의 반환 모델은 실제 Paper Discovery 요구사항이 생길 때 정의한다.
+MVP에서 비어 있는 capability 객체나 문자열 map을 먼저 만들면 호출자가 존재하지 않는
+데이터·모델 역량을 사실로 오해할 수 있으므로, 현재 interface는 명시적인 typed 미지원
+오류만 계약한다.
+
 고정 비율은 그 값이 실제 seed 잡음보다 큰지 알려 주지 않는다. 자율 루프가 수십 trial을
 반복하면 우연히 좋아 보이는 결과가 누적되므로, baseline에서 실측한 잡음에 상대적인
 임계값을 사용한다. 다만 seed 5개의 표본 표준편차로 모분산을 정확히 안다고 볼 수 없으므로

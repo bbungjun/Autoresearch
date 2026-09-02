@@ -680,6 +680,11 @@ Task 5b Controller보다
 - [ ] `domain.py`에 spec 5.1의 다섯 메서드
       (`describe_capabilities`, `build_evaluation_snapshot`, `validate_candidate`, `evaluate`,
       `compare`)를 가진 `ResearchDomain` ABC를 정의한다
+- [ ] 현재 typed interface는 `EvaluationSnapshotRequest`→`EvaluationSnapshotReceipt`,
+      candidate/Judge `Path`→`SealedPredictionReceipt`, `JudgeSnapshotHandoff` + sealed receipt
+      →`JudgeScoringResult`, 단일 `PairedJudgeResult`→`ScreeningResult`, 5-seed pair sequence +
+      지표별 σ map→`ConfirmationDecision`으로 고정한다. 아직 없는 Candidate/Trial 임시 모델은
+      만들지 않는다
 - [ ] `YouTubeCTRDomain`은 MVP에서 실제 필요한 `build_evaluation_snapshot()`,
       `validate_candidate()`, `evaluate()`, `compare()`를 Task 1·2b·2c 구현에 위임한다.
       논문 발견이 없는 MVP에서 호출하지 않는 `describe_capabilities()`는 명시적 미지원

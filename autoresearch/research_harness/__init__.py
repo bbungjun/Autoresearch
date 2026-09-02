@@ -5,7 +5,7 @@ label-free slate와 Judge 전용 label artifact를 조립하는 경계를 담당
 
 [기능] Stage B의 공개 요청·receipt·error·source seam과 snapshot builder, Stage C의
 fixture/candidate handoff typed contract, canonical identity helper, P0-2A ranking metric,
-P0-2B scoring 및 P0-2C 봉인 ingestion·판정 interface를 제공한다.
+P0-2B scoring, P0-2C 봉인 ingestion·판정 및 P0-2D domain interface를 제공한다.
 
 [비책임] action log 생성(autoresearch.action_log_generation), 후보 학습·실행,
 실제 baseline sigma 측정과 반복 Controller를 담당하지 않는다.
@@ -14,6 +14,12 @@ P0-2B scoring 및 P0-2C 봉인 ingestion·판정 interface를 제공한다.
 from autoresearch.research_harness.evaluation_errors import (
     EvaluationSnapshotError,
     SnapshotErrorCode,
+)
+from autoresearch.research_harness.domain import (
+    DomainError,
+    DomainErrorCode,
+    ResearchDomain,
+    YouTubeCTRDomain,
 )
 from autoresearch.research_harness.evaluation_snapshot_models import (
     EvaluationSnapshotReceipt,
@@ -83,6 +89,8 @@ __all__ = [
     "CandidateDataViewRequest",
     "CandidateHistoryReceipt",
     "ConfirmationDecision",
+    "DomainError",
+    "DomainErrorCode",
     "EvaluationSnapshotError",
     "EvaluationSnapshotReceipt",
     "EvaluationSnapshotRequest",
@@ -103,11 +111,13 @@ __all__ = [
     "RankingMetricError",
     "RankingMetricErrorCode",
     "RankingMetricResult",
+    "ResearchDomain",
     "ScreeningResult",
     "SealedPredictionReceipt",
     "SnapshotErrorCode",
     "StageCError",
     "StageCErrorCode",
+    "YouTubeCTRDomain",
     "build_evaluation_snapshot",
     "build_local_evaluation_fixture",
     "build_validation_target",
