@@ -6,6 +6,8 @@ Judge handoff를 재검증하고 validation slate와 과거 action log만 별도
 [기능] source provenance·Judge state/source와 destination의 격리·filesystem identity·
 Parquet receipt를 fail-closed로 확인하고, candidate-safe canonical manifest와 독립 byte
 copy를 write-once atomic directory로 materialize한다.
+명시적으로 선택한 v2 경로는 검증된 fixture의 metadata를 한 번 준비하고 동일한 게시
+검증을 거쳐 두 metadata 파일을 추가한다. 기존 v1 interface는 그대로 유지한다.
 
 [비책임] git worktree·subprocess argv·환경·credential 구성, final holdout 소비 권한과
 소비 registry, metric/Judge 판정은 후속 Task 3/P0-2가 담당한다.
@@ -13,8 +15,8 @@ copy를 write-once atomic directory로 materialize한다.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import asdict, dataclass
+from datetime import date, datetime
 from hashlib import sha256
 import os
 from pathlib import Path
@@ -24,10 +26,15 @@ from tempfile import mkdtemp
 from typing import BinaryIO, Final
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from pydantic import ValidationError
 
-from autoresearch.research_harness.evaluation_artifacts import canonical_json_bytes
+from autoresearch.research_harness.candidate_metadata import (
+    _USER_SCHEMA, _VIDEO_SCHEMA,
+    normalize_user_metadata, normalize_video_metadata, select_metadata_as_of,
+)
+from autoresearch.research_harness.evaluation_artifacts import WRITER_OPTIONS, canonical_json_bytes
 from autoresearch.research_harness.evaluation_snapshot_models import (
     ArtifactReceipt,
 )
@@ -36,11 +43,19 @@ from autoresearch.research_harness.evaluation_source_models import SourcePartiti
 from autoresearch.research_harness.fixture_errors import StageCError, StageCErrorCode
 from autoresearch.research_harness.fixture_models import (
     CandidateDataManifest,
+    CandidateDataManifestV2,
     CandidateDataViewReceipt,
     CandidateDataViewRequest,
     CandidateHistoryReceipt,
+    FixtureDescriptor,
+    FixtureInputReceipt,
+    FixturePartitionReceipt,
+    JudgeSnapshotHandoff,
+    PreparedCandidateMetadata,
+    PreparedMetadataArtifact,
 )
 from autoresearch.research_harness.local_evaluation_fixture import (
+    FixtureActionLogSource,
     _acquire_descriptor_lock,
     _io_path,
     _open_lock_matches,
@@ -72,6 +87,39 @@ def materialize_candidate_data_view(
 ) -> CandidateDataViewReceipt:
     """Materialize the validation-only data allowed inside a candidate workspace."""
 
+    return _materialize_candidate_data_view(request, source=source, metadata=None)
+
+
+def materialize_candidate_data_view_v2(
+    request: CandidateDataViewRequest,
+    *,
+    source: ActionLogSource,
+    metadata: PreparedCandidateMetadata,
+) -> CandidateDataViewReceipt:
+    """준비한 validation metadata를 포함한 v2를 write-once로 게시한다.
+
+    Args:
+        request: 검증할 Judge handoff와 독립 destination root.
+        source: snapshot과 동일한 action log source.
+        metadata: prepare_candidate_metadata가 같은 평가용으로 준비한 불변 bundle.
+
+    Returns:
+        두 metadata 파일의 receipt를 포함하는 v2 manifest와 전체 view digest.
+
+    Raises:
+        StageCError: 입력 identity·파일 무결성·기존 target이 일치하지 않는 경우.
+    """
+    if not isinstance(metadata, PreparedCandidateMetadata):
+        raise _error(StageCErrorCode.CANDIDATE_VIEW_CONFLICT, "metadata_bundle_required")
+    return _materialize_candidate_data_view(request, source=source, metadata=metadata)
+
+
+def _materialize_candidate_data_view(
+    request: CandidateDataViewRequest,
+    *,
+    source: ActionLogSource,
+    metadata: PreparedCandidateMetadata | None,
+) -> CandidateDataViewReceipt:
     destination_root = request.destination_root
     _require_safe_request(destination_root, request.judge.snapshot_root)
     handoff, manifest = _validated_judge_snapshot(
@@ -132,6 +180,28 @@ def materialize_candidate_data_view(
             for receipt in history
         ),
     )
+    if metadata is not None:
+        if (
+            metadata.snapshot_fingerprint != request.judge.snapshot_fingerprint
+            or metadata.evaluation_id != candidate_manifest.evaluation_id
+        ):
+            raise _error(StageCErrorCode.CANDIDATE_VIEW_CONFLICT, "metadata_evaluation_identity")
+        try:
+            candidate_manifest = CandidateDataManifestV2.model_validate({
+                **candidate_manifest.model_dump(),
+                "contract_version": "candidate-data-view-v2",
+                "metadata_contract": "candidate-metadata-v1",
+                "user_metadata": asdict(metadata.users.receipt),
+                "video_metadata": asdict(metadata.videos.receipt),
+            })
+            requests = _validation_requests(
+                _read_verified_local(slate_source, manifest.validation.artifacts.slate),
+                history_payloads,
+            )
+            for key, artifact in (("user_id", metadata.users), ("video_id", metadata.videos)):
+                _validate_metadata_artifact(artifact, requests, key)
+        except (ValidationError, OSError, pa.ArrowException, ValueError, OverflowError):
+            raise _error(StageCErrorCode.CANDIDATE_VIEW_CONFLICT, "metadata_bundle_validation") from None
     manifest_bytes = canonical_json_bytes(candidate_manifest.model_dump(mode="json"))
     manifest_digest = sha256(manifest_bytes).hexdigest()
     target = destination_root / _TARGET_NAME
@@ -174,6 +244,7 @@ def materialize_candidate_data_view(
                         history_payloads,
                         manifest_bytes,
                         slate_identity,
+                        metadata,
                     )
                     if not _view_is_valid(
                         staging,
@@ -215,6 +286,7 @@ def _write_staging(
     history_payloads: tuple[_SourcePayload, ...],
     manifest_bytes: bytes,
     slate_identity: tuple[int, int],
+    metadata: PreparedCandidateMetadata | None = None,
 ) -> None:
     source_slate = snapshot_root.joinpath(*slate.relative_path.split("/"))
     slate_payload = _io_path(source_slate).read_bytes()
@@ -234,6 +306,12 @@ def _write_staging(
             receipt,
             source_identity=source_payload.identity,
         )
+    if metadata is not None:
+        for artifact in (metadata.users, metadata.videos):
+            _copy_verified_payload(
+                artifact.payload, staging / artifact.receipt.relative_path, artifact.receipt,
+                source_identity=None,
+            )
     (staging / _MANIFEST_NAME).write_bytes(manifest_bytes)
 
 
@@ -442,17 +520,22 @@ def _view_is_valid(
         "history/action_log",
         *(f"history/action_log/dt={receipt.dt.isoformat()}" for receipt in expected.history_partitions),
     }
+    metadata_receipts = ()
+    if isinstance(expected, CandidateDataManifestV2):
+        metadata_receipts = (expected.user_metadata, expected.video_metadata)
+        files.update(receipt.relative_path for receipt in metadata_receipts)
+        directories.add("metadata")
     try:
         if not _safe_tree(root) or not _tree_is_exact(
             root, frozenset(files), frozenset(directories)
         ):
             return False
         manifest_bytes = _io_path(root / _MANIFEST_NAME).read_bytes()
-        parsed = CandidateDataManifest.model_validate_json(manifest_bytes)
+        parsed = type(expected).model_validate_json(manifest_bytes)
         if parsed != expected or manifest_bytes != expected_manifest_bytes:
             return False
-        receipts = (expected.slate, *expected.history_partitions)
-        source_identities = (slate_source_identity, *history_source_identities)
+        receipts = (expected.slate, *expected.history_partitions, *metadata_receipts)
+        source_identities = (slate_source_identity, *history_source_identities, *[None for _ in metadata_receipts])
         return all(
             _candidate_file_is_valid(
                 root,
@@ -529,3 +612,129 @@ def _lock_checked(
 
 def _error(code: StageCErrorCode, stage: str) -> StageCError:
     return StageCError(code=code, stage=stage)
+
+
+def prepare_candidate_metadata(
+    judge: JudgeSnapshotHandoff, *, source: ActionLogSource,
+) -> PreparedCandidateMetadata:
+    """검증된 fixture에서 validation에 허용된 metadata bytes를 한 번 준비한다.
+
+    Args:
+        judge: 평가 snapshot과 연결된 검증용 handoff.
+        source: 해당 fixture의 FixtureActionLogSource. 원격/임의 경로 입력은 받지 않는다.
+
+    Returns:
+        같은 평가의 baseline/candidate workspace에 재사용할 불변 Parquet bundle.
+
+    Raises:
+        StageCError: fixture·snapshot·원본 receipt·metadata schema가 잘못된 경우.
+    """
+    try:
+        handoff, snapshot = _validated_judge_snapshot(
+            judge.snapshot_root, expected_fingerprint=str(judge.snapshot_fingerprint),
+        )
+        if handoff != judge or type(source) is not FixtureActionLogSource:
+            raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "metadata_fixture_source")
+        _require_fixture_source_provenance(source, judge)
+        descriptor_bytes = _io_path(source._fixture_root / "fixture.json").read_bytes()
+        if sha256(descriptor_bytes).hexdigest() != source._descriptor_digest:
+            raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "metadata_descriptor_identity")
+        descriptor = FixtureDescriptor.model_validate_json(descriptor_bytes)
+        history = _load_history_payloads(source, snapshot.window.candidate_history_partitions)
+        slate = snapshot.validation.artifacts.slate
+        requests = _validation_requests(
+            _read_verified_local(judge.snapshot_root / slate.relative_path, slate), history,
+        )
+        users = normalize_user_metadata(pq.read_table(pa.BufferReader(_read_verified_local(
+            source._fixture_root / descriptor.virtual_users.relative_path, descriptor.virtual_users,
+        ))))
+        video_tables = [
+            normalize_video_metadata(pq.read_table(pa.BufferReader(_read_verified_local(
+                source._fixture_root / receipt.relative_path, receipt,
+            ))))
+            for receipt in descriptor.youtube_partitions
+        ]
+        videos = pa.concat_tables(video_tables).sort_by([("video_id", "ascending"), ("available_at", "ascending")])
+        # 파티션 간 중복도 필터 전에 검증한다. 미래/미허용 행이라고 손상을 숨기지 않는다.
+        select_metadata_as_of(
+            videos, requests.select(["video_id", "event_timestamp"]).slice(0, 0), entity_key="video_id",
+        )
+        bundle = PreparedCandidateMetadata(
+            snapshot_fingerprint=judge.snapshot_fingerprint,
+            evaluation_id=judge.validation_id,
+            users=_metadata_artifact(_eligible_metadata(users, requests, "user_id"), "metadata/users.parquet"),
+            videos=_metadata_artifact(_eligible_metadata(videos, requests, "video_id"), "metadata/videos.parquet"),
+        )
+        for key, artifact in (("user_id", bundle.users), ("video_id", bundle.videos)):
+            _validate_metadata_artifact(artifact, requests, key)
+        return bundle
+    except StageCError:
+        raise
+    except (OSError, ValueError, OverflowError, ValidationError, pa.ArrowException):
+        raise _error(StageCErrorCode.CANDIDATE_VIEW_CONFLICT, "metadata_prepare") from None
+
+
+def _read_verified_local(
+    path: Path, receipt: ArtifactReceipt | FixtureInputReceipt | FixturePartitionReceipt,
+) -> bytes:
+    path = _io_path(path)
+    identity = _safe_regular_file_identity(path)
+    if identity is None:
+        raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "metadata_source_alias")
+    payload = path.read_bytes()
+    if (
+        _safe_regular_file_identity(path) != identity
+        or sha256(payload).hexdigest() != receipt.sha256
+        or _payload_rows(payload) != receipt.rows
+    ):
+        raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "metadata_source_integrity")
+    return payload
+
+
+def _validation_requests(slate: bytes, history: tuple[_SourcePayload, ...]) -> pa.Table:
+    columns = ["user_id", "video_id", "event_timestamp"]
+    table = pq.read_table(pa.BufferReader(slate)).select(columns)
+    rows = table.to_pylist()
+    for item in history:
+        history_table = pq.read_table(pa.BufferReader(item.payload))
+        rows.extend(history_table.filter(pc.equal(history_table["event_type"], "impression")).select(columns).to_pylist())
+    return pa.Table.from_pylist(rows, schema=table.schema)
+
+
+def _eligible_metadata(table: pa.Table, requests: pa.Table, key: str) -> pa.Table:
+    latest: dict[str, datetime] = {}
+    for row in requests.select([key, "event_timestamp"]).to_pylist():
+        identifier, timestamp = row[key], row["event_timestamp"]
+        latest[identifier] = max(latest.get(identifier, timestamp), timestamp)
+    keep = [
+        row[key] in latest and row["available_at"] <= latest[row[key]]
+        for row in table.select([key, "available_at"]).to_pylist()
+    ]
+    return table.filter(pa.array(keep, type=pa.bool_()))
+
+
+def _metadata_artifact(table: pa.Table, relative_path: str) -> PreparedMetadataArtifact:
+    sink = pa.BufferOutputStream()
+    pq.write_table(table, sink, **asdict(WRITER_OPTIONS))
+    payload = sink.getvalue().to_pybytes()
+    return PreparedMetadataArtifact(
+        ArtifactReceipt(relative_path=relative_path, rows=table.num_rows, sha256=sha256(payload).hexdigest()),
+        payload,
+    )
+
+
+def _validate_metadata_artifact(
+    artifact: PreparedMetadataArtifact, requests: pa.Table, key: str,
+) -> None:
+    if sha256(artifact.payload).hexdigest() != artifact.receipt.sha256:
+        raise _error(StageCErrorCode.CANDIDATE_VIEW_CONFLICT, "metadata_bundle_digest")
+    table = pq.read_table(pa.BufferReader(artifact.payload))
+    if table.schema != (_USER_SCHEMA if key == "user_id" else _VIDEO_SCHEMA) or table.num_rows != artifact.receipt.rows:
+        raise _error(StageCErrorCode.CANDIDATE_VIEW_CONFLICT, "metadata_bundle_schema")
+    # 공개 selector로 값·중복을 검증하되 불필요한 미관측 출력 행은 만들지 않는다.
+    select_metadata_as_of(table, requests.select([key, "event_timestamp"]).slice(0, 0), entity_key=key)
+    if (
+        not _eligible_metadata(table, requests, key).equals(table)
+        or not table.sort_by([(key, "ascending"), ("available_at", "ascending")]).equals(table)
+    ):
+        raise _error(StageCErrorCode.CANDIDATE_VIEW_CONFLICT, "metadata_allowed_observations")

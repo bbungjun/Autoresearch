@@ -5,6 +5,7 @@ LocalRunner가 사용할 일회성 Git worktree를 준비하고, trial 종료 �
 
 [기능] 정확한 기준 SHA checkout, validation 전용 입력·예측 출력 경로, credential-free
 최소 프로세스 환경, 변경 내용 credential 검사와 ledger용 diff fingerprint를 제공한다.
+Prepared metadata를 명시적으로 주입하면 validation v2를 게시하고 전체 view digest를 전달한다.
 
 [비책임] candidate subprocess 실행·seed 전달·timeout 회수, final holdout 소비 권한,
 Judge 채점·ledger 기록, 기존 executor verifier 정책은 담당하지 않는다.
@@ -28,12 +29,14 @@ from typing import Protocol
 from applications.experiment_platform.executor.safety import contains_credential_value
 from autoresearch.research_harness.candidate_data_view import (
     materialize_candidate_data_view,
+    materialize_candidate_data_view_v2,
 )
 from autoresearch.research_harness.evaluation_source import ActionLogSource
 from autoresearch.research_harness.fixture_errors import StageCError
 from autoresearch.research_harness.fixture_models import (
     CandidateDataViewRequest,
     JudgeSnapshotHandoff,
+    PreparedCandidateMetadata,
 )
 
 
@@ -143,8 +146,13 @@ def open_candidate_workspace(
     request: CandidateWorkspaceRequest,
     *,
     source: ActionLogSource,
+    metadata: PreparedCandidateMetadata | None = None,
 ) -> Iterator[CandidateWorkspace]:
-    """정확한 SHA의 validation worktree를 열고 모든 종료 경로에서 회수한다."""
+    """정확한 SHA의 validation worktree를 열고 모든 종료 경로에서 회수한다.
+
+    metadata를 생략하면 v1, 준비한 bundle을 주면 v2 입력을 게시한다. Bundle은
+    process context에 전달하지 않으며 기존 candidate_view_sha256이 전체 입력을 식별한다.
+    """
 
     repository, workspace = _validate_request(request)
     created = False
@@ -165,9 +173,12 @@ def open_candidate_workspace(
         if head != request.base_sha or branch:
             raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "checkout_identity")
         try:
-            data_view = materialize_candidate_data_view(
-                CandidateDataViewRequest(request.judge, workspace),
-                source=source,
+            view_request = CandidateDataViewRequest(request.judge, workspace)
+            data_view = (
+                materialize_candidate_data_view(view_request, source=source)
+                if metadata is None else materialize_candidate_data_view_v2(
+                    view_request, source=source, metadata=metadata,
+                )
             )
         except StageCError:
             raise WorkspaceError(

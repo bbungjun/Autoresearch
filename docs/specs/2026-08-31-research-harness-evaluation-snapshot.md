@@ -1146,14 +1146,14 @@ git diff --check
 - P0-2-ready coverage를 만족하고 검증된 Judge handoff가 전체 snapshot을 정확히 가리킨다.
 - 독립 두 run 재생성과 동일 target reuse가 서로 다른 검증으로 통과한다.
 
-## 18. Task 6 — candidate metadata v2 계약 (2026-09-03 확정, 순수 변환·모델 구현)
+## 18. Task 6 — candidate metadata v2 계약 (2026-09-03, validation 게시·workspace 구현)
 
 상위 실행 기준은 [Research Harness spec §4.5](2026-08-14-paper-grounded-autonomous-ml-research-harness.md)다.
 이 절은 **v2 전체 목표와 부분 구현의 경계**를 기록한다. #40에서 §18.7의 순수 정규화·
 시점 선택과 `CandidateDataManifestV2` 모델을 구현했다. `CandidateDataManifest`는 여전히
-v1만 받으며 `candidate_data_view`는 validation slate와 history만 복사한다. v2 파일 게시·
-workspace/final 전달·checkpoint 결속은 아직 구현하지 않았다. 기존 v1 reader·fixture·
-evaluation fingerprint는 그대로 보존한다.
+v1만 받는다. #42는 별도 opt-in v2 파일 게시와 validation workspace 연결을 구현한다.
+인자를 생략한 기존 v1 경로는 slate와 history만 복사한다. final 전달·checkpoint 영속화는
+아직 구현하지 않았다. 기존 v1 reader·fixture·evaluation fingerprint는 그대로 보존한다.
 
 ### 18.1 전달 파일과 소유권
 
@@ -1330,5 +1330,28 @@ metadata receipt의 rows는 bool이 아닌 0 이상 정수, digest는 소문자 
 구현이 오류 테스트를 통과하지 않게 한다. 최초 RED에서는 제품 module 부재를 collection
 오류나 skip 대신 명시적인 assertion으로 확인했다. 실제 구현 후 같은 테스트가 GREEN이며,
 production stub·xfail은 추가하지 않았다.
-이 단계의 테스트는 실제 파일 게시·grant 검증·checkpoint 재개를 증명하지 않는다.
-해당 integration 테스트는 v2 materializer/workspace 연결 때 별도로 추가한다.
+§18.7의 테스트는 순수 계산만 검증한다. 실제 validation 파일 게시와 workspace는 §18.8의
+integration 테스트로 추가 검증하며, grant·checkpoint 재개는 여전히 후속이다.
+
+### 18.8 validation 파일 게시·workspace 연결 (#42, 구현 계약)
+
+이번 단계는 validation 전용이다. `prepare_candidate_metadata(judge, *, source)`는 검증된
+`FixtureActionLogSource`만 받아 원본 receipt를 대조하고, 허용 history의 impression과
+validation slate에서 entity별 최대 요청 시각을 구한다. 해당 ID의 그 시각 이하 관측만
+정규화·직렬화한다. final slate를 선택에 사용하지 않는다(기존 전체 fixture/snapshot
+무결성 검증은 그대로 수행한다). 원본 metadata 오류는 필터 전 검증에서 실패한다.
+
+결과 `PreparedCandidateMetadata`는 평가 ID·snapshot fingerprint와 두 Parquet의
+immutable bytes/receipt를 Harness 메모리에 보관한다. baseline/candidate는 같은 객체를
+재사용한다. 원본 경로·descriptor·seed는 candidate manifest와 process context에 없다.
+새 프로세스에서의 bundle 복구·checkpoint 결속과 final용 bundle 준비는 후속 계약이다.
+
+`materialize_candidate_data_view_v2(request, *, source, metadata)`는 기존 v1과 별도로
+명시적으로 선택한다. 기존 lock·staging·atomic rename·exact tree·독립 복사 검증을 재사용하고
+metadata hash/rows/schema 및 snapshot/evaluation identity를 재확인한다. 같은 target은
+정확히 같은 manifest와 파일일 때만 재사용한다. v1 target의 제자리 upgrade는 거부한다.
+
+`open_candidate_workspace(..., metadata=bundle)`은 v2를 게시하며, 인자를 생략하면 v1이다.
+workspace의 기존 `candidate_view_sha256`은 v2 manifest 전체 digest여서 metadata 변경도
+반영한다. 실패 시 workspace를 회수한다. 이 필드 제공이 Controller checkpoint 영속화까지
+완성했다는 뜻은 아니다. final 권한·registry와 모델 실행 경로는 이번 단계에서 변경하지 않는다.

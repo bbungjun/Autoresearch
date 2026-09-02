@@ -7,6 +7,7 @@ label-free slate와 Judge 전용 label artifact를 조립하는 경계를 담당
 fixture/candidate handoff typed contract, canonical identity helper, P0-2A ranking metric,
 P0-2B scoring, P0-2C 봉인 ingestion·판정, P0-2D domain interface, final 소비 registry와
 append-only Trial Ledger, LocalRunner 및 반복 ResearchController를 제공한다.
+Validation metadata 준비·v2 게시를 opt-in으로 제공하며 v1 소비 경로는 유지한다.
 
 [비책임] action log 생성(autoresearch.action_log_generation), candidate 코드 변경·학습 구현,
 실제 baseline sigma 측정, candidate coding adapter와 REPORT를 담당하지 않는다.
@@ -47,6 +48,8 @@ from autoresearch.research_harness.evaluation_snapshot_models import (
 from autoresearch.research_harness.evaluation_source import ActionLogSource
 from autoresearch.research_harness.candidate_data_view import (
     materialize_candidate_data_view,
+    materialize_candidate_data_view_v2,
+    prepare_candidate_metadata,
 )
 from autoresearch.research_harness.fixture_errors import StageCError, StageCErrorCode
 from autoresearch.research_harness.feedback import (
@@ -64,8 +67,11 @@ from autoresearch.research_harness.fixture_inputs import (
 )
 from autoresearch.research_harness.fixture_models import (
     CandidateDataManifest,
+    CandidateDataManifestV2,
     CandidateDataViewReceipt,
     CandidateDataViewRequest,
+    PreparedCandidateMetadata,
+    PreparedMetadataArtifact,
     CandidateHistoryReceipt,
     FixtureDescriptor,
     FixtureInputReceipt,
@@ -149,6 +155,9 @@ from autoresearch.research_harness.runner import (
 __all__ = [
     "ActionLogSource",
     "CandidateDataManifest",
+    "CandidateDataManifestV2",
+    "PreparedCandidateMetadata",
+    "PreparedMetadataArtifact",
     "CandidateDataViewReceipt",
     "CandidateDataViewRequest",
     "CandidateHistoryReceipt",
@@ -233,6 +242,8 @@ __all__ = [
     "build_local_evaluation_fixture",
     "build_validation_target",
     "materialize_candidate_data_view",
+    "materialize_candidate_data_view_v2",
+    "prepare_candidate_metadata",
     "canonical_fixture_dates",
     "claim_final_consumption",
     "compare_confirmation",

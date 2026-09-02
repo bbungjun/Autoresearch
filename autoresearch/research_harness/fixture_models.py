@@ -6,13 +6,15 @@
 [기능] Judge 전용 fixture descriptor·receipt와 candidate-safe data view manifest·receipt를
 제공하고 상대 경로 및 seed의 기본 계약을 fail-closed로 검증한다. Metadata v2 manifest는
 별도 모델에서 고정 경로·행 수·digest를 검증하며 기존 v1 reader 계약은 유지한다.
+Validation metadata의 prepared bytes/receipt는 Harness 메모리에서 불변 값으로 전달한다.
 
 [비책임] 실제 일일 producer 실행, snapshot build, handoff 재검증과 candidate view 게시는
 후속 Stage C orchestration 모듈이 담당한다.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
+from hashlib import sha256
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 from typing import Annotated, ClassVar, Final, Literal, Self
@@ -345,6 +347,32 @@ class CandidateDataManifestV2(CandidateDataManifest):
 
 
 @dataclass(frozen=True, slots=True)
+class PreparedMetadataArtifact:
+    """한 번 직렬화한 candidate-safe Parquet와 그 무결성 receipt."""
+
+    receipt: ArtifactReceipt
+    payload: bytes = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _validate_receipt(
+            self.receipt.relative_path, self.receipt.rows, self.receipt.sha256,
+            code=StageCErrorCode.CANDIDATE_VIEW_CONFLICT,
+        )
+        if not isinstance(self.payload, bytes) or sha256(self.payload).hexdigest() != self.receipt.sha256:
+            raise StageCError(StageCErrorCode.CANDIDATE_VIEW_CONFLICT, "metadata_payload_digest")
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedCandidateMetadata:
+    """Validation 입력으로 준비한 불변 bundle. 원본 경로와 생성 상태는 저장하지 않는다."""
+
+    snapshot_fingerprint: SnapshotFingerprint
+    evaluation_id: EvaluationId
+    users: PreparedMetadataArtifact
+    videos: PreparedMetadataArtifact
+
+
+@dataclass(frozen=True, slots=True)
 class CandidateDataViewRequest:
     __pydantic_config__: ClassVar[ConfigDict] = _DATACLASS_CONFIG
 
@@ -357,7 +385,7 @@ class CandidateDataViewReceipt:
     __pydantic_config__: ClassVar[ConfigDict] = _DATACLASS_CONFIG
 
     root: Path
-    manifest: CandidateDataManifest
+    manifest: CandidateDataManifestV2 | CandidateDataManifest
     manifest_sha256: str
     reused: bool
 

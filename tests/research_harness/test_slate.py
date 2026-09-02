@@ -132,6 +132,9 @@ def test_public_surface_exports_expected_contract() -> None:
     expected_exports = {
         "ActionLogSource",
         "CandidateDataManifest",
+        "CandidateDataManifestV2",
+        "PreparedCandidateMetadata",
+        "PreparedMetadataArtifact",
         "CandidateDataViewReceipt",
         "CandidateDataViewRequest",
         "CandidateHistoryReceipt",
@@ -216,6 +219,8 @@ def test_public_surface_exports_expected_contract() -> None:
         "build_local_evaluation_fixture",
         "build_validation_target",
         "materialize_candidate_data_view",
+        "materialize_candidate_data_view_v2",
+        "prepare_candidate_metadata",
         "canonical_fixture_dates",
         "compare_confirmation",
         "claim_final_consumption",

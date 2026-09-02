@@ -995,7 +995,7 @@ adapter, 재학습 `harness-predict` CLI, baseline sigma 실측은 없으며 각
 사전학습 임베딩 모델 추론, CPU에서 LightGBM 학습, 로컬에서 Controller·Judge를 실행한다.
 기존 21개 피처 구조와 LightGBM 설정을 출발점으로 삼되 로컬 임베딩을 사용하므로
 운영 champion의 동일 재현이 아닌 Harness baseline으로 기록한다. 임베딩 파인튜닝은
-초기 범위에서 제외한다. 아래 체크리스트에서 순수 metadata 변환·v2 모델만 구현했으며,
+초기 범위에서 제외한다. 아래 체크리스트에서 metadata 변환·v2 모델과 validation 게시·workspace를 구현했으며,
 Task 6 전체 완료가 아니다.
 
 **구현 순서:** 입력 계약 확정 → 로컬 피처·임베딩 → 재학습 CLI → 실행 연결·REPORT.
@@ -1003,7 +1003,7 @@ Task 6 전체 완료가 아니다.
 - [x] #40에서 metadata 정규화·시점 조인·v2 manifest의 RED 테스트를 먼저 작성했다.
       최초 테스트 전용 요청에서는 production 구현 없이 실패를 확인했다
 - [x] 후속 구현 승인에 따라 같은 #40에서 정규화·시점 선택·v2 manifest 모델을 구현하고
-      계약 테스트를 GREEN으로 전환했다. 파일 게시와 실행 연결은 별도 후속 범위다
+      계약 테스트를 GREEN으로 전환했다. 후속 #42에서 validation 게시와 workspace까지 연결했다
 - [x] 2026-09-03 GPU와 기존 Python 환경을 조회했다. RTX 3070 Ti, VRAM 8192 MiB,
       NVIDIA 드라이버 591.86, Python 3.12.13을 확인했다. 조회한 프로젝트 가상환경에는
       LightGBM·PyArrow가 있고 PyTorch·Sentence Transformers는 없다. GPU 인식과
@@ -1141,6 +1141,46 @@ history cutoff 검증을 재사용하되 metadata receipt의 타입·고정 경�
 설치·GCP 작업을 하지 않았으며, 다음 구현은 v2 materializer/workspace 연결이다.
 
 ---
+
+### Task 6 validation metadata 게시·workspace 연결 — #42
+
+- [x] 검증된 fixture 원본 receipt와 history/validation 요청으로 prepared byte bundle을 만든다.
+- [x] v2 opt-in materializer에 atomic 게시·동일 target 재사용·변조/누락/alias 거부를 연결한다.
+- [x] workspace opt-in 및 기존 view digest 전달, 오류 시 회수를 검증한다.
+- [ ] 독립 리뷰·Harness 회귀·Ruff·CI를 확인하고 문제·해결·결과를 기록한다.
+
+범위는 validation 파일 게시와 workspace 연결이다. final용 준비/grant, Controller
+checkpoint 영속화, 피처 조립·임베딩·학습은 후속으로 분리한다. v1을 유지하고 같은 prepared
+bytes를 paired workspace에 재사용한다. 검증은 작은 golden 선택 → 실제 fixture의 파일
+게시/재사용/변조 → workspace 통합 → 전체 Harness 순으로 넓힌다.
+
+**문제:** #41까지는 Arrow 변환과 manifest 모델만 있어 candidate worktree에 metadata 파일이
+없었다. baseline과 candidate의 실행마다 metadata를 다시 계산하면 같은 평가에서도 입력이
+달라질 여지가 있고, 단순 파일 추가는 기존 exact-tree 검증에서 거부된다.
+
+**해결:** 검증된 fixture에서 허용 history impression/validation slate의 ID·최대 요청 시각으로
+관측을 제한하고, 고정 writer 옵션으로 직렬화한 bytes/receipt를 불변 bundle에 담는다.
+별도 v2 interface가 기존 lock·staging·atomic rename·파일 검증을 재사용한다. workspace는
+bundle 제공 시에만 v2를 선택하며, 기존 view digest에 metadata receipt가 자동 포함된다.
+작은 interface를 유지하기 위해 별도 범용 registry나 v1 복제 게시기를 만들지 않았다.
+
+**트러블슈팅:** 최초 통합 테스트에서 staging의 metadata 인자 누락과 reuse 검증의 잘못된
+인자를 잡았다(10 failed, 7 passed). 수정 후 최초 17개가 통과했다. 독립 리뷰에서는
+파티션별 검증 후 필터하는 순서가 미허용/미래 행의 파티션 간 중복을 숨길 수 있음을 발견해,
+전체 영상 이력의 중복을 필터 전에 검사하고 회귀 테스트를 추가했다. Windows 손상 fixture
+복사 테스트는 긴 경로 제약으로 검증 전 실패하여 기존 긴 경로 helper와 짧은 임시 state root를
+사용했다. 제품 검증을 느슨하게 하거나 손상 테스트를 skip하지 않았다.
+전체 Harness 회귀에서는 신규 공개 함수·타입 5개가 exact export 기대 목록에서 빠진
+테스트 1개만 실패하고 나머지 **617 passed, 11 skipped**였다. 기대 목록을 실제 공개
+계약과 대조해 추가했고 동일성 assertion은 유지했다.
+수정한 export 테스트와 metadata 통합의 재실행은 **24 passed**였다.
+
+**결과·한계:** 독립 리뷰의 연결/중복 지적은 수정·재확인됐다. 실제 파일 게시, 두 workspace의
+bytes 동일성, 파일 변조/누락/alias 및 부분 게시 거부, workspace 회수 테스트를 추가했다.
+`python -m pytest tests/research_harness/test_candidate_metadata_view.py -q --tb=short`는
+**23 passed**이며 신규 skip은 없다. 전체 저장소 Ruff와 `git diff --check`도 통과했다.
+final metadata·권한 연결, checkpoint 영속화, 피처/임베딩·학습은 남아 있다. 품질·자율성·비용
+개선은 아직 측정하지 않았고, GPU 설치·모델 다운로드·GCP 작업은 하지 않았다.
 
 ## Task 7: 지표별 baseline σ 측정 + end-to-end 완주
 
