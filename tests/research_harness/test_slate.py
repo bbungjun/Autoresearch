@@ -142,6 +142,9 @@ def test_public_surface_exports_only_snapshot_entrypoint_contract() -> None:
         "FixtureInputReceipt",
         "FixturePartitionReceipt",
         "JudgeSnapshotHandoff",
+        "JudgeError",
+        "JudgeErrorCode",
+        "JudgeScoringResult",
         "LocalEvaluationFixtureReceipt",
         "LocalEvaluationFixtureRequest",
         "RankingMetricError",
@@ -152,11 +155,13 @@ def test_public_surface_exports_only_snapshot_entrypoint_contract() -> None:
         "StageCErrorCode",
         "build_evaluation_snapshot",
         "build_local_evaluation_fixture",
+        "build_validation_target",
         "materialize_candidate_data_view",
         "canonical_fixture_dates",
         "descriptor_sha256",
         "ndcg_at_k",
         "recall_at_k",
+        "score_predictions",
         "select_fixture_user_ids",
     }
 
