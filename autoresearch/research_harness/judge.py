@@ -295,26 +295,41 @@ def _join_target_rows(
 ) -> tuple[_TargetRow, ...]:
     slate_by_key: dict[tuple[str, str], str] = {}
     for row in slate_rows:
-        key = (str(row["slate_id"]), str(row["video_id"]))
+        slate_id = row["slate_id"]
+        video_id = row["video_id"]
+        user_id = row["user_id"]
         if (
             row["evaluation_id"] != evaluation_id
-            or key in slate_by_key
-            or not all(_target_identifier_is_encodable(value) for value in key)
+            or not isinstance(slate_id, str)
+            or not isinstance(video_id, str)
+            or not isinstance(user_id, str)
+            or not user_id
+            or user_id != user_id.strip()
         ):
             raise ValueError
-        slate_by_key[key] = str(row["user_id"])
+        key = (slate_id, video_id)
+        if key in slate_by_key or not all(
+            _target_identifier_is_encodable(value) for value in key
+        ):
+            raise ValueError
+        slate_by_key[key] = user_id
 
     target_rows: list[_TargetRow] = []
     label_keys: set[tuple[str, str]] = set()
     for row in label_rows:
-        key = (str(row["slate_id"]), str(row["video_id"]))
-        user_id = str(row["user_id"])
+        slate_id = row["slate_id"]
+        video_id = row["video_id"]
+        user_id = row["user_id"]
         if (
             row["evaluation_id"] != evaluation_id
-            or key in label_keys
-            or slate_by_key.get(key) != user_id
+            or not isinstance(slate_id, str)
+            or not isinstance(video_id, str)
+            or not isinstance(user_id, str)
             or not isinstance(row["clicked"], bool)
         ):
+            raise ValueError
+        key = (slate_id, video_id)
+        if key in label_keys or slate_by_key.get(key) != user_id:
             raise ValueError
         label_keys.add(key)
         target_rows.append(

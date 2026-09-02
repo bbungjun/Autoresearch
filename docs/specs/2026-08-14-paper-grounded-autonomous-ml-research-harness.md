@@ -568,7 +568,7 @@ P0-2C의 ingestion byte 상한은 **65 MiB + 1 byte probe**로 고정한다. CRL
 69-byte evaluation ID를 64 byte로 센 오류이므로 사용하지 않는다.
 
 `JudgeScoringResult`는 target evaluation ID와 row count, `ndcg_at_10`, `recall_at_10`,
-`ndcg_at_24`, 그리고 `ProbabilityMetricResult`를 담는다. probability 결과는 `roc_auc`,
+`ndcg_at_24`, 그리고 `ProbabilityMetricResult`를 담는다. probability 결과는
 `row_count`, `positive_count`, `negative_count`, `roc_auc`, `pr_auc`, `log_loss`, `brier`,
 `GroupedRocAuc`를 포함한다. 양성·음성 중 한 클래스가 없으면 전역 probability metric은
 예외 대신 `None`으로 구조화해 P0-2C가 `metric_unavailable`로 판정할 수 있게 한다. 기존

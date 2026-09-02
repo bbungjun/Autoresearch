@@ -15,6 +15,7 @@ import autoresearch.research_harness.judge as judge_module
 from autoresearch.research_harness.evaluation_artifacts import write_snapshot_artifacts
 from autoresearch.research_harness.evaluation_snapshot_models import (
     AttributedImpression,
+    EvaluationId,
     EvaluationSnapshotRequest,
     EvaluationSplit,
     EvaluationWindow,
@@ -208,6 +209,25 @@ def test_validation_target_rejects_artifact_key_prediction_cannot_encode(
         build_validation_target(handoff)
 
     assert error.value.code is JudgeErrorCode.INVALID_TARGET
+
+
+@pytest.mark.parametrize("field", ["slate_id", "video_id", "user_id"])
+def test_artifact_join_rejects_null_in_non_nullable_identity_field(field: str) -> None:
+    evaluation_id = EvaluationId("eval_" + "a" * 64)
+    slate_row: dict[str, object] = {
+        "evaluation_id": evaluation_id,
+        "slate_id": "slate",
+        "video_id": "video",
+        "user_id": "user",
+    }
+    label_row: dict[str, object] = {
+        **slate_row,
+        "clicked": True,
+    }
+    slate_row[field] = None
+
+    with pytest.raises(ValueError):
+        judge_module._join_target_rows([slate_row], [label_row], evaluation_id)
 
 
 def test_parser_accepts_lf_and_crlf_canonical_rows(
