@@ -923,31 +923,64 @@ wall-clock·로그 메모리·소유 group/Job 수명만 제한하며 CPU/RSS/fi
 
 ## Task 5b: 자가 피드백 + Controller
 
-- [ ] `feedback.py` — **에이전트에게 돌려주는 payload**:
+- [x] spec 7.3에 `ExperimentCard`·`ResearchBudget`, planner/runner seam, budget 종료,
+      ledger-first feedback, final 무피드백과 checkpoint 재생 계약을 고정한다
+- [x] `feedback.py` — **에이전트에게 돌려주는 불변 payload**:
       - validation primary/guardrail 지표 값과 champion 대비 방향 정규화 델타
       - `decision`과 `reason_code`
       - 이전 trial 이력 요약 (무엇을 시도했고 왜 기각됐는지)
       - 실패 시 stage + reason code + 로그 tail
       - **행 단위 정답과 지표 구현 코드는 포함하지 않는다**
-- [ ] `controller.py` — Task 2d의 `ResearchDomain` interface를 주입받아 snapshot·candidate
-      검증·평가·비교를 호출하고 예산(최대 시간/trial 수) 안에서 반복한다. 구체
+- [x] `controller.py` — Task 2d의 `ResearchDomain` interface를 주입받아 snapshot·candidate
+      실행 adapter가 돌려준 paired scoring 결과를 비교하고 예산(최대 시간/trial 수) 안에서
+      반복한다. candidate workspace·LocalRunner·봉인·평가는 `ResearchTrialRunner` adapter가
+      같은 domain interface로 조립하며 Controller는 구체
       `YouTubeCTRDomain`의 slate/Judge 모듈을 Controller에서 직접 호출하지 않는다. spec 7장
       루프 구조를 따르되
       MVP에서는 사람이 준 가설과 `ExperimentCard`를 입력 seam에 주입한다. 다음
       단계에서는 Paper Discovery/Capability Matcher가 만든 `ExperimentCard`가 같은 seam을
       사용한다
-- [ ] 실패 시 사용자에게 묻지 않고 다음 행동을 스스로 정한다(spec 7.2)
-- [ ] validation loop 종료 후 champion을 고정하고 final holdout을 마지막 1회 평가한다.
+- [x] `ResearchDomain.evaluate(..., final_grant=...)` keyword-only 확장으로 validation과
+      승인된 final 평가를 같은 domain seam에 유지하고 Controller의 Judge 직접 import를 막는다
+- [x] 실패 시 사용자에게 묻지 않고 다음 행동을 스스로 정한다(spec 7.2)
+- [x] validation loop 종료 후 champion을 고정하고 final holdout을 마지막 1회 평가한다.
       필수 절대 `judge_state_root`의 존재·접근을 확인하고 전역 registry marker를 fsync한
       뒤에만 실행한다. final 결과는 feedback을 만들지 않고 ledger/REPORT evidence에만 기록한
       뒤 종료한다
-- [ ] final holdout의 유효한 판정이 `promote`면 `개선`, `revise|discard`면 baseline을
+- [x] final holdout의 유효한 판정이 `promote`면 `개선`, `revise|discard`면 baseline을
       유지하고 `개선 없음`, 유효한 비교를 만들지 못했을 때만 `판정 불가`로 결론낸다
-- [ ] 테스트: seed-sensitive fake domain/runner로 2 trial 이상 루프가 도는지,
+- [x] 테스트: seed-sensitive fake domain/runner로 2 trial 이상 루프가 도는지,
       피드백 payload에 라벨이 없는지, final 결과가 payload에 없는지, final 평가가 두 번째
       호출을 거부하는지, 예산 소진 시 정상 종료하는지
+- [x] Task 4 ledger의 기존 record를 깨지 않으면서 새 trial에 canonical
+      `experiment_summary`를 보존하고, 재개 시 planner replay가 달라지면 fail-closed한다
 
 **검증:** `uv run python -m pytest tests/research_harness/ -v`
+
+### Task 5b 포트폴리오 기록
+
+**문제.** Task 5a까지는 candidate subprocess를 안전하게 한 번 실행할 수 있었지만, 그 결과를
+보고 다음 실험을 선택하는 정책과 durable memory가 없었다. 기존 `ResearchDomain.evaluate()`는
+validation만 표현해 Controller가 final Judge 함수를 직접 import해야 했고, Trial Ledger에는
+무엇을 시도했는지가 없어 프로세스 재시작 뒤 동일한 피드백을 재구성할 수 없었다. 이 상태에서는
+실행 횟수가 늘어날 뿐 자율 ML 연구의 핵심인 관찰→판단→다음 변경 루프가 성립하지 않았다.
+
+**해결.** `ResearchController.run()` 하나 뒤에 trial/time budget, screening→5-seed confirmation,
+promote-only champion 전이, 실패 후 자동 계속, ledger-first feedback, checkpoint 재생과 terminal
+final 판정을 모았다. candidate coding·workspace·LocalRunner·prediction 봉인은
+`ResearchTrialRunner` seam 뒤에 두고, Controller는 `ResearchDomain.compare()`만으로 정책을
+결정하게 했다. `ExperimentCard`는 canonical JSON summary로 ledger에 남기고 기존 Task 4 record는
+선택 필드가 없는 형식 그대로 읽도록 호환성을 유지했다. final은 registry grant가 있을 때만
+domain의 같은 `evaluate(..., final_grant=...)` interface로 접근하고 결과를 agent feedback 타입에
+표현할 수 없게 분리했다.
+
+**결과.** seed에 따라 첫 candidate를 discard하고 두 번째 candidate를 promote하는 2-trial
+시나리오, candidate 생성 실패 후 다음 trial 계속, trial/time budget 종료 뒤 terminal final 실행,
+registry 거부 시 final 미실행, 동일 ledger 재개 시 planner memory 재생과 runner 무호출을 검증했다.
+집중 검증 51개와 Research Harness 전체 `479 passed, 11 skipped`가 통과했고 저장소 전체 Ruff와
+`git diff --check`도 통과했다. 아직 실제 coding agent와 `LocalRunner`를 조립하는 production
+adapter, 재학습 `harness-predict` CLI, baseline sigma 실측은 없으며 각각 Task 6과 Task 7의
+의도적인 후속 범위다.
 
 ---
 

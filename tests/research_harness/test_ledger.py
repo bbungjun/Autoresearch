@@ -155,6 +155,24 @@ def test_append_trial_round_trips_all_evidence(tmp_path: Path) -> None:
     assert parsed["record_type"] == "trial"
 
 
+def test_trial_optional_experiment_memory_round_trips(tmp_path: Path) -> None:
+    path = _ledger_path(tmp_path)
+    ledger = open_trial_ledger(path)
+    trial = replace(
+        _trial(tmp_path),
+        experiment_summary='{"card_id":"card-1"}',
+        failure_reason_code="predict_crash",
+        failure_stage="candidate_run",
+    )
+
+    ledger.append(trial)
+
+    assert ledger.read_state().trials == (trial,)
+    payload = json.loads(path.read_bytes())
+    assert payload["payload"]["experiment_summary"] == '{"card_id":"card-1"}'
+    assert payload["payload"]["failure_stage"] == "candidate_run"
+
+
 def test_same_trial_retry_is_noop_and_conflicting_retry_fails(tmp_path: Path) -> None:
     path = _ledger_path(tmp_path)
     ledger = open_trial_ledger(path)

@@ -462,11 +462,13 @@ class ResearchDomain(ABC):
         candidate_prediction: Path,
         judge_copy: Path,
     ) -> SealedPredictionReceipt: ...
-    def evaluate(
-        self,
-        handoff: JudgeSnapshotHandoff,
-        sealed_prediction: SealedPredictionReceipt,
-    ) -> JudgeScoringResult: ...
+      def evaluate(
+          self,
+          handoff: JudgeSnapshotHandoff,
+          sealed_prediction: SealedPredictionReceipt,
+          *,
+          final_grant: FinalConsumptionGrant | None = None,
+      ) -> JudgeScoringResult: ...
     def compare(
         self,
         results: PairedJudgeResult | Sequence[PairedJudgeResult],
@@ -943,6 +945,67 @@ validation에서 고른 champion을 final holdout에서 baseline과 비교할 �
 각 단계는 idempotent checkpoint를 가져 프로세스 종료 후 마지막 완료 단계부터 재개할 수
 있어야 한다. Job 전체를 처음부터 다시 실행하는 방식은 LLM 호출과 학습 결과를 불필요하게
 잃으므로 기본 재시도 단위로 사용하지 않는다.
+
+### 7.3 Task 5b Controller 계약
+
+Task 5b의 공개 실행 interface는 동기식
+`ResearchController.run(ControllerRunRequest) -> ControllerRunResult` 하나다. 요청은 사람이
+작성한 초기 `ExperimentCard`, validation trial 수와 wall-clock 한도를 담은
+`ResearchBudget`, 기준·현재 champion SHA, 검증된 `JudgeSnapshotHandoff`, 절대
+`judge_state_root`, 지표별 baseline sigma, screening seed와 서로 다른 confirmation seed
+5개, `TrialLedger`를 받는다. trial 수와 시간 한도는 **새 validation trial을 시작할 수 있는지**
+결정하며, 이미 시작한 subprocess 회수와 validation 종료 뒤 단 한 번의 final 판정은 이 한도를
+이유로 중간 취소하지 않는다.
+
+Controller는 다음 두 seam을 생성하지 않고 주입받는다.
+
+- `ResearchPlanner.next_card(initial_card, feedback_history)`는 이전 구조화 피드백을 보고 다음
+  `ExperimentCard` 또는 계획 종료를 반환한다. Task 5b의 사람이 작성한 초기 card와 fake
+  planner는 이후 Paper Discovery/Capability Matcher와 coding agent가 연결될 자리다.
+- `ResearchTrialRunner.run_validation(...)`과 `run_final(...)`은 disposable workspace,
+  candidate 변경, `LocalRunner`, prediction 봉인과 `ResearchDomain.validate_candidate()`·
+  `evaluate()` 호출을 하나의 실행 adapter로 감춘다. Controller가 받는 성공 결과는
+  same-seed `PairedJudgeResult`와 candidate SHA·diff fingerprint·duration·artifact evidence뿐이다.
+  Task 5b는 이 interface와 fake adapter로 정책을 완성하고, 실제 candidate CLI와 재학습 경로를
+  만드는 Task 6 및 end-to-end Task 7에서 local adapter를 연결한다.
+
+Task 2d의 다섯 동작 interface는 유지하되 `ResearchDomain.evaluate()`에 keyword-only
+`final_grant: FinalConsumptionGrant | None = None`을 추가한다. grant가 없으면 validation,
+있으면 해당 grant가 승인한 final holdout만 평가한다. 이 확장은 Controller/runner가
+`build_final_target()`을 직접 import하지 않게 하며, 임의 split 문자열이나 final path를
+interface에 노출하지 않는다.
+
+Controller 자신은 구체 `YouTubeCTRDomain`, slate/Judge 함수 또는 metric 구현을 import하지
+않는다. screening pair에는 `ResearchDomain.compare(pair)`를 호출하고,
+`should_confirm=True`일 때만 같은 candidate의 서로 다른 5-seed confirmation pair에
+`ResearchDomain.compare(pairs, baseline_sigmas=...)`를 호출한다. `promote`만 champion SHA를
+교체한다. `revise`, `discard`, invalid comparison과 typed 실행 실패는 기존 champion을 유지하고
+다음 feedback을 만든다. planner가 종료하거나 validation trial/time 예산이 소진되면 새
+validation trial을 만들지 않는다.
+
+`FeedbackPayload`는 초기 card, 현재 trial의 card, validation metric 값, 개선이 양수인
+normalized delta, decision·reason code, 이전 trial의 card 요약·decision·reason과 실패
+stage·reason code·bounded stdout/stderr tail만 포함한다. 행 단위 label, prediction row,
+Judge 경로·구현 코드, final metric·decision은 포함하지 않는다. 성공과 실패 trial 모두 ledger에
+먼저 durable append한 뒤에만 다음 feedback history에 보인다. `TrialRecord`의 선택적
+`experiment_summary`는 새 record에서 card의 canonical 요약을 보존하며, 기존 Task 4 record는
+이 필드가 없는 상태로 계속 읽을 수 있다.
+
+validation 종료 뒤 Controller는 현재 champion을 고정하고 `claim_final_consumption()`으로
+marker를 원자 생성·fsync해 `FinalConsumptionGrant`를 받은 뒤에만 `run_final()`을 한 번 호출한다.
+final은 baseline과 고정 champion의 5-seed pair를 같은 `ResearchDomain.compare()` 규칙으로
+판정한다. 유효한 `promote`는 `improved`, `revise|discard`는 `no_improvement`, grant·실행·metric
+실패와 decision 없음은 `inconclusive`다. final 결과와 registry evidence는 ledger와 반환값에만
+남기고 planner나 `FeedbackPayload`에는 절대 전달하지 않는다. marker가 이미 있거나 온전하지
+않으면 재평가하지 않고 `inconclusive`로 종료한다.
+
+각 validation trial은 ledger의 trial record를 durable append한 뒤
+`<trial_id>:validation_recorded` checkpoint를 남긴다. 재개 시 ledger에 이미 있는 trial 수만큼
+planner를 같은 feedback history로 재생하고 완료 checkpoint의 trial은 runner를 다시 호출하지
+않는다. final record/checkpoint가 있으면 final도 재실행하지 않는다. 카드 재생 결과가 기존
+`experiment_summary`와 다르면 무결성 오류로 fail-closed한다. 이 결정론적 planner 재생은 MVP
+checkpoint 계약이며, planner 내부 상태 snapshot은 실제 agent adapter를 연결할 때 별도
+artifact로 추가한다.
 
 ## 8. YouTube 리랭킹 Domain Adapter
 
