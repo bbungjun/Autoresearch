@@ -754,9 +754,9 @@ mode·type·bytes 포함, Git diff 설정 고정, worktree identity 재검증과
 수정했다. Task 3 집중 테스트 21개 통과·POSIX mode 테스트 1개 환경 의존 skip으로 정확한
 SHA, validation-only 데이터, 환경 격리, commit·uncommitted secret 거부, 삭제된 secret 허용,
 `.parquet`·`pyproject.toml` 변경 허용, 설정 독립 fingerprint와 교체 경로 보존을 검증했다.
-수정 전 전체 Research Harness 회귀 테스트는 388개 통과·6개 환경 의존 skip이었으며 최종
-리뷰 뒤 다시 실행한다. 이는 완전한 OS sandbox가 아니라 실수와 자기 채점 오염을 줄이는
-MVP 경계이며, 실제 subprocess 회수와 final 단일 소비는 각각 Task 5a와 Task 4/5b에 남는다.
+전체 Research Harness 회귀 테스트는 최종 수정 뒤 393개 통과·7개 환경 의존 skip이었다.
+이는 완전한 OS sandbox가 아니라 실수와 자기 채점 오염을 줄이는 MVP 경계이며, 실제
+subprocess 회수와 final 단일 소비는 각각 Task 5a와 Task 4/5b에 남는다.
 
 ---
 
