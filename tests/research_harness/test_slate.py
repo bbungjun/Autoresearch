@@ -127,7 +127,7 @@ def _snapshot_request(tmp_path: Path) -> EvaluationSnapshotRequest:
     )
 
 
-def test_public_surface_exports_only_snapshot_entrypoint_contract() -> None:
+def test_public_surface_exports_expected_contract() -> None:
     # Given
     expected_exports = {
         "ActionLogSource",
@@ -135,6 +135,10 @@ def test_public_surface_exports_only_snapshot_entrypoint_contract() -> None:
         "CandidateDataViewReceipt",
         "CandidateDataViewRequest",
         "CandidateHistoryReceipt",
+        "CandidateChangeReceipt",
+        "CandidateProcessContext",
+        "CandidateWorkspace",
+        "CandidateWorkspaceRequest",
         "ConfirmationDecision",
         "DomainError",
         "DomainErrorCode",
@@ -165,6 +169,8 @@ def test_public_surface_exports_only_snapshot_entrypoint_contract() -> None:
         "StageCError",
         "StageCErrorCode",
         "YouTubeCTRDomain",
+        "WorkspaceError",
+        "WorkspaceErrorCode",
         "build_evaluation_snapshot",
         "build_local_evaluation_fixture",
         "build_validation_target",
@@ -173,6 +179,7 @@ def test_public_surface_exports_only_snapshot_entrypoint_contract() -> None:
         "compare_confirmation",
         "descriptor_sha256",
         "ndcg_at_k",
+        "open_candidate_workspace",
         "recall_at_k",
         "screen_candidate",
         "seal_prediction_copy",

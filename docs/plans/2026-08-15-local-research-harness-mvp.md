@@ -703,31 +703,55 @@ Task 5b Controller보다
 
 현행 executor를 건드리지 않고 정적 allowlist 없는 독립 로컬 workspace를 만드는 지점이다.
 
-- [ ] `workspace.py` — 기준 SHA에서 disposable git worktree 생성, 종료 시 회수
-- [ ] 반복 중에는 Task 1-C의 `CandidateDataView`를 새 worktree root에 materialize한다.
+- [x] `workspace.py` — 기준 SHA에서 disposable git worktree 생성, 종료 시 회수
+- [x] 반복 중에는 Task 1-C의 `CandidateDataView`를 새 worktree root에 materialize한다.
       `harness_in/slate.parquet`, `candidate-view.json`과 `dt < T` history 이외의 데이터가
       있으면 workspace 생성을 거부한다. Task 3이 snapshot manifest를 다시 해석하거나 파일
       복사 규칙을 중복 구현하지 않는다
-- [ ] final holdout slate는 Controller가 loop를 닫고 consumption registry 권한을 얻은 뒤
-      별도 final interface로 한 번만 주입한다. validation `CandidateDataView`에 split flag를
-      추가해 final을 우회 노출하지 않는다. **labels, ledger, judge 체크아웃은 worktree 바깥
-      경로에 두고 경로도 candidate에 전달하지 않는다**
-- [ ] 실제 candidate argv·환경에서 fixture input·seed와 Judge handoff를 제외한다. 이
-      subprocess 환경 검증은 Task 1-C가 아니라 Task 3이 소유한다
-- [ ] candidate 환경은 명시적 allowlist로 새로 만들고 GCS·BigQuery credential env와
+- [x] 반복용 공개 API에는 final 주입 함수를 두지 않는다. final holdout slate는 Controller가
+      loop를 닫고 Task 4 consumption registry 권한을 얻은 뒤 Task 5b의 별도 final 실행
+      경계로 한 번만 주입한다. validation `CandidateDataView`에 split flag나 임시 권한
+      token을 추가해 final을 우회 노출하지 않는다. **labels, ledger, judge 체크아웃은
+      worktree 바깥 경로에 두고 경로도 candidate에 전달하지 않는다**
+- [x] Task 3의 candidate 실행 context·환경에서 fixture input·fixture seed와 Judge handoff를
+      제외한다. 모델 재학습 seed를 포함한 실제 argv 조립과 subprocess 환경 전달 검증은
+      Task 5a가 소유한다
+- [x] candidate 환경은 명시적 allowlist로 새로 만들고 GCS·BigQuery credential env와
       credential 파일을 주입하지 않는다. 원격 데이터 접근 없이 Harness의 로컬 history만
       읽는 계약을 테스트한다
-- [ ] `harness_out/` 생성. candidate가 여기에만 산출물을 쓴다
-- [ ] **allowlist 검사 없음.** 대신 커밋 직전 시크릿 스캔만 수행(D4). 기존
+- [x] `harness_out/` 생성. candidate가 여기에만 산출물을 쓴다
+- [x] **allowlist 검사 없음.** 대신 커밋 직전 시크릿 스캔만 수행(D4). 기존
       `applications/experiment_platform/executor/safety.py:21-38`의
       `contains_credential_value()`를 재사용한다. verifier의 path·dependency·generated-data
       검사는 가져오지 않고 credential 값 탐지만 호출한다
-- [ ] diff content fingerprint를 계산해 ledger에 넘긴다(차단용이 아니라 기록용)
-- [ ] 테스트: worktree 격리, labels가 주입·argv·환경에 없음, final slate가 반복 중 없음,
+- [x] diff content fingerprint를 계산해 ledger에 넘긴다(차단용이 아니라 기록용)
+- [x] 테스트: worktree 격리, labels가 주입·argv·환경에 없음, final slate가 반복 중 없음,
       history에 `dt >= T` 없음, fixture 평가 입력·seed 없음, 원격 credential 없음, 시크릿 포함
       diff 거부, `.parquet`/`pyproject.toml` 수정이 **허용**되는지(D3·D4 회귀 방지)
 
 **검증:** `uv run python -m pytest tests/research_harness/test_workspace.py -v`
+
+### Task 3 포트폴리오 기록
+
+**문제.** 기존 executor workspace는 단일 실행과 verifier의 경로·의존성 제한을 전제로 해
+저장소 전체를 바꾸는 자율 ML 실험에 그대로 사용할 수 없었다. 반대로 제한을 단순히 없애면
+candidate가 자기 평가 데이터나 host credential을 우연히 전달받고, 어떤 변경을 평가했는지
+재현할 근거도 사라진다. Task 1-C가 데이터 자체의 봉인을 담당하므로 Task 3에서 snapshot을
+다시 해석하면 두 구현이 어긋날 위험도 있었다.
+
+**해결.** 기준 commit을 검증한 detached Git worktree를 context manager로 감싸 수명주기를
+한 모듈에 숨기고, 기존 `CandidateDataView`를 그대로 호출해 validation slate와 `dt < T`
+history만 주입했다. candidate에는 worktree·slate·prediction 경로와 최소 OS 환경만 담은
+실행 context를 주고 Judge handoff·fixture seed·원격 credential은 제외했다. 변경 정책은
+경로 allowlist 대신 기존 credential 값 탐지만 재사용했으며, tracked binary diff와 정렬된
+untracked bytes를 길이 구분해 ledger용 SHA-256 fingerprint를 계산했다. final 주입은 아직
+없는 registry 권한을 모사하지 않고 Task 4/5b의 별도 경계로 명시적으로 남겼다.
+
+**결과.** Task 3 집중 테스트 16개가 정상·예외 회수, 정확한 SHA, validation-only 데이터,
+환경 격리, secret 거부, 삭제된 secret 허용, `.parquet`·`pyproject.toml` 변경 허용과
+fingerprint 결정성을 검증했다. 전체 Research Harness 회귀 테스트는 388개 통과·6개
+환경 의존 skip이었다. 이는 완전한 OS sandbox가 아니라 실수와 자기 채점 오염을 줄이는
+MVP 경계이며, 실제 subprocess 회수와 final 단일 소비는 각각 Task 5a와 Task 4/5b에 남는다.
 
 ---
 

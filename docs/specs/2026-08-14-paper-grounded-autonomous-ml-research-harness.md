@@ -221,6 +221,41 @@ Codex worker의 process-group 회수 계약이다
 Kubernetes Job은 다중 사용자 격리, 원격 자원, GPU scheduling이 필요할 때 선택하는
 `ExperimentRunner` 구현체다. Kubernetes 배포 자체를 제품 차별점으로 삼지 않는다.
 
+#### 4.4.1 CandidateWorkspace 계약
+
+`CandidateWorkspace`는 저장소 root, 40자리 기준 commit SHA, 생성할 절대 경로와
+validation `JudgeSnapshotHandoff`를 입력받는다. Harness는 기준 commit을 먼저 검증한 뒤
+detached Git worktree를 만들고, Task 1-C의 `materialize_candidate_data_view()`를 호출해
+그 root에 `harness_in/`을 게시하며 빈 `harness_out/`을 만든다. 호출자는 context manager
+안에서만 workspace를 사용하고, 정상 종료와 예외 종료 모두에서 Harness가 자신이 만든
+worktree를 회수한다. 이미 존재하는 대상 경로를 재사용하거나 삭제하지 않는다.
+
+Candidate에 공개하는 실행 context는 worktree root,
+`harness_in/slate.parquet`, `harness_out/predictions.csv`와 명시적 최소 환경뿐이다.
+환경은 host 전체를 복사하지 않고 프로세스 실행에 필요한 OS 경로 변수와 Harness가 정한
+고정 Python 설정만 allowlist한다. GCS·BigQuery·GitHub 등 원격 credential 변수, credential
+파일 경로, `JudgeSnapshotHandoff`, labels, final holdout, fixture 생성 입력과 fixture seed는
+context에 포함하지 않는다. 모델 재학습 seed를 argv에 넣고 실제 subprocess를 실행하는
+책임은 `LocalRunner`가 소유한다.
+
+반복용 workspace는 validation 전용이다. final holdout은 소비 registry를 선점한
+Controller가 별도의 final 실행 경계에서만 주입한다. Task 3은 아직 존재하지 않는 registry
+권한을 흉내 내는 토큰이나 validation manifest의 split flag를 만들지 않는다. 따라서
+Task 3의 공개 API에는 final 주입 함수가 없고, Task 4의 registry와 Task 5b Controller를
+연결할 때 별도 인터페이스를 완성한다.
+
+Candidate는 저장소 코드와 데이터 파일을 자유롭게 바꿀 수 있다. `harness_out`은
+`predictions.csv`를 받아들이는 유일한 산출물 경계이지, worktree의 다른 변경을 금지하는
+경로 allowlist가 아니다. commit 직전 검사는 현재 존재하는 변경·추가 파일의 내용에
+`contains_credential_value()`를 적용하는 것만 수행한다. 삭제한 credential 문자열 때문에
+변경이 거부되어서는 안 되며, `.parquet`, `pyproject.toml`, symlink, dependency 변경을
+별도 정책으로 차단하지 않는다.
+
+diff fingerprint는 차단 판단이 아닌 ledger 증거다. 기준 commit 대비 tracked diff의 binary
+patch와 Git이 추적하지 않는 파일의 정렬된 상대 경로·현재 bytes를 길이 구분해 SHA-256으로
+계산한다. 같은 변경은 같은 fingerprint를 만들고, 파일명·내용·삭제·mode 변경은
+fingerprint를 바꾼다.
+
 ## 5. 목표 아키텍처
 
 아래는 MVP 이후 논문 계층까지 포함한 최종 구조다. MVP에서는 사람이 준 가설과
