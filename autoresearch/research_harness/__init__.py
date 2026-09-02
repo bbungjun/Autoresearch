@@ -111,6 +111,13 @@ from autoresearch.research_harness.workspace import (
     WorkspaceErrorCode,
     open_candidate_workspace,
 )
+from autoresearch.research_harness.runner import (
+    LocalRunReceipt,
+    LocalRunRequest,
+    LocalRunner,
+    RunnerError,
+    RunnerErrorCode,
+)
 
 
 __all__ = [
@@ -152,12 +159,17 @@ __all__ = [
     "LedgerMetric",
     "LocalEvaluationFixtureReceipt",
     "LocalEvaluationFixtureRequest",
+    "LocalRunReceipt",
+    "LocalRunRequest",
+    "LocalRunner",
     "MetricDelta",
     "PairedJudgeResult",
     "RankingMetricError",
     "RankingMetricErrorCode",
     "RankingMetricResult",
     "ResearchDomain",
+    "RunnerError",
+    "RunnerErrorCode",
     "ScreeningResult",
     "SealedPredictionReceipt",
     "SnapshotErrorCode",

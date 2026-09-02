@@ -4,8 +4,8 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 import time
+from typing import NoReturn
 
 import pytest
 
@@ -85,7 +85,7 @@ if args.command != "harness-predict":
         cwd=root,
         slate=slate,
         predictions=harness_out / "predictions.csv",
-        environment=environment or _candidate_environment(),
+        environment=_candidate_environment() if environment is None else environment,
     )
 
 
@@ -94,7 +94,7 @@ def _run(
     *,
     seed: int = 17,
     timeout_seconds: float = 5.0,
-):
+) -> runner_module.LocalRunReceipt:
     return LocalRunner().run(LocalRunRequest(process, seed, timeout_seconds))
 
 
@@ -167,6 +167,7 @@ payload = {
     "out": args.out,
     "seed": args.seed,
     "environment": sorted(os.environ),
+    "stdin": sys.stdin.read(),
 }
 Path(args.out).write_text(json.dumps(payload), encoding="utf-8")
 os.write(1, b"x" * 70000 + b"stdout-end")
@@ -178,13 +179,13 @@ os.write(2, b"y" * 70000 + b"stderr-end")
         os.environ.pop(secret_name, None)
 
     payload = json.loads(process.predictions.read_text(encoding="utf-8"))
-    assert payload == {
-        "command": "harness-predict",
-        "slate": str(process.slate),
-        "out": str(process.predictions),
-        "seed": 1937,
-        "environment": [name for name, _ in process.environment],
-    }
+    assert payload["command"] == "harness-predict"
+    assert payload["slate"] == str(process.slate)
+    assert payload["out"] == str(process.predictions)
+    assert payload["seed"] == 1937
+    assert payload["environment"] == [name for name, _ in process.environment]
+    assert secret_name not in payload["environment"]
+    assert payload["stdin"] == ""
     assert receipt.predictions == process.predictions
     assert receipt.exit_code == 0
     assert receipt.duration_ms >= 0
@@ -311,7 +312,7 @@ def test_runner_classifies_launcher_start_failure(
 ) -> None:
     process = _candidate(tmp_path, "Path(args.out).write_text('ok')\n")
 
-    def fail_start(*args, **kwargs):
+    def fail_start(*args: object, **kwargs: object) -> NoReturn:
         raise OSError("sensitive local executable path")
 
     monkeypatch.setattr(runner_module.subprocess, "Popen", fail_start)
@@ -321,6 +322,56 @@ def test_runner_classifies_launcher_start_failure(
 
     assert captured.value.code is RunnerErrorCode.START_FAILED
     assert "sensitive" not in str(captured.value)
+
+
+def test_runner_does_not_release_candidate_when_tree_attach_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _candidate(
+        tmp_path,
+        "Path('candidate-started').write_text('bad', encoding='utf-8')\n",
+    )
+
+    class AttachFailureOwner:
+        def attach(self, launcher: subprocess.Popen[bytes]) -> NoReturn:
+            raise OSError("job attach failed")
+
+        def is_alive(self, launcher: subprocess.Popen[bytes]) -> bool:
+            return launcher.poll() is None
+
+        def terminate(self, launcher: subprocess.Popen[bytes]) -> bool:
+            launcher.kill()
+            launcher.wait(timeout=5)
+            return True
+
+        def close(self) -> bool:
+            return True
+
+    monkeypatch.setattr(runner_module, "_new_tree_owner", AttachFailureOwner)
+
+    with pytest.raises(RunnerError) as captured:
+        _run(process)
+
+    assert captured.value.code is RunnerErrorCode.START_FAILED
+    assert not (process.cwd / "candidate-started").exists()
+
+
+def test_runner_rejects_replaced_output_directory_identity(tmp_path: Path) -> None:
+    process = _candidate(
+        tmp_path,
+        """
+output = Path(args.out).parent
+output.rename("original-harness-out")
+output.mkdir()
+Path(args.out).write_text("candidate-output", encoding="utf-8")
+""",
+    )
+
+    with pytest.raises(RunnerError) as captured:
+        _run(process)
+
+    assert captured.value.code is RunnerErrorCode.INVALID_PREDICTIONS
 
 
 def test_timeout_reclaims_candidate_grandchild(tmp_path: Path) -> None:
@@ -373,7 +424,11 @@ time.sleep(60)
     )
     original_wait = runner_module._wait_for_exit
 
-    def interrupt_after_spawn(launcher, timeout_seconds):
+    def interrupt_after_spawn(
+        launcher: subprocess.Popen[bytes],
+        timeout_seconds: float,
+    ) -> NoReturn:
+        del launcher, timeout_seconds
         _wait_for_pid(process.cwd / "grandchild.pid")
         raise KeyboardInterrupt
 
