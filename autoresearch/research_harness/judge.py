@@ -3,20 +3,18 @@
 [파이프라인] Stage C의 봉인 evaluation snapshot과 P0-2A ranking metric 뒤에서,
 candidate prediction을 validation label과 1:1로 결합해 P0-2C 판정 입력을 만든다.
 
-[기능] 검증된 handoff로 validation 전용 opaque target을 만들고, Judge 소유 CSV 사본을
-streaming parse·검증한 뒤 ranking·probability metric을 하나의 불변 결과로 반환한다.
+[기능] 검증된 handoff로 validation 전용 opaque target을 만들고, 공통 parser가 검증한
+Judge 소유 CSV 사본을 ranking·probability metric 하나의 불변 결과로 결합한다.
 
-[비책임] candidate 경로에서의 안전한 파일 ingestion·subprocess 자원 제한·coverage gate·
-sigma 판정과 final holdout 소비 승인은 P0-2C 및 후속 final registry가 담당한다.
+[비책임] candidate 경로에서의 안전한 파일 ingestion·subprocess 자원 제한은
+``prediction_ingestion``이, coverage·sigma 판정은 ``judge_decision``이, final holdout 소비
+승인은 후속 registry가 담당한다.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum, unique
-from math import isfinite
 from pathlib import Path
-import re
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -32,9 +30,21 @@ from autoresearch.research_harness.evaluation_snapshot_models import (
 )
 from autoresearch.research_harness.fixture_errors import StageCError
 from autoresearch.research_harness.fixture_models import JudgeSnapshotHandoff
+from autoresearch.research_harness.judge_errors import JudgeError, JudgeErrorCode
 from autoresearch.research_harness.local_evaluation_fixture import (
     _io_path,
     _validated_judge_snapshot,
+)
+from autoresearch.research_harness.prediction_parser import (
+    MAX_IDENTIFIER_BYTES,
+    PredictionFormatError,
+    PredictionRow,
+    is_canonical_ascii,
+    parse_prediction_copy as _parse_prediction_copy,
+)
+from autoresearch.research_harness.prediction_ingestion import (
+    SealedPredictionReceipt,
+    iter_sealed_prediction_rows,
 )
 from autoresearch.research_harness.ranking_metrics import (
     RankingMetricError,
@@ -43,13 +53,6 @@ from autoresearch.research_harness.ranking_metrics import (
     recall_at_k,
 )
 
-
-_PREDICTION_HEADER = b"evaluation_id,slate_id,video_id,score"
-_EVALUATION_ID_PATTERN = re.compile(rb"eval_[0-9a-f]{64}\Z")
-_MAX_IDENTIFIER_BYTES = 64
-_MAX_SCORE_BYTES = 24
-_MAX_PREDICTION_ROWS = 300_000
-_MAX_ROW_BYTES = 226
 
 _SLATE_SCHEMA = pa.schema(
     [
@@ -72,39 +75,6 @@ _LABEL_SCHEMA = pa.schema(
         pa.field("clicked", pa.bool_(), nullable=False),
     ]
 )
-
-
-@unique
-class JudgeErrorCode(StrEnum):
-    """P0-2B 호출자가 안전하게 분기할 수 있는 오류 코드."""
-
-    INVALID_TARGET = "invalid_judge_target"
-    INVALID_PREDICTIONS = "invalid_predictions"
-
-
-@dataclass(frozen=True, slots=True)
-class JudgeError(Exception):
-    """원본 prediction 값과 Judge path를 포함하지 않는 P0-2B 오류."""
-
-    code: JudgeErrorCode
-    stage: str
-    row_number: int | None = None
-
-    def __str__(self) -> str:
-        rendered = f"{self.code.value}: stage={self.stage}"
-        if self.row_number is not None:
-            rendered += f": row_number={self.row_number}"
-        return rendered
-
-
-@dataclass(frozen=True, slots=True)
-class PredictionRow:
-    """동일 parser를 P0-2C에서도 재사용하기 위한 module 내부 typed row."""
-
-    evaluation_id: EvaluationId
-    slate_id: str
-    video_id: str
-    score: float
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False)
@@ -177,45 +147,24 @@ def build_validation_target(
 
 
 def parse_prediction_copy(prediction_copy: Path) -> tuple[PredictionRow, ...]:
-    """Judge 소유 CSV 사본을 한 번의 streaming parser 계약으로 검증한다."""
+    """공통 parser 오류를 안정적인 Judge 오류로 변환한다."""
 
-    rows: list[PredictionRow] = []
     try:
-        with prediction_copy.open("rb") as stream:
-            header = stream.readline(len(_PREDICTION_HEADER) + 3)
-            if _without_line_ending(header) != _PREDICTION_HEADER:
-                raise _invalid_predictions("header")
-            row_number = 1
-            while True:
-                raw_line = stream.readline(_MAX_ROW_BYTES + 2)
-                if not raw_line:
-                    break
-                row_number += 1
-                if len(raw_line) > _MAX_ROW_BYTES or (
-                    not raw_line.endswith(b"\n")
-                    and len(raw_line) == _MAX_ROW_BYTES + 2
-                ):
-                    raise _invalid_predictions("field_bytes", row_number)
-                if len(rows) >= _MAX_PREDICTION_ROWS:
-                    raise _invalid_predictions("row_limit", row_number)
-                rows.append(_parse_prediction_line(raw_line, row_number))
-    except JudgeError:
-        raise
-    except (OSError, TypeError, ValueError):
-        raise _invalid_predictions("read") from None
-    return tuple(rows)
+        return _parse_prediction_copy(prediction_copy)
+    except PredictionFormatError as error:
+        raise _invalid_predictions(error.stage, error.row_number) from None
 
 
 def score_predictions(
     target: JudgeEvaluationTarget,
-    prediction_copy: Path,
+    sealed_prediction: SealedPredictionReceipt,
 ) -> JudgeScoringResult:
     """validation target과 exact 1:1 prediction을 결합해 모든 P0-2B 지표를 계산한다."""
 
     if not isinstance(target, JudgeEvaluationTarget):
         raise JudgeError(JudgeErrorCode.INVALID_TARGET, "target_type")
     target_rows = _load_verified_target_rows(target)
-    prediction_rows = parse_prediction_copy(prediction_copy)
+    prediction_rows = iter_sealed_prediction_rows(sealed_prediction)
     expected_id = target._handoff.validation_id
 
     prediction_by_key: dict[tuple[str, str], PredictionRow] = {}
@@ -227,7 +176,7 @@ def score_predictions(
 
     target_by_key = {(row.slate_id, row.video_id): row for row in target_rows}
     if (
-        len(prediction_rows) != len(target_rows)
+        len(prediction_by_key) != len(target_rows)
         or len(target_by_key) != len(target_rows)
         or prediction_by_key.keys() != target_by_key.keys()
     ):
@@ -345,71 +294,16 @@ def _join_target_rows(
     return tuple(sorted(target_rows, key=lambda row: (row.slate_id, row.video_id)))
 
 
-def _parse_prediction_line(raw_line: bytes, row_number: int) -> PredictionRow:
-    fields = _without_line_ending(raw_line).split(b",")
-    if len(fields) != 4:
-        raise _invalid_predictions("schema", row_number)
-    evaluation_token, slate_token, video_token, score_token = fields
-    if _EVALUATION_ID_PATTERN.fullmatch(evaluation_token) is None:
-        raise _invalid_predictions("evaluation_id", row_number)
-    slate_id = _parse_identifier(slate_token, row_number)
-    video_id = _parse_identifier(video_token, row_number)
-    if (
-        not score_token
-        or len(score_token) > _MAX_SCORE_BYTES
-        or not _is_canonical_ascii(score_token)
-    ):
-        raise _invalid_predictions("score", row_number)
-    try:
-        score = float(score_token.decode("ascii"))
-    except (UnicodeDecodeError, ValueError):
-        raise _invalid_predictions("score", row_number) from None
-    if not isfinite(score) or not 0.0 <= score <= 1.0:
-        raise _invalid_predictions("score", row_number)
-    return PredictionRow(
-        evaluation_id=EvaluationId(evaluation_token.decode("ascii")),
-        slate_id=slate_id,
-        video_id=video_id,
-        score=score,
-    )
-
-
-def _parse_identifier(token: bytes, row_number: int) -> str:
-    if (
-        not token
-        or len(token) > _MAX_IDENTIFIER_BYTES
-        or not _is_canonical_ascii(token)
-    ):
-        raise _invalid_predictions("identifier", row_number)
-    return token.decode("ascii")
-
-
-def _is_canonical_ascii(token: bytes) -> bool:
-    return (
-        all(0x20 <= byte <= 0x7E for byte in token)
-        and b'"' not in token
-        and token == token.strip()
-    )
-
-
 def _target_identifier_is_encodable(value: str) -> bool:
     try:
         token = value.encode("ascii")
     except UnicodeEncodeError:
         return False
     return (
-        0 < len(token) <= _MAX_IDENTIFIER_BYTES
-        and _is_canonical_ascii(token)
+        0 < len(token) <= MAX_IDENTIFIER_BYTES
+        and is_canonical_ascii(token)
         and b"," not in token
     )
-
-
-def _without_line_ending(raw_line: bytes) -> bytes:
-    if raw_line.endswith(b"\r\n"):
-        return raw_line[:-2]
-    if raw_line.endswith(b"\n"):
-        return raw_line[:-1]
-    return raw_line
 
 
 def _invalid_predictions(stage: str, row_number: int | None = None) -> JudgeError:

@@ -4,11 +4,11 @@
 label-free slate와 Judge 전용 label artifact를 조립하는 경계를 담당한다.
 
 [기능] Stage B의 공개 요청·receipt·error·source seam과 snapshot builder, Stage C의
-fixture/candidate handoff typed contract, canonical identity helper, P0-2A ranking metric과
-P0-2B validation prediction scoring interface를 제공한다.
+fixture/candidate handoff typed contract, canonical identity helper, P0-2A ranking metric,
+P0-2B scoring 및 P0-2C 봉인 ingestion·판정 interface를 제공한다.
 
 [비책임] action log 생성(autoresearch.action_log_generation), 후보 학습·실행,
-candidate prediction ingestion과 Judge 판정(P0-2C 이후)을 담당하지 않는다.
+실제 baseline sigma 측정과 반복 Controller를 담당하지 않는다.
 """
 
 from autoresearch.research_harness.evaluation_errors import (
@@ -51,6 +51,21 @@ from autoresearch.research_harness.judge import (
     build_validation_target,
     score_predictions,
 )
+from autoresearch.research_harness.judge_decision import (
+    ConfirmationDecision,
+    JudgeDecision,
+    JudgeMetric,
+    JudgeReasonCode,
+    MetricDelta,
+    PairedJudgeResult,
+    ScreeningResult,
+    compare_confirmation,
+    screen_candidate,
+)
+from autoresearch.research_harness.prediction_ingestion import (
+    SealedPredictionReceipt,
+    seal_prediction_copy,
+)
 from autoresearch.research_harness.ranking_metrics import (
     RankingMetricError,
     RankingMetricErrorCode,
@@ -67,6 +82,7 @@ __all__ = [
     "CandidateDataViewReceipt",
     "CandidateDataViewRequest",
     "CandidateHistoryReceipt",
+    "ConfirmationDecision",
     "EvaluationSnapshotError",
     "EvaluationSnapshotReceipt",
     "EvaluationSnapshotRequest",
@@ -76,12 +92,19 @@ __all__ = [
     "JudgeSnapshotHandoff",
     "JudgeError",
     "JudgeErrorCode",
+    "JudgeDecision",
+    "JudgeMetric",
+    "JudgeReasonCode",
     "JudgeScoringResult",
     "LocalEvaluationFixtureReceipt",
     "LocalEvaluationFixtureRequest",
+    "MetricDelta",
+    "PairedJudgeResult",
     "RankingMetricError",
     "RankingMetricErrorCode",
     "RankingMetricResult",
+    "ScreeningResult",
+    "SealedPredictionReceipt",
     "SnapshotErrorCode",
     "StageCError",
     "StageCErrorCode",
@@ -90,9 +113,12 @@ __all__ = [
     "build_validation_target",
     "materialize_candidate_data_view",
     "canonical_fixture_dates",
+    "compare_confirmation",
     "descriptor_sha256",
     "ndcg_at_k",
     "recall_at_k",
+    "screen_candidate",
+    "seal_prediction_copy",
     "score_predictions",
     "select_fixture_user_ids",
 ]

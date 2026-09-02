@@ -127,12 +127,13 @@ candidate가 볼 수 있는 action log는 `dt < T`이고, 이 범위에서 완�
   컬럼이 없어야 하고 라벨 파일 경로를 candidate의 argv·환경·prompt에 넣지 않는다.
   validation feedback에는 집계 지표만 넣고, final holdout 결과는 집계값도 돌려주지 않는다.
 - **Judge 입력 hardening.** candidate의 `predictions.csv`를 `O_RDONLY|O_NOFOLLOW`로 열고
-  검증한 같은 FD에서 `64 MiB + 1` byte까지만 복사한다. 경로를 다시 열지 않고, 복사
+  검증한 같은 FD에서 `65 MiB + 1 byte probe`까지만 복사한다. 경로를 다시 열지 않고, 복사
   전후 `fstat`으로 교체·성장을 검출하며, Judge 목적지는 `O_CREAT|O_EXCL`로 만든다.
   Judge는 candidate 경로가 아니라 이 사본만 읽는다. parser는 정확히 4개 필드, 대상
-  slate와 같은 행 수를 강제한다. 세 ID 각 64 byte, score token 24 byte, comma 3개와
-  CRLF 2 byte를 합친 최악 행 길이 221 byte와 header 39 byte를 기준으로 최대
-  **300,000행**만 허용한다. `39 + 300,000 * 221 = 66,300,039 byte`이므로 64 MiB와
+  slate와 같은 행 수를 강제한다. evaluation ID 69 byte, slate/video ID 각 64 byte,
+  score token 24 byte, comma 3개와 CRLF 2 byte를 합친 최악 행 길이 226 byte와 header
+  39 byte를 기준으로 최대 **300,000행**만 허용한다.
+  `39 + 300,000 * 226 = 67,800,039 byte`이므로 65 MiB와
   모순되지 않는다. parser는 10초·256 MiB 상한도 강제하고, Task 7에서 행·시간·메모리
   초기값을 실측해 함께 재조정한다. 이 상한은 workspace/commit 파일 제한을 폐기한 D4와
   충돌하지 않는 inter-process artifact 계약이다.
@@ -619,39 +620,51 @@ P0-2B/C에는 final target factory를 두지 않으며, 후속 final registry Ta
 P0-2C PR이다. candidate 경로를 Judge 소유 사본으로 봉인하는 파일 ingestion과, P0-2B의
 metric 결과를 지표별 baseline σ에 비교하는 판정을 추가한다.
 
-- [ ] candidate 경로의 파일을 `O_RDONLY|O_NOFOLLOW`로 한 번만 열고 검증한 같은 FD에서
+- [x] candidate 경로의 regular file을 `O_RDONLY|O_NONBLOCK|O_NOFOLLOW`로 한 번만 열고 검증한 같은 FD에서
         `65 MiB + 1` byte까지만 읽는다. 복사 전후 `fstat`의 identity·mode·size·mtime을
       비교해 교체·성장을 검출하고, Judge 목적지는 `O_CREAT|O_EXCL`로 만든다. 경로를 다시
       열지 않으며 schema와 지표 계산은 Judge 사본만 읽는다
-- [ ] P0-2B의 동일 parser entrypoint를 격리 subprocess에서 실행해 정확히 4개 필드와 field
-      byte 계약을 강제한다. P0-2C가 별도 parser·schema 정의를 만들지 않는다.
+- [x] P0-2B의 동일 parser 구현을 격리 subprocess에서 실행해 정확히 4개 필드와 field
+      byte 계약을 강제한다. 검증된 행은 exclusive 정규화 JSONL로 저장하고 CSV·JSONL
+      identity와 digest를 opaque receipt에 결속한다. scoring은 이 receipt만 받아 정규화 행을
+      streaming 소비한다. 부모가 정규화 목적지를 `O_EXCL`로 예약하고 worker는 같은 inode에만
+      쓰며 cleanup도 소유 identity가 유지된 파일에만 적용한다. P0-2C가 별도 parser·schema
+      정의를 만들지 않는다.
         `evaluation_id`는 현재 ID 계약에 맞는 정확한 69 byte, `slate_id`·`video_id`는
         comma·quote·개행 없는 ASCII 각 1~64 byte, `score` token은 최대 24 byte다. CRLF 기준
         최악 행 226 byte와 header 39 byte에서 300,000행은 67,800,039 byte이므로 65 MiB 안에
         든다. 행 수는 대상 slate와 같으면서
       최대 300,000행, wall-clock 10초, 메모리 256 MiB여야 하며 상한 위반은
       `invalid_predictions`다
-- [ ] `compare()` — 지표 방향을 정규화하고 D5 규칙(primary `≥2σ_primary` 개선 + 각
+- [x] `compare()` — 지표 방향을 정규화하고 D5 규칙(primary `≥2σ_primary` 개선 + 각
       guardrail `≥-1σ_metric`)으로
       `promote | revise | discard` + `reason_code` 산출. **임계값을 코드에 상수로 박지 않고
       지표별 σ map을 인자로 받는다.** 실제 σ 값 측정은 Task 7에서 한다 — 여기서는 map을
       주입받아 판정하는 로직만 만든다
-- [ ] 모든 필수 `σ_metric > 1e-6`을 강제하고, grouped ROC-AUC 등 필수 값이 `None`이면
+- [x] 모든 필수 `σ_metric > 1e-6`을 강제하고, grouped ROC-AUC 등 필수 값이 `None`이면
       `metric_unavailable`로 판정 불가 처리한다. grouped ROC-AUC coverage는 채점 유저가
       non-null 전체 유저의 20% 이상이면서 최소 30명, probability metric은 item 100%와
       양성·음성 label 모두를 요구한다. 미달이면 `insufficient_metric_coverage`다
-- [ ] screening은 고정 seed의 same-seed baseline보다 primary가 좋아진 candidate만 확인
+- [x] screening은 고정 seed의 same-seed baseline보다 primary가 좋아진 candidate만 확인
       실험으로 보내는 비용 gate다. champion 승격은 같은 5개 seed의 확인 실험에서 계산한
       paired normalized delta 평균만 확정한다
-- [ ] NDCG@10·NDCG@24·Recall@10은 유효 slate가 전체의 20% 이상이면서 최소 30개여야 한다.
+- [x] NDCG@10·NDCG@24·Recall@10은 유효 slate가 전체의 20% 이상이면서 최소 30개여야 한다.
       미달이면 `insufficient_metric_coverage`로 판정 불가다
-- [ ] 테스트: champion 동률 시 판정, symlink·64 MiB 초과·복사 중 성장·기존 목적지 거부,
-      ID/score field byte 상한과 300,000행 경계, `[0,1]` 범위 위반,
+- [x] 테스트: champion 동률 시 판정, symlink·65 MiB 초과·복사 중 성장·기존 목적지 거부,
+      FIFO·regular-to-FIFO 교체 비차단 거부, 실패·중단 cleanup, 봉인 CSV·정규화 행 변조와
+      unsealed Path 채점 거부, ID/score field byte 상한과 300,000행 경계, `[0,1]` 범위 위반,
       parser 행/시간/메모리 상한, higher/lower 방향 정규화,
       σ=0·`1e-6` 경계, metric `None`, 지표별 coverage 미달, 2σ 직전/직후와 guardrail
       -1σ 직전/직후 판정 전환
 
-**검증:** `uv run python -m pytest tests/research_harness/test_judge.py -v`
+**검증:**
+
+```bash
+uv run python -m pytest tests/research_harness/test_judge.py \
+  tests/research_harness/test_judge_decision.py \
+  tests/research_harness/test_prediction_ingestion.py \
+  tests/research_harness/test_slate.py -v
+```
 
 **봉인 검증(필수):** Judge 모듈이 candidate workspace 경로를 참조하지 않음을 테스트로
 고정한다.
@@ -828,7 +841,7 @@ slate(Task 1)가 모두 필요하기 때문이다.
       `σ > 1e-6`, 지표별 20%·30개 coverage 하한이 실용적인지 재조정한다. 변경이 필요하면
       승격 판정을 열기 전에 spec과 plan을 먼저 갱신한다
 - [ ] 최악 길이 300,000행 predictions fixture로 parser wall-clock 10초·메모리 256 MiB와
-      64 MiB artifact 상한을 실측한다. 시간·메모리 안에서 안정적으로 처리하지 못하거나
+      65 MiB artifact 상한을 실측한다. 시간·메모리 안에서 안정적으로 처리하지 못하거나
       실사용 slate 규모와 맞지 않으면 행 상한을 포함한 세 초기값을 함께 낮춰 spec과 plan을
       먼저 갱신한다
 - [ ] 로컬 end-to-end 1회 완주 — slate 조립 → baseline 점수화 → Judge 판정 → ledger 기록

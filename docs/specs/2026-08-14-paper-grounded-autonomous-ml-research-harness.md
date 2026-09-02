@@ -170,19 +170,20 @@ argv·환경·prompt·feedback에 전달하지 않지만, 이 조치도 경로 �
 Judge가 candidate 경계에서 받는 것은 `predictions.csv` 하나뿐이다. Judge는 candidate
 경로를 `O_RDONLY|O_NOFOLLOW`로 한 번만 열고, 검증한 **같은 FD**에서만 복사한다. 경로를
 다시 열지 않는다. 복사 전후 `fstat`의 device·inode·mode·size·mtime을 비교해 교체·성장·
-변조를 검출하고, **64 MiB + 1 byte**까지만 읽어 상한 초과를 확인한다. Judge 소유 목적지는
+변조를 검출하고, **65 MiB + 1 byte probe**까지만 읽어 상한 초과를 확인한다. Judge 소유 목적지는
 `O_CREAT|O_EXCL`로 만들어 기존 파일을 덮어쓰지 않으며, 이후 candidate 경로가 아니라 이
-사본만 파싱한다. 이 64 MiB 상한은
+사본만 파싱한다. 이 65 MiB 상한은
 candidate workspace나 commit의 파일 크기를 제한하는 D4를 되살리는 것이 아니라, 불신
 프로세스가 Judge에 넘기는 단일 artifact의 메모리·디스크 소비를 제한하는 입출력 계약이다.
 
 CSV parser는 header를 포함해 필드가 정확히 `evaluation_id,slate_id,video_id,score` 4개인지
-확인한다. 세 ID는 comma·quote·개행 없는 ASCII로 각 최대 64 byte, `score` token은 최대
-24 byte로 제한한다. CRLF까지 허용한 한 행의 최악 크기는
-`64 + 64 + 64 + 24 + comma 3 + CRLF 2 = 221 byte`이고 header는 최대 39 byte다.
-따라서 유효 행 상한은 **300,000행**으로 둔다. 최악 크기 `39 + 300,000 * 221 =
-66,300,039 byte`는 64 MiB(`67,108,864 byte`) 안에 들어가므로 artifact 상한과 모순되지
-않는다. 행 수는 이 상한 이하이면서 대상 slate와 정확히 같아야 한다. 격리된 parser
+확인한다. `evaluation_id`는 정확히 69 byte이고, `slate_id`·`video_id`는 comma·quote·개행
+없는 ASCII로 각각 최대 64 byte, `score` token은 최대 24 byte로 제한한다. CRLF까지 허용한
+한 행의 최악 크기는 `69 + 64 + 64 + 24 + comma 3 + CRLF 2 = 226 byte`이고 header는
+최대 39 byte다. 따라서 유효 행 상한은 **300,000행**으로 둔다. 최악 크기
+`39 + 300,000 * 226 = 67,800,039 byte`는 65 MiB(`68,157,440 byte`) 안에 들어가므로
+artifact 상한과 모순되지 않는다. 행 수는 이 상한 이하이면서 대상 slate와 정확히 같아야
+한다. 격리된 parser
 subprocess에 wall-clock 10초와 256 MiB 메모리 상한을 적용하며, 어느 상한이든 넘으면
 `invalid_predictions`로 실행을 실패시킨다. 행·시간·메모리 초기값은 Task 7 실측으로 함께
 재조정한다.
@@ -540,13 +541,15 @@ Task가 `FinalConsumptionGrant`를 발급하고, 그 grant만 받는 `build_fina
 뒤에만 final 채점이 가능하다. Stage C handoff 단독 또는 임의 ID·path로 final target을 만드는
 interface는 제공하지 않으며, 직접 target 생성을 시도하면 typed 오류로 거부한다.
 
-P0-2B는 Judge 소유 사본의 CSV parser, field byte·schema·1:1 key 의미 검증과 metric scoring을
-소유한다. P0-2C는 candidate 경로에서 Judge 사본을 만드는 단일-FD ingestion과 **같은 P0-2B
-parser entrypoint**를 제한 subprocess에서 실행하는 책임만 소유한다. 두 단계가 서로 다른
-parser나 schema 정의를 갖지 않는다.
+P0-2B는 field byte·schema·1:1 key 의미 검증과 metric scoring을 소유한다. P0-2C는 candidate
+경로에서 Judge 사본을 만드는 단일-FD ingestion과 **같은 P0-2B parser 구현**을 제한
+subprocess에서 실행하는 책임을 소유한다. worker가 검증한 행은 exclusive 정규화 JSONL로
+남기고 CSV·JSONL identity와 digest를 opaque receipt 하나에 결속한다. scoring은 이 receipt만
+받아 정규화 행을 streaming 소비하므로 candidate 경로나 CSV를 무제한으로 다시 parse하지
+않는다. 두 단계가 서로 다른 parser나 schema 정의를 갖지 않는다.
 
 P0-2B의 package 공개 interface는 `build_validation_target(handoff)`와
-`score_predictions(target, prediction_copy)` 두 함수, 불변 `JudgeScoringResult`, 그리고
+`score_predictions(target, sealed_prediction)` 두 함수, 불변 `JudgeScoringResult`, 그리고
 `JudgeError`·`JudgeErrorCode`로 제한한다. `JudgeEvaluationTarget`, `PredictionRow`,
 `parse_prediction_copy()`는 P0-2C가 같은 구현을 재사용할 module 내부 interface이며 package
 `__init__.py`에서 재수출하지 않는다. target은 공개 constructor 없이 검증된 factory만 만들고,
@@ -599,6 +602,57 @@ null identity를 회귀 고정했다. 기존 평가 계산 회귀 25개와 Resea
 `319 passed, 3 skipped`, 전체 Ruff가 통과했다. 독립 spec 및 코드·보안 리뷰는 수정 후
 Critical/Important/Minor 발견 없이 PASS했다. candidate 경로 봉인, subprocess 자원 제한,
 coverage gate와 sigma 판정은 의도대로 P0-2C에 남아 있다.
+
+#### P0-2C sealed ingestion과 판정 interface
+
+candidate 경로를 여는 책임은 `prediction_ingestion` module에만 둔다.
+`seal_prediction_copy(candidate_prediction, judge_copy)`는 source를 한 번 열고 동일 FD에서
+exclusive Judge 사본을 만든 뒤, 공통 `prediction_parser`를 별도 worker에서 실행한다. worker가
+출력한 정규화 행과 원본 사본은 identity·SHA-256이 결속된 `SealedPredictionReceipt`로만
+scoring에 전달된다.
+POSIX는 `RLIMIT_AS`, Windows는 Job Object process-memory limit으로 256 MiB를 강제하고,
+부모는 wall-clock 10초 timeout을 적용한다. source는 regular-file 사전 검사 후
+`O_NONBLOCK|O_NOFOLLOW`로 열어 FIFO와 검사-열기 사이 교체도 비차단 거부한다. 실패·timeout·
+interruption이면 생성된 CSV와 정규화 부분 파일을 모두 제거한다. `judge.py`는 candidate 경로를
+열지 않고 봉인 receipt의 검증된 정규화 행만 소비한다.
+
+판정 interface는 `PairedJudgeResult(seed, baseline, candidate)`를 입력 단위로 사용한다.
+`screen_candidate()`는 같은 seed에서 primary가 엄격히 개선되고 모든 metric 유효성·coverage
+gate를 통과했을 때만 confirmation을 요청한다. `compare_confirmation()`은 서로 다른 seed
+5개의 pair와 지표별 `baseline_sigmas` map을 받아 seed별 방향 정규화 delta의 평균으로만
+최종 판정을 낸다. 실제 sigma 값은 이 module이 소유하지 않으며 Task 7 측정 전에는 호출자가
+유효한 map을 제공할 수 없으므로 제품 승격 판정은 열리지 않는다.
+
+##### Portfolio Record — P0-2C sealed ingestion과 deterministic decision
+
+**문제.** P0-2B는 Judge 소유 사본을 정확히 채점할 수 있었지만 candidate 경로에서 그 사본을
+만드는 과정은 아직 신뢰 경계 밖이었다. 경로를 두 번 열거나 기존 목적지를 덮어쓰면 검사한
+파일과 채점한 파일이 달라질 수 있고, 무제한 CSV parser는 candidate 입력 하나로 Judge의
+시간·메모리를 소진할 수 있었다. 또한 단일 screening 점수나 공용 sigma 하나로 champion을
+바꾸면 seed noise와 지표 방향 차이를 승격 근거와 혼동하게 된다.
+
+**해결.** candidate 경로 접근을 `prediction_ingestion` module 하나에 모아 no-follow source를
+한 번 열고, 같은 FD의 전후 device·inode·mode·size·mtime이 같은 경우에만
+`O_CREAT|O_EXCL` Judge 사본을 남긴다. 최대 65 MiB와 1-byte probe를 적용하고 실패한 부분
+사본은 열린 FD를 먼저 닫은 뒤 회수한다. P0-2B parser는 표준 라이브러리만 의존하는 내부
+module로 추출해 격리 worker가 검증된 정규화 행을 만든다. CSV 사본과 정규화 행의
+identity·digest를 직접 만들 수 없는 receipt에 함께 묶고 scoring은 receipt만 받게 해 봉인 우회를
+막았다. regular-file 사전 검사와 non-blocking open으로 FIFO와 교체 race를 거부한다.
+정규화 목적지는 부모가 `O_EXCL`로 빈 파일을 먼저 예약하고 worker가 같은 device·inode에만
+쓰며, 실패 cleanup도 그 소유 identity가 유지될 때만 삭제해 동시 실행의 파일을 보존한다.
+worker는 10초 timeout과
+POSIX `RLIMIT_AS`/Windows Job Object의 256 MiB 상한 아래에서 실행한다. 판정은 seed를 명시한
+pair를 사용하며, screening은 primary의 엄격한 양수 delta만 confirmation으로 보내고 최종
+결정은 서로 다른 5개 seed의 paired normalized delta 평균과 지표별 sigma map으로만 만든다.
+
+**결과.** champion 동률, 2sigma와 -1sigma 직전·경계, higher/lower 방향, sigma 0·1e-6,
+metric `None`, ranking·grouped·item coverage 부족, symlink, 65 MiB 초과, source 성장,
+기존 목적지, parser timeout·실패·중단 후 cleanup, 봉인 CSV·정규화 행 변조, 직접 Path 채점
+우회와 FIFO 교체를 회귀 테스트로 고정했다. P0-2C 및 기존 Judge 집중 테스트는
+`68 passed, 3 skipped`, Research Harness 전체는 `359 passed, 6 skipped`, model evaluation은
+`301 passed, 46 skipped`였고 전체 Ruff와 diff 검사가 통과했다. Windows에서는 symlink 권한
+테스트 1개와 POSIX FIFO 테스트 2개가 skip되며 Linux CI에서 실행한다. 실제 sigma 값과 최대
+300,000행의 시간·메모리 실측·임계값 조정은 계획대로 Task 7에 남겼다.
 
 | 판정 | 조건 |
 | --- | --- |
