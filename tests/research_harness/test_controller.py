@@ -218,6 +218,22 @@ class FakeRunner:
         )
 
 
+class ConfirmationFailureRunner(FakeRunner):
+    def run_validation(
+        self,
+        request: ValidationPairRequest,
+        domain: ResearchDomain,
+    ) -> PairedRunReceipt:
+        if self.validation_runs:
+            self.validation_runs.append(request)
+            raise TrialExecutionError(
+                "confirmation_run",
+                "predict_timeout",
+                duration_ms=7,
+            )
+        return super().run_validation(request, domain)
+
+
 def _handoff(tmp_path: Path) -> JudgeSnapshotHandoff:
     return JudgeSnapshotHandoff(
         snapshot_fingerprint=SnapshotFingerprint("f" * 64),
@@ -317,6 +333,24 @@ def test_controller_records_failure_feedback_and_continues(
     assert failure.reason_code == "candidate_generation_failed"
     assert failure.stderr_tail == "compiler error"
     assert runner.preparations[1].feedback_history[0].failure == failure
+
+
+def test_controller_preserves_completed_work_when_confirmation_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_final_claim(monkeypatch, tmp_path)
+    planner = SequencePlanner((_card("card-2"),), [])
+    runner = ConfirmationFailureRunner()
+    request = _request(tmp_path, max_trials=1)
+
+    result = ResearchController(FakeDomain(), planner, runner).run(request)
+
+    assert result.feedback_history[0].decision == "failed"
+    assert result.feedback_history[0].failure is not None
+    assert result.feedback_history[0].failure.stage == "confirmation_run"
+    validation_record = request.ledger.read_state().trials[0]
+    assert validation_record.duration_ms == 17
 
 
 def test_controller_respects_trial_budget_but_still_runs_terminal_final(

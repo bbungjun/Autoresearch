@@ -440,9 +440,15 @@ class ResearchController:
                 metrics=(),
                 decision="failed",
                 reason_code=error.reason_code,
-                duration_ms=error.duration_ms,
+                duration_ms=(
+                    sum(item.duration_ms for item in receipts) + error.duration_ms
+                ),
                 failure_reason_code=error.reason_code,
-                artifacts=candidate.artifacts if candidate is not None else (),
+                artifacts=(
+                    _artifacts(candidate, receipts)
+                    if candidate is not None
+                    else _receipt_artifacts(receipts)
+                ),
                 champion_lineage=lineage,
                 final_consumption=None,
                 experiment_summary=card.canonical_summary(),
