@@ -910,7 +910,7 @@ representation을 typed contract로 고정했다. prediction CSV 의미 검증�
 stale/non-regular artifact, crash·missing output, launcher 시작·Job 결속 실패, 64 KiB tail,
 timeout·정상 parent 선종료·cancellation 뒤 실제 grandchild 회수를 검증한 집중 테스트가
 26개 통과했고 symlink·FIFO 환경 의존 테스트 4개는 skip됐다. Research Harness 전체는
-466개 통과·11개 환경 의존 skip, 저장소 전체 Ruff는 통과했다. 독립 spec 검토에서 발견한
+467개 통과·11개 환경 의존 skip, 저장소 전체 Ruff는 통과했다. 독립 spec 검토에서 발견한
 Windows pre-assignment spawn race, console 없는 host의 `CTRL_BREAK_EVENT` 실패, 환경 재주입,
 stdin/handle 상속과 복합 오류 모호성을 구현 전에 계약과 반례로 보강했다. 코드 리뷰에서는
 시작 gate 도중 cancellation, cleanup 예외가 원래 오류를 덮는 경로, candidate start 실패와
