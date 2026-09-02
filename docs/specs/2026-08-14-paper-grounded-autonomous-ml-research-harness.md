@@ -395,6 +395,77 @@ code를 그대로 전달하고 candidate가 남긴 실제 grandchild만 group/Jo
 회수 완료는 특정 grandchild의 wait syscall이 아니라 bounded poll 뒤 소유 process-group이
 사라졌다는 사실로 검증한다.
 
+### 4.5 Task 6 실행 기준 — 로컬 GPU와 교체 가능한 임베딩 (2026-09-03 승인)
+
+이 절은 Task 6 구현의 승인된 목표이며, 아래 기능이 이미 구현되었다는 의미는 아니다.
+기존 운영 학습·서빙의 Vertex AI 경로를 일괄 교체하지 않고 Research Harness에 적용한다.
+
+**실행 자원과 비용.** 첫 개발·실험은 사용자 로컬 RTX 3070 Ti에서 임베딩을 계산하고,
+LightGBM은 우선 CPU에서 학습한다. Controller·Judge도 로컬에서 실행하되 candidate와
+코드·데이터 경로를 분리한다. 실제 GPU VRAM·드라이버·사용 가능한 메모리는 구현 전
+조회하며, 모델 ID·revision·배치 크기·trial 시간 상한은 장치 확인과 smoke 측정 후 기록한다.
+GPU 메모리 부족은 실패 근거로 남기고, 조용히 다른 모델이나 클라우드로 대체하지 않는다.
+2026-09-03 장치 조회에서 VRAM 8192 MiB와 드라이버 591.86을 확인했다. 조회한 프로젝트
+Python 3.12.13 환경에는 PyTorch·Sentence Transformers가 없어 실제 CUDA 추론은 검증 전이다.
+GPU 인식만으로 모델 적재 가능 크기나 처리량을 확정하지 않는다.
+
+GCP 신규 가입 무료 체험 크레딧은 초기 실행의 필수 자원이 아니다. 이번 승인은 GCP
+자원 생성·유료 계정 전환·유료 API 호출을 허용하지 않는다. 향후 CPU 실행이나 저장 공간이
+필요하면 크레딧 적용 대상·잔액·만료·예산을 확인하고 별도로 승인받는다. 크레딧 외 과금은
+허용하지 않는다. Codex 사용료가 GCP 크레딧으로 충당된다고 가정하지 않는다.
+
+**출발 모델.** baseline은 기존 `MODEL_FEATURE_COLUMNS`의 21개 피처 구조와
+LightGBM 설정을 출발점으로 사용하되, 임베딩은 사전학습된 소형 로컬 모델로 계산한다.
+이것은 **Harness 전용 baseline**이며 기존 운영 champion의 동일 재현으로 표현하지 않는다.
+seed마다 CTR 모델의 split·sampling·초기화·재학습을 수행한다. 초기 범위에는 임베딩 모델
+자체의 파인튜닝을 포함하지 않으며, 동일 입력·모델의 결정적 임베딩은 재사용할 수 있다.
+Task 7의 지표별 sigma도 이 baseline에서 실측한다. 기준 모델·데이터·실행 조건을 바꾸면
+이전 sigma를 무조건 재사용하지 않고 재측정한다.
+
+**임베딩 interface.** 피처 조립과 임베딩 실행 사이에 교체 가능한 seam을 둔다. 최소
+interface는 텍스트 묶음과 query/document 역할을 받아 입력 순서에 맞는 벡터를 반환한다.
+adapter는 모델 로딩·역할별 입력 처리·배치 추론·정규화를 맡는다. 벡터는 유한한 값이어야
+하고 동일 설정 안에서 차원이 일관되어야 하며, 코사인 계산용 정규화와 영벡터 오류 처리를
+명시한다. 모델 간 차원을 일괄 고정하지 않는다. 구체적인 Python 타입·오류명은 구현 설계에서
+확정한다. 초기에는 모델 설정을 바꿀 수 있는 로컬 adapter부터 만들고 범용 plugin 체계를
+추가하지 않는다.
+
+Codex는 임베딩 모델뿐 아니라 입력 텍스트 구성·유사도 계산 방식도 변경할 수 있다.
+interface는 기본 교체 지점이지 수정 파일 allowlist가 아니다. 한 trial은 하나의 핵심
+가설로 설명하는 것을 기본으로 하며, baseline A와 candidate B의 모델이 달라도 된다.
+각 조건 내부에서는 호환되는 동일 모델·revision·역할 설정으로 사용자와 카테고리 벡터를
+만든다. 모델 변경 시 양쪽을 다시 계산하고 CTR 모델도 재학습한다.
+
+모델 다운로드는 준비 단계에서 수행하고 평가에서는 준비된 모델 파일을 사용한다. 모델 ID,
+고정 revision 또는 파일 해시, 텍스트 전처리·역할 설정, 정규화, 코드·데이터 버전,
+실행 장치·시간·실패를 재현 기록으로 남긴다. 캐시 identity에는 모델·revision·입력 텍스트·
+역할·전처리·정규화를 반영하여 이전 모델 벡터가 섞이지 않게 한다. Judge의 예측 CSV·지표·
+숨긴 정답 계약은 임베딩 교체에 따라 바뀌지 않는다.
+
+**로컬 입력 확장.** 첫 검증은 기존 합성 fixture에서 허용된 사용자·영상 메타데이터를
+별도로 추출해 과거 action log와 조립한다. 필요한 재료는 다음과 같다. 이는 입력 의미의
+요약이며, 정확한 파일명·컬럼·manifest 목표는 evaluation snapshot spec §18을 따른다.
+#40에서 typed schema·순수 정규화·시점 선택을 구현했다. 실제 파일 게시와 workspace 연결은
+아직 구현하지 않았다.
+
+- 사용자: ID, 나이, 직업, 시청 시간대, 관심 키워드, 선호 카테고리와 사용 가능 시점.
+- 영상·채널: 영상 ID, 카테고리, 길이, 게시 시각, 조회·좋아요·댓글 수, 채널 구독자·
+  조회·영상 수와 관측 시점. 평가 영상뿐 아니라 과거 행동의 카테고리 조립에도 사용한다.
+- 임베딩 재료: 허용된 관심 키워드, 카테고리 설명, 준비된 모델 파일과 그 버전.
+  평가 클릭·라벨로 임베딩을 만들거나 fixture 생성 상태를 통째로 복사하지 않는다.
+
+각 학습·예측 행은 해당 시점에 사용 가능했던 메타데이터만 사용한다. 공통 카탈로그와
+평가 대상 목록을 구분하고, 반복 trial에 final 전용 목록이나 이를 드러내는 추출 묶음을
+주지 않는다. 기존 action log의 `dt < T`, 완전 학습 라벨의 출력일 상한 `T-2`, final의
+마지막 1회 소비 규칙은 유지한다. 메타데이터 허용은 생성 seed·설정·평가 action log 공개가
+아니다. 합성 결과는 실험 루프의 동작 증거이며 실제 사용자 성능 개선의 증거가 아니다.
+
+현재 history/slate 전용 candidate view에 파일을 임의로 추가하지 않는다. 확정한 목표 계약은
+[evaluation snapshot spec §18](2026-08-31-research-harness-evaluation-snapshot.md)에 있다.
+candidate view v2의 manifest/version·시점 선택·누락 처리·해시·final 전달을 함께 구현하고
+테스트한다. 기존 피처 조립 helper가 운영 Feast의
+계산과 동일한지도 대조하여, 이름만 같은 21개 컬럼을 만들고 재현했다고 주장하지 않는다.
+
 ## 5. 목표 아키텍처
 
 아래는 MVP 이후 논문 계층까지 포함한 최종 구조다. MVP에서는 사람이 준 가설과
@@ -633,7 +704,7 @@ while budget.remaining:
 metric 개선과 guardrail 충족을 분리하며, 어떤 지표를 선택했는지는 REPORT에 설명한다.
 승격 임계값은 고정 비율이 아니라 baseline을 seed만 바꿔 반복했을 때의 노이즈 표준편차
 `σ`의 배수로 정의한다. validation slate의 5-seed baseline sweep은 고정 모델을 다섯 번
-점수화하는 작업이 아니라, 현행 champion 설정을 seed마다 **독립적으로 5회 재학습**한 뒤
+점수화하는 작업이 아니라, 4.5절의 Harness baseline 설정을 seed마다 **독립적으로 5회 재학습**한 뒤
 같은 slate를 점수화하는 작업이다. 이 sweep으로
 primary와 모든 guardrail의 `σ_metric`을 **지표별로 각각** 계산한다. NDCG의 σ를
 Recall·AUC·LogLoss·Brier에 공용하지 않는다.
@@ -1102,12 +1173,13 @@ candidate 데이터 접근 계약은 다음과 같다.
   정답 접근을 막고, 유저 분할은 validation 피드백으로 같은 유저 선호에 적응하는 것을
   막으므로 목적이 다르며 둘 다 필요하다.
 - candidate subprocess의 argv·환경·filesystem에 GCS·BigQuery 등 원격 데이터 소스
-  자격 증명을 주입하지 않는다. candidate가 볼 수 있는 원천은 Harness가 준 `dt < T` 로컬
-  파일뿐이다.
+  자격 증명을 주입하지 않는다. action log 원천은 Harness가 준 `dt < T` 로컬 파일뿐이다.
+  Task 6에서는 4.5절에 따라 시점이 검증된 로컬 metadata와 임베딩 재료를 추가한다.
 
 로컬 fixture를 쓸 때 평가 출력일 `[T, T_end]`와 스캔용 `T_end + 1`을 생성한 입력 및 seed는
-Judge 전용 상태에 보관한다. candidate에는 생성된 `dt < T` history만 줄 수 있으며, 평가
-구간을 같은 생성기와 seed로 재생성할 수 있는 입력은 workspace·argv·환경에 두지 않는다.
+Judge 전용 상태에 보관한다. candidate의 action log는 생성된 `dt < T` history로 제한한다.
+Task 6 metadata 제공은 4.5절의 별도 추출 계약을 따르며 생성 입력 전체의 공개가 아니다.
+평가 구간을 같은 생성기와 seed로 재생성할 수 있는 묶음은 workspace·argv·환경에 두지 않는다.
 
 이 계약은 D3과 충돌하지 않는다. D3은 candidate가 **어떤 코드 파일을 수정할 수 있는지**를
 열어 두는 연구 공간 결정이고, 시간 cutoff는 **어떤 평가 구간 데이터에 접근할 수 있는지**를
@@ -1354,8 +1426,8 @@ research lineage다.
 - [ ] 이전 결과를 관찰해 서로 다른 trial을 순차 실행한다.
 - [ ] 의도적으로 깨진 candidate에서 자동 복구하고 다음 trial을 계속한다.
 - [ ] 동일한 Sealed Judge로 baseline과 candidate를 비교한다.
-- [ ] candidate에는 `dt < T` 로컬 action log만 보이고 원격 데이터 자격 증명과 `dt >= T`
-      평가 파티션, fixture 평가 구간 생성 입력·seed는 보이지 않는다. candidate history의
+- [ ] candidate action log는 `dt < T`로 제한하며 추가 metadata·임베딩 재료는 4.5절을 따른다.
+      원격 데이터 자격 증명·평가 action log·fixture 생성 상태와 seed는 주지 않는다. candidate history의
       완전 라벨 출력일 상한은 `T-2`로 강제한다.
 - [ ] 평가 출력일 `[T, T_end]`의 click·귀속 후보 impression은
       `dt BETWEEN T AND T_end + 1`로 스캔하고 출력은 `[T, T_end]` impression으로 제한하며,

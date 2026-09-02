@@ -714,6 +714,9 @@ process의 같은 descriptor 게시를 직렬화한다.
 
 ### 13.3 CandidateDataView
 
+이 절은 기존 v1 구현 계약이다. Task 6의 신규 v2 목표는 §18이며 v1의 파일 집합을
+소급 변경하지 않는다.
+
 candidate view의 exact filesystem interface는 다음뿐이다.
 
 ```text
@@ -1142,3 +1145,190 @@ git diff --check
 - candidate view는 safe manifest·validation slate·`dt < T` history의 물리적 복사본만 가진다.
 - P0-2-ready coverage를 만족하고 검증된 Judge handoff가 전체 snapshot을 정확히 가리킨다.
 - 독립 두 run 재생성과 동일 target reuse가 서로 다른 검증으로 통과한다.
+
+## 18. Task 6 — candidate metadata v2 계약 (2026-09-03 확정, 순수 변환·모델 구현)
+
+상위 실행 기준은 [Research Harness spec §4.5](2026-08-14-paper-grounded-autonomous-ml-research-harness.md)다.
+이 절은 **v2 전체 목표와 부분 구현의 경계**를 기록한다. #40에서 §18.7의 순수 정규화·
+시점 선택과 `CandidateDataManifestV2` 모델을 구현했다. `CandidateDataManifest`는 여전히
+v1만 받으며 `candidate_data_view`는 validation slate와 history만 복사한다. v2 파일 게시·
+workspace/final 전달·checkpoint 결속은 아직 구현하지 않았다. 기존 v1 reader·fixture·
+evaluation fingerprint는 그대로 보존한다.
+
+### 18.1 전달 파일과 소유권
+
+candidate view v2는 기존 `harness_in/slate.parquet`, `harness_in/candidate-view.json`,
+`harness_in/history/action_log/dt=.../part-0.parquet`에 다음 **두 파일만** 추가한다.
+
+- `harness_in/metadata/users.parquet`: 시점별 사용자 프로필.
+- `harness_in/metadata/videos.parquet`: 시점별 영상·채널 메타데이터.
+
+이 경로는 신규 v2 목표 경로다. 최초 구현에는 별도 DB나 범용 metadata registry를 추가하지
+않는다. Harness의 metadata materializer가 원본 검증·필드 추출·게시를 소유하고 candidate의
+피처 조립 module이 시점 조인·파생 피처·임베딩 계산을 맡는다. 카테고리 설명은 버전 관리된
+코드 자산을 사용한다. 모델 파일은 별도 준비된 로컬 실행 자산이며 metadata Parquet에
+임베딩 벡터나 모델 가중치를 넣지 않는다. 모델 revision은 실험 재현 기록에서 고정한다.
+
+### 18.2 사용자 파일 — 정확한 목표 컬럼
+
+아래 순서의 Arrow schema를 사용한다. 모든 컬럼과 list 원소는 non-null이다. 빈 키워드·
+선호 목록은 `[]`로 허용하지만 필수 컬럼 누락과 null을 빈 값으로 조용히 바꾸지는 않는다.
+
+| 컬럼 | Arrow 타입 | 현재 fixture 원본·의미 |
+| --- | --- | --- |
+| `user_id` | `string` | 같은 이름의 사용자 ID |
+| `available_at` | `timestamp[us, tz=UTC]` | `generated_at`을 timezone-aware UTC로 파싱한 사용 가능 시점 |
+| `age` | `int64` | `age`, 0 이상 |
+| `occupation` | `string` | `occupation` |
+| `watch_time_band` | `string` | 원본 `watch_time_band`, baseline에서 기존 정규화 적용 |
+| `hobby_keywords` | `list<string>` | 같은 이름의 취미 키워드 |
+| `interest_keywords` | `list<string>` | 같은 이름의 관심 키워드 |
+| `lifestyle_keywords` | `list<string>` | 같은 이름의 생활 키워드 |
+| `primary_categories` | `list<string>` | 같은 이름의 선호 카테고리, 기존 카테고리 어휘 사용 |
+
+정렬·고유키는 `(user_id, available_at)`이다. ID는 비어 있을 수 없고 중복키는 실패한다.
+`source_persona_json`, 원천 식별용 hash·UUID, 인구통계의 불필요한 필드, 생성 모델·prompt·
+fixture descriptor는 전달하지 않는다. 새 이력 버전에는 실제 사용 가능 시점을 붙이고,
+현재 값을 과거에 알고 있었던 것처럼 소급하지 않는다.
+
+기존 `to_personas_frame()`은 세 키워드 목록을 변환하지만 `primary_categories`를 출력하지
+않는다. Task 6의 조립은 이 값을 명시적으로 보존한다. 알려진 선호값을 버린 뒤 키워드 기반
+fallback으로 다시 추측해서는 안 된다. 기존 운영 adapter의 동작을 함께 바꿀 필요는 없다.
+
+### 18.3 영상 파일 — 정확한 목표 컬럼
+
+아래 순서의 Arrow schema를 사용하며 모든 컬럼은 non-null이다. 이 최초 계약은 검증된
+합성 fixture용이다. 실제 데이터의 비공개 구독자 수·nullable 필드는 별도 명시 계약 없이
+숫자를 만들어 이 schema에 맞추지 않는다.
+
+| 컬럼 | Arrow 타입 | 현재 fixture 원본·변환 |
+| --- | --- | --- |
+| `video_id` | `string` | 같은 이름의 영상 ID |
+| `available_at` | `timestamp[us, tz=UTC]` | `collected_at`과 `video_trending_date` 중 늦은 시각 |
+| `category_id` | `string` | `video_category`, 기존 카테고리 어휘 |
+| `duration_sec` | `int64` | `video_duration`의 ISO 8601 duration을 초 단위로 변환, 양의 정수 |
+| `published_at` | `timestamp[us, tz=UTC]` | `video_published_at` |
+| `view_count` | `int64` | `video_view_count`, 0 이상 |
+| `like_count` | `int64` | `video_like_count`, 0 이상 |
+| `comment_count` | `int64` | `video_comment_count`, 0 이상 |
+| `channel_subscriber_count` | `int64` | 같은 이름의 원본, 0 이상 |
+| `channel_view_count` | `int64` | 같은 이름의 원본, 0 이상 |
+| `channel_video_count` | `int64` | 같은 이름의 원본, 0 이상 |
+
+정렬·고유키는 `(video_id, available_at)`이며 중복키·빈 ID·파싱 실패·게시 시각이 사용 가능
+시각보다 늦은 행은 실패한다. 영상 제목·설명·URL·생성 설정은 21개 baseline 피처에 필요하지
+않으므로 최초 입력에는 넣지 않는다. 향후 텍스트 실험용 카탈로그 확장은 별도로 추적한다.
+
+현재 합성 fixture용 duration parser는 `PT` 뒤 정수 H/M/S 성분을 순서대로 받는다
+(예: `PT5M`, `PT1H2M3S`). 음수·소수·0초·int64 범위 초과와 날짜/주 단위 duration은
+거부한다. ISO 8601의 모든 형식을 지원한다는 의미가 아니며, 운영의 잘못된 값을 0초로
+치환하는 helper와도 구분한다.
+
+### 18.4 시점 선택·누락·평가 split
+
+1. 학습과 예측의 기준 시각 `q`는 해당 impression의 `event_timestamp`다. 각 사용자·영상은
+   `available_at <= q`인 행 중 가장 최신 1개만 사용한다. timezone-naive 시각은 거부하고,
+   날짜 기반 집계는 KST로 계산한다. 사용 시점보다 미래인 행을 backfill하지 않는다.
+2. 제공 대상 ID는 **허용된 history에 등장하는 ID와 현재 전달할 slate의 ID의 합집합**이다.
+   final ID를 참조해 validation 묶음을 만들지 않는다. 메타데이터 이력은 해당 ID의 허용된
+   학습·예측 요청 중 최대 시각 이하로 제한한다. 각 행의 실제 조인은 다시 1번을 따른다.
+3. raw metadata 이력은 여러 요청 시점을 함께 담는다. MVP의 시점 불사용 보장은 기본 조립
+   코드와 테스트에서 검증하는 계약이며, candidate가 이력 중 미래 행을 고르는 행위까지
+   OS 수준에서 막는다는 뜻은 아니다. 평가 action log·정답은 이와 별개로 계속 숨긴다.
+4. 파일·필수 컬럼 부재, schema·digest 오류는 전체 입력 준비 실패다. 반면 해당 시점에
+   아직 프로필/영상이 관측되지 않은 경우는 정상 cold-start다. baseline은 기존 모델 계약의
+   범주형 `unknown`·수치형 0 기본값을 적용하고 빈 관심/선호 목록의 match·similarity는 0으로
+   둔다. 실제 관측 누락과 파일 손상을 혼동하지 않는다. row별 누락 여부와 집계 coverage는
+   재현 기록에 남기며, 모든 행에 metadata가 있다고 주장하지 않는다.
+5. action log `dt < T`, 완전 학습 라벨 출력일 `<= T-2`, 일 단위 행동 피처의 당일 제외를
+   유지한다. 짧은 fixture의 7일·30일 이력 부족은 cold-start/관측 coverage로 기록하며
+   데이터가 실제 7일·30일 존재했다고 표현하지 않는다.
+6. validation용 view builder는 final 선택 인자를 받지 않는다. final용 builder는 기존
+   `FinalConsumptionGrant`를 검증한 뒤에만 현재 final slate와 필요한 metadata를 별도
+   workspace에 만든다. grant·marker·Judge 경로와 final 집계 결과는 coding agent에 주지 않는다.
+   하나의 final claim 안에서 계획된 paired seed 실행을 하며 새 claim으로 재평가하지 않는다.
+
+baseline과 candidate는 같은 split·seed에서 **동일한 metadata bytes**를 받는다. metadata를
+baseline 실행 후 다시 조회하지 않고 run 시작에 Judge 측 receipt로 고정한다. final용
+metadata도 시작 시 Judge 측에 고정하지만 candidate에는 소비 권한 획득 후에만 전달한다.
+숨겨진 원천 URI·fixture descriptor·전체 카탈로그 hash는 candidate manifest에 노출하지 않는다.
+
+### 18.5 manifest·identity·오류 계약
+
+`CandidateDataManifest` v2는 기존의 `evaluation_id`, `evaluation_start_date`,
+`complete_history_label_end_date`, `slate`, `history_partitions` 의미를 유지한다.
+`contract_version`은 `candidate-data-view-v2`이며 아래 필드를 추가한다.
+
+- `metadata_contract`: 고정 문자열 `candidate-metadata-v1`.
+- `user_metadata`: 기존 `ArtifactReceipt`와 같은 `relative_path`, `rows`, `sha256` 구조.
+  경로는 `metadata/users.parquet`로 고정한다.
+- `video_metadata`: 같은 receipt 구조, 경로는 `metadata/videos.parquet`로 고정한다.
+
+manifest는 extra-forbid로 검증하고 기존 canonical JSON 규칙으로 hash한다. 평가 slate/label
+bytes가 같으면 metadata 추가만으로 evaluation ID를 새로 만들지 않는다. 대신 view manifest
+SHA-256으로 metadata identity를 고정하고 run/checkpoint/artifact evidence에 결속한다.
+같은 run의 metadata 변경은 재개 오류이며 새로운 입력으로 조용히 재실행하지 않는다.
+새 view나 ledger를 만들더라도 기존 final evaluation ID 소비 registry를 우회할 수 없다.
+
+v1을 v2로 제자리 덮어쓰지 않는다. 새 workspace에 atomic/write-once 게시하고 기존 receipt·
+경로 안전성·독립 파일 복사 검증을 재사용한다. 예상 밖 파일이나 기존 target의 내용 차이는
+실패한다. validation/final 각각 baseline·candidate의 view digest와 모델 identity를 기록한다.
+입력 준비 오류는 기존 상위 data-view/실행 실패 경로로 전달하고 원본 행·자격증명·절대
+Judge 경로를 오류 메시지에 싣지 않는다. 순수 metadata 변환은 기존
+`StageCErrorCode.CANDIDATE_VIEW_CONFLICT`를 사용하며 새 오류 enum을 추가하지 않는다.
+
+### 18.6 첫 검증과 발견 근거
+
+- source field 근거: `fixture_inputs.py`의 두 schema와 `_virtual_user_rows`,
+  `_fixture_video_rows`; 피처 목록: `model_contract.MODEL_FEATURE_COLUMNS`.
+- 선호 카테고리 보존: `virtual_user_generation/adapter.py`와
+  `feature_engineering/assembly.py`의 명시 선호값 우선 규칙을 대조했다.
+- cold-start: `feast_retrieval.apply_cold_start_defaults`의 범주형/수치형 규칙을 재사용한다.
+  과거 helper의 view-count 근사 등은 운영 계산과 별도로 대조하며, 컬럼명 일치가 전체
+  학습 동작의 동일성을 증명하지는 않는다.
+- fixture v1의 `generated_at`과 영상 관측 시각은 UTC 00:00이고, 일일 impression은 KST
+  하루에 배치된다. 따라서 같은 날짜라도 관측 전에 발생한 노출이 가능하다. 이는 코드 대조로
+  확인한 조건이며 발생 행수·성능 영향은 아직 측정하지 않았다. v1 시간을 소급 수정하지 않는다.
+
+구현 테스트는 schema/파싱 실패, hash 변경·재개 거부, 시점 직전·동일·직후 조인,
+정상 cold-start와 파일 손상의 구분, `primary_categories` 보존, history cutoff,
+validation에서 final 미접근, grant 없는 final view 거부, 두 조건의 metadata 동일성을 포함한다.
+원본 fixture bytes나 생성 의미를 변경해야 할 경우 새 fixture 버전과 golden 검증으로 분리한다.
+
+### 18.7 테스트 선행 후 구현한 최소 interface (#40)
+
+아래 이름은 RED 테스트로 고정한 뒤 구현한 **순수 계산·모델 interface**다.
+파일 게시와 분리해 입력 변환·시점 선택을 작은 Arrow table로 검증한다. `codebase-design`의
+작은 interface 원칙에 따라 schema/값 검증과 정렬·이진 탐색을 하나의 module 안에 둔다.
+
+- `fixture_models.CandidateDataManifestV2`: §18.5의 새 Pydantic 모델. 기존
+  `CandidateDataManifest`는 v1 reader로 유지하여 v2 파일을 조용히 받아들이지 않는다.
+- `candidate_metadata.normalize_user_metadata(raw: pa.Table) -> pa.Table`:
+  필요한 원본 컬럼의 타입·값을 검증하고 §18.2의 exact schema로 정렬·투영한다.
+- `candidate_metadata.normalize_video_metadata(raw: pa.Table) -> pa.Table`:
+  필요한 원본 컬럼을 검증하고 §18.3으로 정렬·투영한다. 원본의 불필요한 컬럼은 제거하되
+  필수 컬럼 부재·타입 오류를 자동 보정하지 않는다. 빈 typed table은 유효한 빈 결과다.
+- `candidate_metadata.select_metadata_as_of(metadata: pa.Table, requests: pa.Table,
+  *, entity_key: str) -> pa.Table`: key는 `user_id` 또는 `video_id`다. 요청은 key와
+  UTC timezone-aware `event_timestamp` 두 컬럼이다. 요청 순서와 중복 요청을 보존하고,
+  입력 metadata 정렬 여부에 의존하지 않으며 요청되지 않은 ID는 반환하지 않는다.
+
+시점 선택 결과는 요청 두 컬럼, metadata의 key 이외 컬럼(원래 순서),
+`metadata_missing: bool` 순서다. 적합한 과거 행이 없으면 metadata 부분만 null이고
+`metadata_missing=True`다. 원래 값 0은 missing이 아니다. 이후 피처 조립이 cold-start
+기본값을 적용하므로 이 selector가 age나 count를 미리 0으로 채우지 않는다. 빈 요청도
+같은 결과 컬럼의 0행 table이다. duplicate metadata key·invalid 요청은 실패한다.
+
+정규화/selector의 공개 오류는 기존 `StageCError`로 전달한다. raw metadata의 누락·null·
+잘못된 타입, timezone-naive 시각, 중복키와 날짜 범위 초과를 거부한다.
+원본의 추가 열은 제거하지만 중복 열 이름은 거부한다. selector는 정규화된 schema만 받으며
+외부에서 직접 넘긴 metadata 값도 다시 검증한다.
+manifest 검증은 기존 패턴처럼 `ValidationError` 또는 `StageCError`를 허용한다.
+metadata receipt의 rows는 bool이 아닌 0 이상 정수, digest는 소문자 hex 64자다.
+
+테스트는 성공 입력을 먼저 검증한 후 실패 입력을 넣는다. 모든 입력을 무조건 거부하는
+구현이 오류 테스트를 통과하지 않게 한다. 최초 RED에서는 제품 module 부재를 collection
+오류나 skip 대신 명시적인 assertion으로 확인했다. 실제 구현 후 같은 테스트가 GREEN이며,
+production stub·xfail은 추가하지 않았다.
+이 단계의 테스트는 실제 파일 게시·grant 검증·checkpoint 재개를 증명하지 않는다.
+해당 integration 테스트는 v2 materializer/workspace 연결 때 별도로 추가한다.

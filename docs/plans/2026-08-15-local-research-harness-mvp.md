@@ -44,7 +44,8 @@ REPORT, 기존 웹 request·budget·REPORT 배선은 MVP에서 버리는 항목�
 
 ## 확정 결정
 
-이 계획과 spec의 공통 전제다. D1~D8은 승인된 확정 결정이며 구현 Task가 뒤집지 않는다.
+이 계획과 spec의 공통 전제다. D1~D8은 승인된 확정 결정이며 구현 Task가 임의로 뒤집지 않는다.
+2026-09-03 승인으로 Task 6의 candidate 입력에 안전한 metadata를 추가한다(spec 4.5절).
 
 | # | 결정 | 근거 |
 | --- | --- | --- |
@@ -55,7 +56,7 @@ REPORT, 기존 웹 request·budget·REPORT 배선은 MVP에서 버리는 항목�
 | D5 | **판정 임계값은 고정 %가 아니라 baseline seed 노이즈 σ의 배수로 정의한다.** (구 M1) | 아래 "판정 규칙" 참조. |
 | D6 | **`slate_id`를 action log 생성 단계에서 부여한다.** 사후 추론하지 않는다. 과거 파티션은 평가 대상에서 제외한다. (구 M2) | slate 경계는 노출 시점에만 존재하는 사실이고, 사후 추론은 언제나 근사다. NDCG는 slate 단위로 계산되므로 경계가 틀리면 지표가 **조용히** 틀리고 그 위의 모든 자율 판정이 함께 틀린다. 두 정의를 섞으면 D5의 σ 측정이 오염된다. |
 | D7 | **평가 데이터는 `slate_id` 도입 이후 생성분부터 사용한다.** 개발·검증용으로는 `RuleBasedActionLogGenerator`로 로컬 생성한다. (구 M3) | 로컬에 action log parquet 스냅샷이 없음을 확인했다. rule-based 생성기는 LLM·API 키 없이 동작하므로 로컬 완주 원칙(D2)과 맞는다. |
-| D8 | **KST 날짜 cutoff `T`로 candidate 데이터 접근을 제한한다.** candidate에는 Harness가 준 `dt < T` 로컬 action log만 두고, validation/final slate는 `dt >= T`에서 만든다. 원격 데이터 자격 증명은 주입하지 않는다. | raw action log에는 click 이벤트가 있어 평가 구간 파티션을 읽으면 현행 30분 join으로 정답을 복원할 수 있다. 시간 cutoff와 유저 80/20은 각각 정답 접근과 같은 유저 적응을 막으므로 둘 다 유지한다. |
+| D8 | **KST 날짜 cutoff `T`로 candidate action log 접근을 제한한다.** action log는 `dt < T`만 두고 validation/final slate는 `dt >= T`에서 만든다. Task 6은 spec 4.5절에 따라 시점이 검증된 metadata와 임베딩 재료를 추가한다. 원격 데이터 자격 증명은 주입하지 않는다. | 평가 action log로 정답을 복원하는 경로는 계속 닫고 기존 피처 조립용 설명 데이터만 추가한다. 시간 cutoff와 유저 80/20을 유지한다. |
 
 ### D1이 만드는 인터페이스
 
@@ -67,6 +68,9 @@ candidate가 지켜야 하는 계약은 **단 하나**다.
 출력  <workspace>/harness_out/predictions.csv                evaluation_id, slate_id, video_id, score
 진입점 python -m autoresearch.cli harness-predict --slate <in> --out <out> --seed <n>
 ```
+
+위 파일은 v1 기준이다. Task 6의 metadata 파일 및 v2 manifest 목표는 evaluation snapshot
+spec §18을 따르며, 기존 v1의 파일 집합은 변경하지 않는다.
 
 이 명령이 동작하는 한 나머지는 전부 자유다 — 피처 재조립, 모델 교체, 의존성 추가,
 디렉터리 구조 변경, 학습 코드 재작성 모두 허용된다. 진입점 계약이 곧 allowlist의
@@ -138,7 +142,8 @@ candidate가 볼 수 있는 action log는 `dt < T`이고, 이 범위에서 완�
   초기값을 실측해 함께 재조정한다. 이 상한은 workspace/commit 파일 제한을 폐기한 D4와
   충돌하지 않는 inter-process artifact 계약이다.
 - **데이터 자격 증명 제거.** candidate 환경 allowlist에 GCS·BigQuery 자격 증명을 넣지
-  않는다. Harness가 주입한 `dt < T` 로컬 파일만 읽을 수 있다. D3은 코드 수정 범위를 여는
+  않는다. action log는 Harness가 주입한 `dt < T` 파일만, metadata·임베딩 재료는 spec 4.5절의
+  로컬 입력만 제공한다. D3은 코드 수정 범위를 여는
   결정이고 이 규칙은 평가 데이터 접근을 닫는 결정이라 충돌하지 않는다.
 - **Judge 상태 루트.** `harness-run --judge-state-root <absolute-path>`를 필수 설정으로 받고,
   final 소비 marker는 그 고정 절대 경로 아래에 둔다. 경로가 상대 경로이거나 상태 루트가
@@ -213,7 +218,7 @@ spec 7장과 이 plan은 얼마나 좋아져야 promote인지 아래 지표별 �
 harness는 잡음을 champion으로 승격시키고 그 위에서 다음 실험을 이어가므로, 오류가 조용히
 누적된다.
 
-**σ 측정.** validation slate에서 baseline(현행 champion 설정)을 seed마다 **독립적으로
+**σ 측정.** validation slate에서 baseline(Task 6의 Harness baseline 설정)을 seed마다 **독립적으로
 5회 재학습**한 뒤 같은 slate를 점수화하고, `NDCG@10`뿐 아니라 `Recall@10`, `NDCG@24`,
 grouped ROC-AUC, PR-AUC, LogLoss, Brier의
 표준편차를 **각각** 구한다. 각 `σ_metric`은 해당 지표에서 "아무것도 바꾸지 않아도
@@ -984,17 +989,54 @@ adapter, 재학습 `harness-predict` CLI, baseline sigma 실측은 없으며 각
 
 ---
 
-## Task 6: CLI 진입점 + MVP REPORT + 문서 갱신
+## Task 6: 로컬 GPU·메타데이터·임베딩 연결 + CLI + MVP REPORT
 
+**실행 기준 확정: 2026-09-03.** 정본은 spec 4.5절이다. 사용자 로컬 RTX 3070 Ti에서
+사전학습 임베딩 모델 추론, CPU에서 LightGBM 학습, 로컬에서 Controller·Judge를 실행한다.
+기존 21개 피처 구조와 LightGBM 설정을 출발점으로 삼되 로컬 임베딩을 사용하므로
+운영 champion의 동일 재현이 아닌 Harness baseline으로 기록한다. 임베딩 파인튜닝은
+초기 범위에서 제외한다. 아래 체크리스트에서 순수 metadata 변환·v2 모델만 구현했으며,
+Task 6 전체 완료가 아니다.
+
+**구현 순서:** 입력 계약 확정 → 로컬 피처·임베딩 → 재학습 CLI → 실행 연결·REPORT.
+
+- [x] #40에서 metadata 정규화·시점 조인·v2 manifest의 RED 테스트를 먼저 작성했다.
+      최초 테스트 전용 요청에서는 production 구현 없이 실패를 확인했다
+- [x] 후속 구현 승인에 따라 같은 #40에서 정규화·시점 선택·v2 manifest 모델을 구현하고
+      계약 테스트를 GREEN으로 전환했다. 파일 게시와 실행 연결은 별도 후속 범위다
+- [x] 2026-09-03 GPU와 기존 Python 환경을 조회했다. RTX 3070 Ti, VRAM 8192 MiB,
+      NVIDIA 드라이버 591.86, Python 3.12.13을 확인했다. 조회한 프로젝트 가상환경에는
+      LightGBM·PyArrow가 있고 PyTorch·Sentence Transformers는 없다. GPU 인식과
+      CUDA 텐서 연산 성공은 다른 검증이며, 후자는 아직 수행하지 않았다
+- [x] [evaluation snapshot spec §18](../specs/2026-08-31-research-harness-evaluation-snapshot.md)에
+      두 metadata 파일의 컬럼·시점·cold-start·v2 manifest·final 전달·재개 identity 목표를 확정했다
+- [ ] CUDA 지원 실행 의존성을 준비하고 작은 텐서 연산과 실제 모델 추론을 검증한 뒤
+      소형 로컬 모델 ID/revision·배치 크기·trial 시간 상한을 정한다. 초기 실험에 GCP는 사용하지 않는다.
+      클라우드 자원 생성·계정 유료 전환·유료 API·크레딧 외 과금은 별도 승인 없이 하지 않는다
+- [ ] 합성 fixture의 사용자 프로필·영상/채널 관측 정보를 candidate-safe 입력으로 추출한다.
+      확정한 §18을 typed model·materializer·workspace에 구현한다. v1 manifest를 덮어쓰지 않고
+      새 workspace에 v2를 게시한다. 문서 확정과 동작 구현을 구분한다
+- [ ] 과거 action log와 메타데이터로 기존 피처를 조립한다. 학습 행에도 당시 사용 가능한
+      정보만 쓰고, 운영 Feast와 기존 로컬 helper의 계산 차이를 확인한다. 평가 action log,
+      생성 seed·설정, 반복 중 final 전용 목록은 전달하지 않는다
+- [ ] 텍스트 묶음과 query/document 역할을 받아 벡터를 반환하는 최소 임베딩 interface와
+      모델 설정으로 교체 가능한 로컬 adapter를 구현한다. 모델 로딩·배치·정규화는 adapter가
+      맡고 Codex는 모델·입력 텍스트·유사도 계산을 변경할 수 있다. 범용 plugin 체계는 만들지 않는다
+- [ ] 모델·revision·텍스트·역할·전처리·정규화별로 캐시를 구분한다. 모델 변경 시 사용자와
+      카테고리 벡터를 함께 갱신한다. 평가에서는 준비된 모델 파일만 사용하며, 메모리 부족이나
+      모델 부재를 다른 모델/클라우드로 조용히 우회하지 않고 실패로 기록한다
 - [ ] `autoresearch/cli.py`에
       `harness-predict --slate <in> --out <out> --seed <n>`(candidate용)와
       `harness-run --judge-state-root <absolute-path>`(연구 실행) 추가
-- [ ] `harness-predict` 기본 구현 — 현행 champion 설정으로 주어진 seed에서 split·sampling·
+- [ ] `harness-predict` 기본 구현 — 위 Harness baseline 설정으로 주어진 seed에서 split·sampling·
       모델 초기화를 포함해 **재학습한 뒤** slate를 점수화한다. 고정 모델을 다시 점수화만
       하는 구현은 허용하지 않는다. **이것이 baseline이자 candidate가 고쳐 나갈 출발점이다**
 - [ ] `report.py` — Trial Ledger와 final holdout evidence에서 `research-report.md`를 만든다.
       사람이 준 가설·`ExperimentCard`, trial·실패·복구 이력, validation/final 지표,
       최종 결론과 재현 좌표를 포함한다. 논문 출처와 9절 고정 형식은 로드맵 범위다
+- [ ] 실제 coding agent·LocalRunner·Controller를 연결하고 모델 ID/revision 또는 파일 해시,
+      임베딩 처리 설정·코드·데이터 버전·실행 장치·시간·실패를 재현 기록으로 남긴다.
+      합성 환경 동작 증거를 실제 사용자 품질 개선이나 미측정 비용 절감으로 표현하지 않는다
 - [ ] REPORT 결론은 final holdout의 유효한 비교 결과에 따라 `개선|개선 없음|판정 불가`
       중 하나이고, validation champion이 final에서 기각되면 `개선 없음`과 baseline 유지를
       명시한다
@@ -1003,10 +1045,100 @@ adapter, 재학습 `harness-predict` CLI, baseline sigma 실측은 없으며 각
 - [ ] `docs/README.md` 역할별 인덱스에 이 spec/plan 등재
 
 **검증:**
+
+- 입력: 시점 이후 메타데이터 배제, history cutoff·완전 라벨 상한 유지, final 목록 비노출,
+  receipt 검증과 누락 정책을 테스트한다.
+- 임베딩: 입력 순서·행 수·유한값·차원·정규화·query/document 역할·모델 교체 시 캐시 분리를
+  interface를 통해 테스트한다. 가벼운 테스트 adapter 검증과 실제 GPU smoke 결과를 구분한다.
+- 실행: seed별 CTR 재학습, 사전학습 임베딩의 안전한 재사용, OOM 실패 기록, 외부 API 없는
+  실행을 검증한다. 지표·시간·메모리 수치는 측정 후에만 기록한다.
+
 ```bash
 uv run python -m pytest -v
 uv run --no-sync ruff check applications autoresearch tests tools
 ```
+
+### Task 6 기준 변경 기록 — 문제·해결·결과
+
+**문제:** 기존 계획은 운영 champion 재학습을 요구했지만 candidate 입력은 history와 slate에
+한정되어 사용자·영상 피처 재료가 빠져 있었다. 기존 임베딩 호출은 Vertex AI에 연결되고
+카테고리 캐시도 모델별 구분이 없어 모델 교체 실험을 그대로 지원하지 못한다. 근거는
+`model_contract.py`, `assembly.py`, `embeddings.py`, `category_reference.py` 및 candidate view다.
+
+**해결:** history-only 축소 모델 대신 안전한 메타데이터를 추가해 기존 피처 구조를 유지하고,
+최소 임베딩 interface 뒤에 교체 가능한 로컬 adapter를 둔다. 사용자 보유 GPU를 우선 사용해
+초기 GCP 의존성을 없앤다. 운영 모델의 동일 재현은 포기하지만 실험 자유도와 로컬 완주를
+확보하는 선택이며, 운영 경로 일괄 변경과 임베딩 파인튜닝은 제외한다.
+
+**결과:** 실행 기준에 이어 metadata v2의 목표 schema·전달·시점 계약을 문서로 확정하고
+GPU/Python 환경을 조회했다. PyTorch와 Sentence Transformers가 없는 현재 환경에서
+CUDA 추론 성공을 주장하지 않는다. 이 기준 확정 시점에는 typed schema도 없었으며,
+후속 #40에서 최소 변환·모델만 구현했다. 모델 선택·의존성 설치·성능 및 비용
+실측은 후속 작업이다. 조회 시 여유 VRAM은 다른 프로그램 사용에 따라 변하므로 고정 예산으로
+쓰지 않는다. 모델·데이터 다운로드나 GCP 작업은 수행하지 않았다.
+
+### Task 6 테스트 선행 기록 — #40 (2026-09-03)
+
+**문제:** 문서만으로는 KST/UTC 시점 오류, 선호 카테고리 소실, v1/v2 혼용을 재현할 수
+없었다. 제품 구현 전 기대 동작을 실행 가능한 입력·출력 계약으로 고정할 필요가 있었다.
+
+**해결:** 작은 Arrow 원본과 독립 기대 schema를 작성하고, metadata 정규화·시점 선택·v2
+manifest를 외부 interface로 테스트한다. 시점 직전/동일/직후, 입력 순서와 중복 요청,
+duration 초 변환, 필수 컬럼·타입·중복키·경로·digest 오류를 포함한다. 성공 입력을 먼저
+검증하여 모든 입력을 거부하는 구현의 거짓 성공을 막는다. 내부 파일 배치 알고리즘이나
+제품 helper로 기대값을 계산하지 않으며, GPU와 외부 API는 사용하지 않는다.
+
+**검증 결과:** 동일 lock의 기존 Python 3.12 dev 환경에서 다음 결과를 확인했다.
+
+- 신규 4개 test module에서 **93개 수집·실행: 89 failed, 4 passed**. 실패는
+  `candidate_metadata` 및 `CandidateDataManifestV2` 부재의 명시적 assertion이다.
+  통과 4개는 기존 v1 호환성 2개와 테스트 입력의 기존 원본 schema 대조 2개다.
+- 기존 `test_fixture_models.py`, `test_candidate_data_view.py`, `test_workspace.py`:
+  **95 passed, 1 skipped**. skip은 Windows에서 POSIX executable-mode 검증 제외다.
+- `python -m ruff check --no-cache applications autoresearch tests tools`와
+  `git diff --check` 통과. 신규 테스트에는 skip·xfail·제품 stub을 추가하지 않았다.
+
+신규 테스트 실행: `python -m pytest tests/research_harness/test_metadata_case_fixtures.py
+tests/research_harness/test_candidate_metadata_normalization.py
+tests/research_harness/test_candidate_metadata_as_of.py
+tests/research_harness/test_candidate_metadata_manifest.py -q` (명령은 한 줄로 실행).
+RED는 제품 동작 검증 성공이 아니며 main 병합 대상이 아니다. 테스트 선행 단계에서는 전체 pytest·CI를
+실행하지 않았다. 실제 v2 파일 게시·누락 파일/digest 변조·final grant·동일 metadata 전달·
+checkpoint 재개 검증은 materializer/workspace 구현 때 추가한다. 다음 작업은 이 테스트를
+통과시키는 최소 정규화/시점 선택/v2 모델 구현이었으며, 아래 GREEN 단계로 이어졌다.
+원본 작업 폴더의 기존 변경은 보존했다.
+
+### Task 6 최소 구현 기록 — #40 GREEN (2026-09-03)
+
+**문제:** 실행 가능한 계약은 마련됐지만 실제 metadata 변환·시점 선택·v2 manifest 모델이
+없어 93개 테스트 중 89개가 실패했다. 관측 이전 정보 사용과 정상 cold-start의 구분이
+필요하며 기존 v1 소비자를 바꾸지 않아야 했다.
+
+**해결:** `candidate_metadata.py`의 세 함수에 Arrow 타입 검증·Pydantic 값 검증·허용 열
+투영을 모았다. 정렬한 entity별 관측 시각 배열에서 이진 탐색하여 요청마다 과거 최신 행을
+선택하고, 미관측은 null과 `metadata_missing`으로 남긴다. 별도 v2 모델은 기존 v1의
+history cutoff 검증을 재사용하되 metadata receipt의 타입·고정 경로·digest를 엄격히
+검증한다. 범용 저장소/adapter나 파일 게시를 함께 만들지 않은 것은 순수 계산 계약을 먼저
+검증하기 위한 범위 결정이다. 기존의 잘못된 duration을 0으로 만드는 helper는 재사용하지
+않고 fixture용 PT 정수 H/M/S만 엄격하게 파싱한다.
+
+**트러블슈팅:** 최초 93개 GREEN 이후 UTC 변환과 Arrow→Python 변환의 날짜 범위 초과가
+`OverflowError`로 빠져나가는 문제를 경계값 검증과 독립 리뷰에서 확인했다. 두 변환 경계에서
+기존 `StageCError`로 바꾸고, 날짜/초 수 범위·null 목록 원소·중복 열·receipt 강제 변환 거부
+테스트를 추가했다. 독립 리뷰 worker가 수정 후 UTC 상·하한 및 Arrow 범위 초과 재현을
+확인했으며 최소 구현 범위의 미해결 발견 사항은 없었다.
+
+**검증 결과:** 기존 93개 테스트를 모두 통과한 뒤 경계값을 더해 metadata 테스트
+**116 passed**를 확인했다. 독립 리뷰에서도 그중 normalization/as-of/manifest의
+**114 passed**를 별도로 실행했다(원본 schema 대조 테스트 2개 제외).
+경계값 보강 전 전체 `tests/research_harness` 회귀는 **572 passed, 11 skipped**였으며,
+저장소 전체 Ruff와 `git diff --check`도 통과했다. 전체 저장소 pytest와 이미지 빌드는
+로컬에서 실행하지 않았으며 PR의 Linux CI 결과를 별도로 확인한다.
+
+**남은 한계:** 이 결과는 순수 계산·모델 계약 검증이다. 실제 metadata 파일 게시·hash 변조
+검증·workspace/final grant·checkpoint 재개 연결, 피처 조립·임베딩·모델 학습은 아직 없다.
+모델 품질·자율성·비용 개선 수치를 측정하거나 주장하지 않는다. 모델 다운로드·GPU 의존성
+설치·GCP 작업을 하지 않았으며, 다음 구현은 v2 materializer/workspace 연결이다.
 
 ---
 
@@ -1015,7 +1147,7 @@ uv run --no-sync ruff check applications autoresearch tests tools
 앞선 Task가 전부 머지된 뒤에만 가능하다. σ 측정에 `harness-predict`(Task 6)와
 slate(Task 1)가 모두 필요하기 때문이다.
 
-- [ ] **지표별 baseline σ 측정** (D5) — validation slate에서 현행 champion 설정을 seed
+- [ ] **지표별 baseline σ 측정** (D5) — validation slate에서 Task 6의 Harness baseline 설정을 seed
       5개로 **5회 독립 재학습**한 뒤 같은 slate를 점수화해 primary와 모든 guardrail의
       표준편차를 각각 구하고 ledger에 기록한다. 측정 전에는 `compare()`가 판정할 수 없다
 - [ ] 측정된 지표별 σ map과 baseline 지표 절대값을 이 plan과 spec에 기록한다 — 이후
@@ -1045,8 +1177,8 @@ slate(Task 1)가 모두 필요하기 때문이다.
 
 - [ ] 에이전트가 저장소 어느 파일이든 수정해도 harness가 차단하지 않는다
 - [ ] candidate가 evaluator·테스트·split 코드를 고쳐도 판정 수치가 바뀌지 않는다
-- [ ] candidate에는 `dt < T` 로컬 action log만 주입되고 `dt >= T` 평가 파티션과 원격
-      데이터 자격 증명, fixture 평가 구간 생성 입력·seed는 주입되지 않는다. candidate가
+- [ ] candidate action log는 `dt < T`로 제한하고 metadata·임베딩 재료는 spec 4.5절을 따른다.
+      평가 action log·원격 데이터 자격 증명·fixture 생성 상태와 seed는 주지 않는다. candidate가
       완전 라벨로 사용할 수 있는 마지막 출력일은 `T-2`다
 - [ ] 평가 출력일 `[T, T_end]`의 click·귀속 후보 impression은
       `dt BETWEEN T AND T_end + 1`로 스캔하고 출력은 `[T, T_end]` impression으로 제한하며,

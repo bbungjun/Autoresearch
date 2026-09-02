@@ -4,7 +4,8 @@
 그리고 완성 snapshot과 candidate/Judge 소비 경계 사이의 불변 값을 정의한다.
 
 [기능] Judge 전용 fixture descriptor·receipt와 candidate-safe data view manifest·receipt를
-제공하고 상대 경로 및 seed의 기본 계약을 fail-closed로 검증한다.
+제공하고 상대 경로 및 seed의 기본 계약을 fail-closed로 검증한다. Metadata v2 manifest는
+별도 모델에서 고정 경로·행 수·digest를 검증하며 기존 v1 reader 계약은 유지한다.
 
 [비책임] 실제 일일 producer 실행, snapshot build, handoff 재검증과 candidate view 게시는
 후속 Stage C orchestration 모듈이 담당한다.
@@ -310,6 +311,35 @@ class CandidateDataManifest(BaseModel):
             raise StageCError(
                 StageCErrorCode.CANDIDATE_VIEW_CONFLICT,
                 "candidate_history_order_validation",
+            )
+        return self
+
+
+class _MetadataArtifactReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    relative_path: str
+    rows: Annotated[int, Field(ge=0)]
+    sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
+class CandidateDataManifestV2(CandidateDataManifest):
+    """v1 공통 시점 계약에 안전한 metadata 파일 receipt를 추가한 opt-in manifest."""
+
+    contract_version: Literal["candidate-data-view-v2"]
+    metadata_contract: Literal["candidate-metadata-v1"]
+    user_metadata: _MetadataArtifactReceipt
+    video_metadata: _MetadataArtifactReceipt
+
+    @model_validator(mode="after")
+    def require_metadata_paths(self) -> Self:
+        if (
+            self.user_metadata.relative_path != "metadata/users.parquet"
+            or self.video_metadata.relative_path != "metadata/videos.parquet"
+        ):
+            raise StageCError(
+                StageCErrorCode.CANDIDATE_VIEW_CONFLICT,
+                "candidate_metadata_path_validation",
             )
         return self
 
