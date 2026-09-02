@@ -276,11 +276,29 @@ Research Request
 
 ```python
 class ResearchDomain(ABC):
-    def describe_capabilities(self) -> DomainCapabilities: ...
-    def build_evaluation_snapshot(self) -> EvaluationSnapshot: ...
-    def validate_candidate(self, candidate: CandidateArtifact) -> ValidationResult: ...
-    def evaluate(self, candidate: CandidateArtifact) -> DomainMetrics: ...
-    def compare(self, champion: TrialResult, candidate: TrialResult) -> Decision: ...
+    def describe_capabilities(self) -> Never: ...
+    def build_evaluation_snapshot(
+        self,
+        request: EvaluationSnapshotRequest,
+        *,
+        source: ActionLogSource | None = None,
+    ) -> EvaluationSnapshotReceipt: ...
+    def validate_candidate(
+        self,
+        candidate_prediction: Path,
+        judge_copy: Path,
+    ) -> SealedPredictionReceipt: ...
+    def evaluate(
+        self,
+        handoff: JudgeSnapshotHandoff,
+        sealed_prediction: SealedPredictionReceipt,
+    ) -> JudgeScoringResult: ...
+    def compare(
+        self,
+        results: PairedJudgeResult | Sequence[PairedJudgeResult],
+        *,
+        baseline_sigmas: Mapping[str, float] | None = None,
+    ) -> ScreeningResult | ConfirmationDecision: ...
 
 
 class PaperSource(ABC):
@@ -659,6 +677,54 @@ metric `None`, ranking·grouped·item coverage 부족, symlink, 65 MiB 초과, s
 | `promote` | `Δ_ndcg_at_10 ≥ 2σ_ndcg_at_10`이고 모든 guardrail `Δ_metric ≥ -1σ_metric` |
 | `revise` | `Δ_ndcg_at_10 ≥ 2σ_ndcg_at_10`이지만 하나 이상의 guardrail `Δ_metric < -1σ_metric` |
 | `discard` | 그 외 |
+
+#### P0-2D ResearchDomain interface
+
+MVP의 `ResearchDomain` interface는 후속 Controller가 알아야 하는 다섯 동작만 노출한다.
+아직 존재하지 않는 `CandidateArtifact`·`TrialResult` 임시 모델을 만들지 않고 완료된 P0-1/2의
+typed 계약을 그대로 사용한다.
+
+- `build_evaluation_snapshot(request, *, source=None) -> EvaluationSnapshotReceipt`
+- `validate_candidate(candidate_prediction, judge_copy) -> SealedPredictionReceipt`
+- `evaluate(handoff, sealed_prediction) -> JudgeScoringResult`
+- `compare(pair) -> ScreeningResult` 또는
+  `compare(pairs, *, baseline_sigmas) -> ConfirmationDecision`
+- `describe_capabilities() -> Never` — Paper Discovery 전에는
+  `DomainErrorCode.CAPABILITIES_UNAVAILABLE`로만 실패한다.
+
+`evaluate()`는 validation handoff에서 opaque target을 내부 생성해 봉인 receipt와 함께
+채점한다. 따라서 Controller가 `JudgeEvaluationTarget`이나 parser 행을 알 필요가 없다.
+`compare()`는 단일 `PairedJudgeResult`를 받으면 P0-2C의 screening 비용 gate를, sequence를
+받으면 5-seed confirmation 판정을 그대로 반환한다. confirmation에서 sigma map이 빠지면
+P0-2C의 기존 `invalid_comparison_input`으로 fail-closed한다. 이로써 Controller는 구체
+`screen_candidate()`·`compare_confirmation()`을 직접 알지 않고 실행 fidelity를 선택할 수 있다.
+
+`describe_capabilities()`의 반환 모델은 실제 Paper Discovery 요구사항이 생길 때 정의한다.
+MVP에서 비어 있는 capability 객체나 문자열 map을 먼저 만들면 호출자가 존재하지 않는
+데이터·모델 역량을 사실로 오해할 수 있으므로, 현재 interface는 명시적인 typed 미지원
+오류만 계약한다.
+
+##### Portfolio Record — P0-2D ResearchDomain seam
+
+**문제.** P0-1과 P0-2에서 snapshot, prediction 봉인, scoring, screening·confirmation이
+각각 검증됐지만 후속 Controller가 이 함수들을 직접 조립하면 YouTube 전용 target 생성과
+Judge 호출 순서를 알아야 했다. 이 상태에서는 새 domain을 추가할 때 Controller를 수정해야
+하고, 테스트 fake도 구체 파일·Judge module을 흉내 내야 한다. 반대로 아직 없는
+`CandidateArtifact`·`TrialResult`·capability schema까지 먼저 만들면 MVP가 검증하지 않은
+개념을 interface에 고정하는 문제가 있었다.
+
+**해결.** 다섯 메서드만 가진 `ResearchDomain` ABC를 두고 `YouTubeCTRDomain`이 기존 typed
+interface에 위임하도록 했다. adapter는 `evaluate()` 안에서 validation target 생성을 숨기고,
+`compare()` 입력 형태로 단일 screening과 5-seed confirmation을 기존 P0-2C 판정에 연결한다.
+새 지표·schema·판정 규칙은 만들지 않았다. Paper Discovery 전 capability 호출은 빈 객체 대신
+`domain_capabilities_unavailable` typed 오류로 거부한다.
+
+**결과.** ABC의 exact 다섯 abstract method, 네 위임 경로, target 생성 순서, screening과
+confirmation 분기, 잘못된 sequence·sigma 조합의 fail-closed, capability 미지원 오류·`Never`
+반환 계약을 domain 테스트 13개로 고정했고 package 공개 surface 테스트 3개도 함께
+통과했다. Research Harness 전체 `372 passed, 6 skipped`, 전체 Ruff와
+`git diff --check`가 통과했다. 실제 Controller 주입과 fake domain을 사용한 반복 loop 증명은
+Task 5b에 남으며, capability 모델은 Paper Discovery 요구사항을 측정한 뒤 정의한다.
 
 고정 비율은 그 값이 실제 seed 잡음보다 큰지 알려 주지 않는다. 자율 루프가 수십 trial을
 반복하면 우연히 좋아 보이는 결과가 누적되므로, baseline에서 실측한 잡음에 상대적인
