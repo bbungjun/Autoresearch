@@ -677,20 +677,20 @@ Task 1(slate), Task 2a(지표), Task 2b(scoring), Task 2c(봉인·판정)가 완
 Task 5b Controller보다
 먼저 끝낸다. Controller는 구체 slate/Judge 구현이 아니라 이 interface를 통해 호출한다.
 
-- [ ] `domain.py`에 spec 5.1의 다섯 메서드
+- [x] `domain.py`에 spec 5.1의 다섯 메서드
       (`describe_capabilities`, `build_evaluation_snapshot`, `validate_candidate`, `evaluate`,
       `compare`)를 가진 `ResearchDomain` ABC를 정의한다
-- [ ] 현재 typed interface는 `EvaluationSnapshotRequest`→`EvaluationSnapshotReceipt`,
+- [x] 현재 typed interface는 `EvaluationSnapshotRequest`→`EvaluationSnapshotReceipt`,
       candidate/Judge `Path`→`SealedPredictionReceipt`, `JudgeSnapshotHandoff` + sealed receipt
       →`JudgeScoringResult`, 단일 `PairedJudgeResult`→`ScreeningResult`, 5-seed pair sequence +
       지표별 σ map→`ConfirmationDecision`으로 고정한다. 아직 없는 Candidate/Trial 임시 모델은
       만들지 않는다
-- [ ] `YouTubeCTRDomain`은 MVP에서 실제 필요한 `build_evaluation_snapshot()`,
+- [x] `YouTubeCTRDomain`은 MVP에서 실제 필요한 `build_evaluation_snapshot()`,
       `validate_candidate()`, `evaluate()`, `compare()`를 Task 1·2b·2c 구현에 위임한다.
       논문 발견이 없는 MVP에서 호출하지 않는 `describe_capabilities()`는 명시적 미지원
       오류를 내고, Paper Discovery 단계 전에는 빈 값이나 임시 capability를 꾸며 내지 않는다
-- [ ] `__init__.py`에서 공개 domain 타입을 재수출한다
-- [ ] 테스트: ABC가 다섯 메서드 계약을 강제함, YouTube adapter가 snapshot·검증·평가·비교를
+- [x] `__init__.py`에서 공개 domain 타입을 재수출한다
+- [x] 테스트: ABC가 다섯 메서드 계약을 강제함, YouTube adapter가 snapshot·검증·평가·비교를
       올바른 구현으로 전달함, `describe_capabilities()`가 명시적 미지원 오류를 냄
 
 **의존 순서:** `Task 1 + Task 2a → Task 2b → Task 2c → Task 2d → Task 5b`

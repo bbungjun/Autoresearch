@@ -686,6 +686,27 @@ MVP에서 비어 있는 capability 객체나 문자열 map을 먼저 만들면 �
 데이터·모델 역량을 사실로 오해할 수 있으므로, 현재 interface는 명시적인 typed 미지원
 오류만 계약한다.
 
+##### Portfolio Record — P0-2D ResearchDomain seam
+
+**문제.** P0-1과 P0-2에서 snapshot, prediction 봉인, scoring, screening·confirmation이
+각각 검증됐지만 후속 Controller가 이 함수들을 직접 조립하면 YouTube 전용 target 생성과
+Judge 호출 순서를 알아야 했다. 이 상태에서는 새 domain을 추가할 때 Controller를 수정해야
+하고, 테스트 fake도 구체 파일·Judge module을 흉내 내야 한다. 반대로 아직 없는
+`CandidateArtifact`·`TrialResult`·capability schema까지 먼저 만들면 MVP가 검증하지 않은
+개념을 interface에 고정하는 문제가 있었다.
+
+**해결.** 다섯 메서드만 가진 `ResearchDomain` ABC를 두고 `YouTubeCTRDomain`이 기존 typed
+interface에 위임하도록 했다. adapter는 `evaluate()` 안에서 validation target 생성을 숨기고,
+`compare()` 입력 형태로 단일 screening과 5-seed confirmation을 기존 P0-2C 판정에 연결한다.
+새 지표·schema·판정 규칙은 만들지 않았다. Paper Discovery 전 capability 호출은 빈 객체 대신
+`domain_capabilities_unavailable` typed 오류로 거부한다.
+
+**결과.** ABC의 exact 다섯 abstract method, 네 위임 경로, target 생성 순서, screening과
+confirmation 분기, sigma 누락 fail-closed, capability 미지원 오류와 package 공개 surface를
+12개 집중 테스트로 고정했다. Research Harness 전체 `368 passed, 6 skipped`, 전체 Ruff와
+`git diff --check`가 통과했다. 실제 Controller 주입과 fake domain을 사용한 반복 loop 증명은
+Task 5b에 남으며, capability 모델은 Paper Discovery 요구사항을 측정한 뒤 정의한다.
+
 고정 비율은 그 값이 실제 seed 잡음보다 큰지 알려 주지 않는다. 자율 루프가 수십 trial을
 반복하면 우연히 좋아 보이는 결과가 누적되므로, baseline에서 실측한 잡음에 상대적인
 임계값을 사용한다. 다만 seed 5개의 표본 표준편차로 모분산을 정확히 안다고 볼 수 없으므로
