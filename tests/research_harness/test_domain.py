@@ -123,6 +123,36 @@ def test_youtube_domain_hides_target_construction_during_evaluation(
     ]
 
 
+def test_youtube_domain_uses_grant_for_final_evaluation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handoff = cast(Any, object())
+    sealed = cast(Any, object())
+    grant = cast(Any, object())
+    target = cast(Any, object())
+    expected = cast(Any, object())
+    calls: list[tuple[str, object, object | None]] = []
+
+    def fake_target(value: object, permission: object) -> object:
+        calls.append(("target", value, permission))
+        return target
+
+    def fake_score(value: object, prediction: object) -> object:
+        calls.append(("score", value, prediction))
+        return expected
+
+    monkeypatch.setattr(domain_module, "build_final_target", fake_target)
+    monkeypatch.setattr(domain_module, "score_predictions", fake_score)
+
+    result = YouTubeCTRDomain().evaluate(handoff, sealed, final_grant=grant)
+
+    assert result is expected
+    assert calls == [
+        ("target", handoff, grant),
+        ("score", target, sealed),
+    ]
+
+
 def test_youtube_domain_delegates_confirmation_comparison(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
