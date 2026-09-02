@@ -5,7 +5,8 @@ label-free slate와 Judge 전용 label artifact를 조립하는 경계를 담당
 
 [기능] Stage B의 공개 요청·receipt·error·source seam과 snapshot builder, Stage C의
 fixture/candidate handoff typed contract, canonical identity helper, P0-2A ranking metric,
-P0-2B scoring, P0-2C 봉인 ingestion·판정 및 P0-2D domain interface를 제공한다.
+P0-2B scoring, P0-2C 봉인 ingestion·판정, P0-2D domain interface, final 소비 registry와
+append-only Trial Ledger를 제공한다.
 
 [비책임] action log 생성(autoresearch.action_log_generation), 후보 학습·실행,
 실제 baseline sigma 측정과 반복 Controller를 담당하지 않는다.
@@ -50,10 +51,31 @@ from autoresearch.research_harness.fixture_models import (
 from autoresearch.research_harness.local_evaluation_fixture import (
     build_local_evaluation_fixture,
 )
+from autoresearch.research_harness.consumption_registry import (
+    ConsumptionRegistryError,
+    ConsumptionRegistryErrorCode,
+    FinalConsumptionEvidence,
+    FinalConsumptionGrant,
+    FinalConsumptionRequest,
+    claim_final_consumption,
+)
+from autoresearch.research_harness.ledger import (
+    CheckpointRecord,
+    LedgerAppendReceipt,
+    LedgerArtifactEvidence,
+    LedgerError,
+    LedgerErrorCode,
+    LedgerMetric,
+    TrialLedger,
+    TrialLedgerState,
+    TrialRecord,
+    open_trial_ledger,
+)
 from autoresearch.research_harness.judge import (
     JudgeError,
     JudgeErrorCode,
     JudgeScoringResult,
+    build_final_target,
     build_validation_target,
     score_predictions,
 )
@@ -101,7 +123,10 @@ __all__ = [
     "CandidateProcessContext",
     "CandidateWorkspace",
     "CandidateWorkspaceRequest",
+    "CheckpointRecord",
     "ConfirmationDecision",
+    "ConsumptionRegistryError",
+    "ConsumptionRegistryErrorCode",
     "DomainError",
     "DomainErrorCode",
     "EvaluationSnapshotError",
@@ -110,6 +135,9 @@ __all__ = [
     "FixtureDescriptor",
     "FixtureInputReceipt",
     "FixturePartitionReceipt",
+    "FinalConsumptionEvidence",
+    "FinalConsumptionGrant",
+    "FinalConsumptionRequest",
     "JudgeSnapshotHandoff",
     "JudgeError",
     "JudgeErrorCode",
@@ -117,6 +145,11 @@ __all__ = [
     "JudgeMetric",
     "JudgeReasonCode",
     "JudgeScoringResult",
+    "LedgerAppendReceipt",
+    "LedgerArtifactEvidence",
+    "LedgerError",
+    "LedgerErrorCode",
+    "LedgerMetric",
     "LocalEvaluationFixtureReceipt",
     "LocalEvaluationFixtureRequest",
     "MetricDelta",
@@ -130,18 +163,24 @@ __all__ = [
     "SnapshotErrorCode",
     "StageCError",
     "StageCErrorCode",
+    "TrialLedger",
+    "TrialLedgerState",
+    "TrialRecord",
     "YouTubeCTRDomain",
     "WorkspaceError",
     "WorkspaceErrorCode",
     "build_evaluation_snapshot",
+    "build_final_target",
     "build_local_evaluation_fixture",
     "build_validation_target",
     "materialize_candidate_data_view",
     "canonical_fixture_dates",
+    "claim_final_consumption",
     "compare_confirmation",
     "descriptor_sha256",
     "ndcg_at_k",
     "open_candidate_workspace",
+    "open_trial_ledger",
     "recall_at_k",
     "screen_candidate",
     "seal_prediction_copy",

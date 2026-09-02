@@ -167,7 +167,7 @@ def test_public_interface_keeps_target_and_parser_types_opaque() -> None:
     assert "JudgeEvaluationTarget" not in research_harness.__all__
     assert "PredictionRow" not in research_harness.__all__
     assert "parse_prediction_copy" not in research_harness.__all__
-    assert not hasattr(judge_module, "build_final_target")
+    assert hasattr(judge_module, "build_final_target")
     assert inspect.signature(build_validation_target).return_annotation == (
         "JudgeEvaluationTarget"
     )

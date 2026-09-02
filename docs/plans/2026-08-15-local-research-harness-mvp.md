@@ -766,29 +766,71 @@ subprocess 회수와 final 단일 소비는 각각 Task 5a와 Task 4/5b에 남�
 
 ## Task 4: Trial Ledger + checkpoint
 
-- [ ] `ledger.py` — `experiment-ledger.jsonl` append-only
-- [ ] `consumption_registry.py` — 필수 harness 설정
+- [x] `ledger.py` — `experiment-ledger.jsonl` append-only. 공개 interface는
+      `open_trial_ledger(path)`, `append(TrialRecord | CheckpointRecord)`, `read_state()`로 제한하고
+      process lock, canonical JSONL, 연속 sequence, file `fsync`를 내부에서 소유한다
+- [x] `consumption_registry.py` — 필수 harness 설정
       `harness-run --judge-state-root <absolute-path>`를 정규화한 **고정 절대 경로** 아래
       `final-holdout-consumed/<evaluation_id>` marker를 둔다. state root는
       run·workspace·ledger에 종속시키지 않는다. 상대 경로, root/registry 디렉터리 부재,
       읽기·marker 생성·`fsync` 불가는 모두 final 평가 시작 전 fail-closed하고, 임시 경로를
       만들거나 fallback하지 않는다
-- [ ] final 평가 시작 전에 marker를 `O_CREAT|O_EXCL`로 생성하고 metadata를 쓴 뒤 file과
-      parent directory를 `fsync`한다. 이미 있으면 두 번째 평가를 거부한다
-- [ ] trial당 기록: `trial_id`, 기준/candidate SHA, diff fingerprint, `evaluation_id`,
+- [x] final 평가 시작 전에 marker를 `O_CREAT|O_EXCL`로 생성하고 metadata를 쓴 뒤 file과
+      parent directory를 `fsync`한다. 이미 있으면 두 번째 평가를 거부한다. `O_EXCL` 생성에
+      성공한 뒤 어떤 write/sync가 실패해도 marker는 삭제하지 않고 소비된 상태로 남긴다
+- [x] registry는 검증된 handoff에서 final ID를 가져와 opaque `FinalConsumptionGrant`를 발급하고,
+      `judge.build_final_target(handoff, grant)`만 같은 handoff의 final artifact를 열 수 있다.
+      registry는 snapshot을 먼저 재검증하며 grant를 fingerprint·manifest digest·final ID·marker
+      evidence에 결속한다. snapshot이 정규화된 state root의 실제 하위 경로가 아니면 거부한다.
+      grant 직접 생성, 다른 handoff 재사용, handoff 단독 final target 생성을 거부한다
+- [x] trial당 기록: `trial_id`, 기준/candidate SHA, diff fingerprint, `evaluation_id`,
       seed, 전체 지표, decision과 reason_code, 소요 시간, 실패 reason code, champion lineage
-- [ ] validation trial과 final holdout을 구분하고 ledger에는 registry marker의 경로·digest를
+- [x] validation trial과 final holdout을 구분하고 ledger에는 registry marker의 경로·digest를
       증거로 기록한다. 소비 권한은 ledger가 아니라 전역 registry가 소유한다
-- [ ] 단계별 idempotent checkpoint — 프로세스 종료 후 마지막 완료 단계부터 재개.
+- [x] 단계별 idempotent checkpoint — 프로세스 종료 후 마지막 완료 단계부터 재개.
       **Job 전체 재실행을 기본 재시도 단위로 쓰지 않는다**(spec 7.2)
-- [ ] 테스트: 중단 후 재개가 완료 단계를 건너뜀, 같은 trial 중복 append 방지,
+- [x] `read_state()`는 마지막 sequence, 순서 보존 record, 완료 checkpoint ID, registry evidence를
+      불변 `TrialLedgerState`로 반환한다. trial/checkpoint key의 동일 payload 재호출은 no-op,
+      다른 payload 재호출은 conflict로 거부한다. 마지막 newline 뒤 불완전 bytes만 복구하고
+      newline-terminated 오류·중간 손상·sequence 단절·중복 key는 fail-closed한다
+- [x] 테스트: 중단 후 재개가 완료 단계를 건너뜀, 같은 trial 중복 append 방지,
       ledger의 손상된 마지막 줄 복구. 별도 테스트에서 새 run·새 ledger·동시 Controller가
       같은 `evaluation_id`를 소비하지 못함, marker 생성 뒤 crash해도 재평가 거부,
       손상 marker도 존재만으로 소비 처리함, root 부재·접근 불가 시 final 미시작을 고정한다.
       이전 evidence가 기록한 marker가 사라진 경우 상태 무결성 위반으로 fail-closed하고
-      marker를 재생성하지 않는다. ledger 마지막 줄 복구를 registry에 적용하지 않는다
+      marker를 재생성하지 않는다. Task 5는 복구한 evidence를 registry claim에 반드시 전달한다.
+      ledger 마지막 줄 복구를 registry에 적용하지 않는다
 
 **검증:** `uv run python -m pytest tests/research_harness/test_ledger.py -v`
+
+**문제.** final holdout은 후보가 반복해서 볼수록 사실상 validation으로 오염되지만, run별
+checkpoint만으로는 새 run이나 동시 Controller의 재소비를 막을 수 없었다. 또한 프로세스가
+중단되면 어떤 실험과 외부 부작용이 완료됐는지 구조적으로 복원할 기록이 없어, 안전한 재개와
+맥락 없는 Judge·REPORT의 근거 연결이 불가능했다.
+
+**해결.** Judge 상태 루트에 evaluation별 marker를 원자적으로 선점하고 file·directory를
+동기화한 뒤에만 opaque grant를 발급하도록 했다. grant와 snapshot handoff가 일치해야만 final
+target을 열 수 있다. 별도의 append-only JSONL Ledger는 canonical record, 연속 sequence,
+trial/checkpoint idempotency key와 process lock을 한 경계 안에서 관리한다. crash로 마지막 줄이
+미완성인 경우에만 마지막 newline 이후를 복구하고, 완성된 손상 record와 marker 손상은
+fail-closed한다.
+
+**결과.** 손 계산 fixture 기반 final target, 동시 marker claim, marker sync 실패와 재시도,
+evidence 소실, Ledger의 thread·process 동시 append, 멱등 재시도, checkpoint 재개, tail 복구와
+손상 탐지 테스트를 통과했다. 이로써 Task 5 Controller는 raw 파일 형식을 알 필요 없이
+`TrialLedgerState`와 grant만 소비할 수 있다. 실제 E2E 실험의 모델 품질·자율성·비용 수치는 전체
+구현 후 측정하며, 동일 OS 사용자가 상태 루트를 삭제하는 공격 방지는 MVP 범위 밖에 남긴다.
+독립 리뷰에서는 상위 Judge root로 두 번째 registry를 만들 수 있는 문제, marker 없는 grant
+발급 우회, 새 재개 시각에 따른 정상 evidence 오판, 비정본 JSONL 수용, Windows 잠금 오류의
+무한 재시도, 동기화 실패 재시도 우회, lock hardlink 변조와 crash 후 빈 lock의 영구 실패를
+발견했다. 이를 11개의 실패 반례로
+재현한 뒤, snapshot의 canonical state root 결속, 실제 marker digest 재검증, canonical physical
+line 비교, 잠금 오류 분류, lock path↔descriptor identity와 재시도 가능한 공통 directory sync
+경계로 수정했다. Task 4 최종 수정 뒤 Research Harness 전체 회귀는 441개 통과·7개 환경 의존
+skip이었고, 저장소 전체 Ruff 검사도 통과했다.
+첫 Linux CI에서는 directory sync와 append sync가 같은 `os.fsync` mock을 공유한 테스트 오판과
+Linux `OSError`에 `winerror`가 없다는 이식성 오류가 드러났다. file sync seam을 분리하고
+선택 속성 접근으로 바꿔 Windows·POSIX가 같은 오류 계약을 사용하도록 수정했다.
 
 ---
 

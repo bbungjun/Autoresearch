@@ -957,6 +957,33 @@ marker에 `evaluation_id`, 시작 시각, 비교 대상 SHA를 쓴 뒤 파일과
 평가를 거부한다. marker 기록 뒤 crash가 나면 해당 holdout은 소비된 것으로 남고 REPORT는
 `판정 불가`가 된다. 재평가 가능성보다 보수적 단일 소비를 우선한다.
 
+Task 4의 registry interface는 `claim_final_consumption(request, prior_evidence=None)` 한 개다.
+request는 `JudgeSnapshotHandoff`, 기준/candidate 40자리 commit SHA, timezone-aware 시작
+시각과 절대 Judge 상태 루트를 받는다. registry는 `_validated_judge_snapshot()`으로 snapshot
+전체를 다시 검증하고 반환 handoff가 입력과 동일한지 확인한 뒤에만 marker 생성을 시도한다.
+검증된 snapshot root는 정규화된 Judge 상태 루트의 실제 하위 경로여야 하며, 다른 상태 루트를
+지정해 같은 evaluation에 새 registry를 만드는 요청은 거부한다.
+호출자가 `evaluation_id`나 marker 경로를 따로 고르지 않으며 final ID는 handoff에서만 가져온다.
+marker는 canonical UTF-8 JSON 한 줄로
+`contract_version`, `evaluation_id`, UTC 시작 시각, 기준/candidate SHA를 기록한다. 성공 결과는
+marker의 정규화된 절대 경로와 SHA-256 evidence, 그리고 직접 만들 수 없는 opaque
+`FinalConsumptionGrant`다. grant는 snapshot fingerprint, manifest digest, final evaluation ID와
+marker evidence에 결속된다. `build_final_target(handoff, grant)`만 이 grant를 소비하며,
+이 값과 handoff 동일성을 확인하고 기존 Judge 방식으로 final artifact를 다시 검증한 뒤 target을
+만든다. validation factory나 handoff 단독으로 final target을 만드는 우회 interface는 두지 않는다.
+
+`O_EXCL` marker 생성에 성공한 이후 어떤 write·file sync·directory sync가 실패해도 marker를
+삭제하지 않는다.
+grant는 발급하지 않지만 marker 존재 자체가 소비 사실이므로 다음 호출은 이미 소비됨으로
+거부한다. 기존 marker는 내용을 parse하거나 복구하지 않고 종류·내용과 무관하게 소비로 본다.
+이전 ledger/checkpoint evidence가 주어지면 registry는 고정 marker 경로와 digest를 먼저
+재검증하며, 누락·불일치는 상태 무결성 오류로 거부하고 marker를 재생성하지 않는다. 오류는
+`invalid_request | state_unavailable | already_consumed | integrity_violation`의 typed code와
+민감한 경로·ID를 포함하지 않는 stage만 외부에 공개한다. registry 자체는 evidence 없이
+사라진 marker와 최초 claim을 구분할 수 없으므로, Task 5 Controller는 복구한 ledger/checkpoint에
+registry evidence가 있으면 반드시 `prior_evidence`로 전달해야 한다. marker 소실 방지는 이
+호출자 계약이 지켜진 경우의 보장이다.
+
 Trial Ledger는 registry marker의 경로와 digest를 증거로 기록할 뿐 소비 권한의 정본이
 아니다. JSONL ledger의 손상된 마지막 줄 복구 규칙은 파일 하나가 소비 사실 하나인 이
 registry에 적용하지 않는다. registry marker가 손상되거나 불완전해도 `evaluation_id`의
@@ -981,6 +1008,32 @@ Trial Ledger는 REPORT의 근거이자 다음 iteration의 memory다. 최소한 
 - validation의 모든 지표·피드백과 Judge의 `promote/revise/discard` 또는 판정 불가 근거
 - final holdout의 단일 평가 결과와 전역 소비 registry marker의 경로·digest
 - champion lineage와 checkpoint
+
+Task 4의 ledger는 하나의 run 디렉터리 안 `experiment-ledger.jsonl`을 소유한다. 공개
+interface는 `open_trial_ledger(path)`, `TrialLedger.append(record)`, `TrialLedger.read_state()`로
+제한한다. record는 `TrialRecord` 또는 `CheckpointRecord`이며, 각 physical line은 version,
+0부터 증가하는 sequence, record type과 canonical payload를 담은 UTF-8 JSON 한 줄이다.
+trial은 `trial_id`를, checkpoint는 `checkpoint_id`를 idempotency key로 사용한다. 같은 key와
+동일 payload의 재호출은 기존 sequence를 반환하고 새 line을 쓰지 않으며, 같은 key의 다른
+payload는 typed conflict로 거부한다.
+
+trial payload는 validation/final 구분, 기준/candidate SHA, diff fingerprint, evaluation ID,
+seed, 이름별 전체 metric, decision·reason code, duration, failure reason, artifact evidence와
+champion lineage를 보존한다. checkpoint는 완료된 stage, 선택 trial ID, 완료 시각과 artifact
+evidence를 보존한다. checkpoint line은 해당 단계의 외부 부작용이 완료된 뒤에만 append하며,
+재개 시 `read_state()`의 완료 checkpoint ID를 건너뛰는 근거로 쓴다.
+
+`read_state()`는 마지막 sequence, 순서가 보존된 trial/checkpoint record, 완료 checkpoint
+ID 집합, 기록된 registry evidence를 담은 불변 `TrialLedgerState`를 반환한다. Task 5는 raw
+JSONL을 직접 해석하지 않는다. ledger 오류 code는
+`invalid_request | io_failed | idempotency_conflict | integrity_violation`로 고정한다.
+
+append와 복구는 process 간 exclusive lock 안에서 수행하고 file `fsync`가 끝나야 성공을
+반환한다. 파일이 newline 없이 끝났으면 **마지막 newline 뒤 bytes만** truncate하고 file을
+sync한 뒤 복구한다. newline으로 끝난 record는 마지막 line이어도 JSON/schema 오류를 자동
+복구하지 않는다. 중간 line 손상, sequence 단절, 중복 key 또는 기존 record의 schema 위반은
+ledger 무결성 오류로 fail-closed한다. registry marker에는 이 tail 복구 규칙을 재사용하지
+않는다.
 
 MVP 이후에는 선택한 PaperCard와 탈락한 후보, 논문 claim에서 변환된 가설, URL, 조회 시점,
 라이선스, checksum을 같은 ledger에 추가한다. 출처와 생성 과정을 재현할 수 없는 외부

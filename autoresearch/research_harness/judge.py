@@ -3,12 +3,12 @@
 [파이프라인] Stage C의 봉인 evaluation snapshot과 P0-2A ranking metric 뒤에서,
 candidate prediction을 validation label과 1:1로 결합해 P0-2C 판정 입력을 만든다.
 
-[기능] 검증된 handoff로 validation 전용 opaque target을 만들고, 공통 parser가 검증한
+[기능] 검증된 handoff로 validation target과 소비 grant가 승인한 final opaque target을 만들고, 공통 parser가 검증한
 Judge 소유 CSV 사본을 ranking·probability metric 하나의 불변 결과로 결합한다.
 
 [비책임] candidate 경로에서의 안전한 파일 ingestion·subprocess 자원 제한은
 ``prediction_ingestion``이, coverage·sigma 판정은 ``judge_decision``이, final holdout 소비
-승인은 후속 registry가 담당한다.
+marker 생성은 ``consumption_registry``가 담당한다.
 """
 
 from __future__ import annotations
@@ -26,8 +26,10 @@ from autoresearch.model_evaluation.probability_metrics import (
 from autoresearch.research_harness.evaluation_snapshot_models import (
     ArtifactReceipt,
     EvaluationId,
-    EvaluationSnapshotManifest,
+    SplitName,
+    SplitSummary,
 )
+from autoresearch.research_harness.consumption_registry import FinalConsumptionGrant
 from autoresearch.research_harness.fixture_errors import StageCError
 from autoresearch.research_harness.fixture_models import JudgeSnapshotHandoff
 from autoresearch.research_harness.judge_errors import JudgeError, JudgeErrorCode
@@ -79,9 +81,11 @@ _LABEL_SCHEMA = pa.schema(
 
 @dataclass(frozen=True, slots=True, init=False, repr=False)
 class JudgeEvaluationTarget:
-    """검증된 validation artifact에만 연결되는 opaque scoring target."""
+    """검증된 split artifact에만 연결되는 opaque scoring target."""
 
     _handoff: JudgeSnapshotHandoff
+    _split_name: SplitName
+    _evaluation_id: EvaluationId
     _slate: ArtifactReceipt
     _labels: ArtifactReceipt
 
@@ -92,12 +96,15 @@ class JudgeEvaluationTarget:
     def _from_verified(
         cls,
         handoff: JudgeSnapshotHandoff,
-        manifest: EvaluationSnapshotManifest,
+        split_name: SplitName,
+        split: SplitSummary,
     ) -> JudgeEvaluationTarget:
         target = object.__new__(cls)
         object.__setattr__(target, "_handoff", handoff)
-        object.__setattr__(target, "_slate", manifest.validation.artifacts.slate)
-        object.__setattr__(target, "_labels", manifest.validation.artifacts.labels)
+        object.__setattr__(target, "_split_name", split_name)
+        object.__setattr__(target, "_evaluation_id", split.evaluation_id)
+        object.__setattr__(target, "_slate", split.artifacts.slate)
+        object.__setattr__(target, "_labels", split.artifacts.labels)
         return target
 
     def __repr__(self) -> str:
@@ -106,7 +113,7 @@ class JudgeEvaluationTarget:
 
 @dataclass(frozen=True, slots=True)
 class JudgeScoringResult:
-    """P0-2C coverage gate와 판정이 소비할 validation metric 묶음."""
+    """P0-2C coverage gate와 판정이 소비할 evaluation metric 묶음."""
 
     evaluation_id: EvaluationId
     row_count: int
@@ -141,7 +148,37 @@ def build_validation_target(
         ) from None
     if verified_handoff != handoff:
         raise JudgeError(JudgeErrorCode.INVALID_TARGET, "target_identity")
-    target = JudgeEvaluationTarget._from_verified(verified_handoff, manifest)
+    target = JudgeEvaluationTarget._from_verified(
+        verified_handoff,
+        "validation",
+        manifest.validation,
+    )
+    _load_verified_target_rows(target)
+    return target
+
+
+def build_final_target(
+    handoff: JudgeSnapshotHandoff,
+    grant: FinalConsumptionGrant,
+) -> JudgeEvaluationTarget:
+    """소비 registry grant와 동일한 handoff의 final target만 만든다."""
+
+    try:
+        if not isinstance(grant, FinalConsumptionGrant) or not grant._authorizes(handoff):
+            raise ValueError
+        verified_handoff, manifest = _validated_judge_snapshot(
+            handoff.snapshot_root,
+            expected_fingerprint=str(handoff.snapshot_fingerprint),
+        )
+        if verified_handoff != handoff:
+            raise ValueError
+    except (AttributeError, OSError, RuntimeError, StageCError, ValueError):
+        raise JudgeError(JudgeErrorCode.INVALID_TARGET, "final_target_validation") from None
+    target = JudgeEvaluationTarget._from_verified(
+        verified_handoff,
+        "final_holdout",
+        manifest.final_holdout,
+    )
     _load_verified_target_rows(target)
     return target
 
@@ -159,13 +196,13 @@ def score_predictions(
     target: JudgeEvaluationTarget,
     sealed_prediction: SealedPredictionReceipt,
 ) -> JudgeScoringResult:
-    """validation target과 exact 1:1 prediction을 결합해 모든 P0-2B 지표를 계산한다."""
+    """evaluation target과 exact 1:1 prediction을 결합해 모든 P0-2B 지표를 계산한다."""
 
     if not isinstance(target, JudgeEvaluationTarget):
         raise JudgeError(JudgeErrorCode.INVALID_TARGET, "target_type")
     target_rows = _load_verified_target_rows(target)
     prediction_rows = iter_sealed_prediction_rows(sealed_prediction)
-    expected_id = target._handoff.validation_id
+    expected_id = target._evaluation_id
 
     prediction_by_key: dict[tuple[str, str], PredictionRow] = {}
     for row in prediction_rows:
@@ -209,17 +246,31 @@ def _load_verified_target_rows(
             target._handoff.snapshot_root,
             expected_fingerprint=str(target._handoff.snapshot_fingerprint),
         )
+        split = (
+            manifest.validation
+            if target._split_name == "validation"
+            else manifest.final_holdout
+        )
         if (
             verified_handoff != target._handoff
-            or manifest.validation.artifacts.slate != target._slate
-            or manifest.validation.artifacts.labels != target._labels
+            or split.evaluation_id != target._evaluation_id
+            or split.artifacts.slate != target._slate
+            or split.artifacts.labels != target._labels
         ):
             raise ValueError
         slate_table = pq.read_table(
-            _io_path(target._handoff.snapshot_root / "validation" / "slate.parquet")
+            _io_path(
+                target._handoff.snapshot_root
+                / target._split_name
+                / "slate.parquet"
+            )
         )
         label_table = pq.read_table(
-            _io_path(target._handoff.snapshot_root / "validation" / "labels.parquet")
+            _io_path(
+                target._handoff.snapshot_root
+                / target._split_name
+                / "labels.parquet"
+            )
         )
         if (
             slate_table.schema != _SLATE_SCHEMA
@@ -231,7 +282,7 @@ def _load_verified_target_rows(
         return _join_target_rows(
             slate_table.to_pylist(),
             label_table.to_pylist(),
-            target._handoff.validation_id,
+            target._evaluation_id,
         )
     except (OSError, StageCError, ValueError, pa.ArrowException):
         raise JudgeError(JudgeErrorCode.INVALID_TARGET, "artifact_validation") from None
