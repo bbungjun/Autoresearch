@@ -159,8 +159,12 @@ def test_seal_prediction_copy_removes_copy_after_interruption(
     _valid_prediction(source)
     destination = tmp_path / "copy.csv"
 
-    def interrupted(judge_copy: Path, parsed_copy: Path) -> None:
-        del judge_copy
+    def interrupted(
+        judge_copy: Path,
+        parsed_copy: Path,
+        parsed_owner: ingestion._SourceSignature,
+    ) -> None:
+        del judge_copy, parsed_owner
         parsed_copy.write_bytes(b"partial")
         raise KeyboardInterrupt
 
@@ -213,6 +217,24 @@ def test_sealed_receipt_rejects_direct_construction() -> None:
 
     assert error.value.code is JudgeErrorCode.INVALID_PREDICTIONS
     assert error.value.stage == "sealed_receipt"
+
+
+def test_seal_prediction_copy_preserves_existing_parsed_destination(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "candidate.csv"
+    _valid_prediction(source)
+    destination = tmp_path / "copy.csv"
+    parsed = destination.with_name(f"{destination.name}.parsed.jsonl")
+    parsed.write_bytes(b"other-run")
+
+    with pytest.raises(JudgeError) as error:
+        seal_prediction_copy(source, destination)
+
+    assert error.value.code is JudgeErrorCode.INVALID_PREDICTIONS
+    assert error.value.stage == "parsed_destination_exists"
+    assert parsed.read_bytes() == b"other-run"
+    assert not destination.exists()
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX FIFO contract")

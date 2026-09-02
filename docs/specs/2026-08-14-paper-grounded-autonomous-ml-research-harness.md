@@ -637,8 +637,10 @@ gate를 통과했을 때만 confirmation을 요청한다. `compare_confirmation(
 사본은 열린 FD를 먼저 닫은 뒤 회수한다. P0-2B parser는 표준 라이브러리만 의존하는 내부
 module로 추출해 격리 worker가 검증된 정규화 행을 만든다. CSV 사본과 정규화 행의
 identity·digest를 직접 만들 수 없는 receipt에 함께 묶고 scoring은 receipt만 받게 해 봉인 우회를
-막았다. regular-file 사전 검사와 non-blocking open으로 FIFO와 교체 race를 거부하고, 모든
-실패 경로에서 두 사본을 회수한다. worker는 10초 timeout과
+막았다. regular-file 사전 검사와 non-blocking open으로 FIFO와 교체 race를 거부한다.
+정규화 목적지는 부모가 `O_EXCL`로 빈 파일을 먼저 예약하고 worker가 같은 device·inode에만
+쓰며, 실패 cleanup도 그 소유 identity가 유지될 때만 삭제해 동시 실행의 파일을 보존한다.
+worker는 10초 timeout과
 POSIX `RLIMIT_AS`/Windows Job Object의 256 MiB 상한 아래에서 실행한다. 판정은 seed를 명시한
 pair를 사용하며, screening은 primary의 엄격한 양수 delta만 confirmation으로 보내고 최종
 결정은 서로 다른 5개 seed의 paired normalized delta 평균과 지표별 sigma map으로만 만든다.
@@ -647,7 +649,7 @@ pair를 사용하며, screening은 primary의 엄격한 양수 delta만 confirma
 metric `None`, ranking·grouped·item coverage 부족, symlink, 65 MiB 초과, source 성장,
 기존 목적지, parser timeout·실패·중단 후 cleanup, 봉인 CSV·정규화 행 변조, 직접 Path 채점
 우회와 FIFO 교체를 회귀 테스트로 고정했다. P0-2C 및 기존 Judge 집중 테스트는
-`67 passed, 3 skipped`, Research Harness 전체는 `358 passed, 6 skipped`, model evaluation은
+`68 passed, 3 skipped`, Research Harness 전체는 `359 passed, 6 skipped`, model evaluation은
 `301 passed, 46 skipped`였고 전체 Ruff와 diff 검사가 통과했다. Windows에서는 symlink 권한
 테스트 1개와 POSIX FIFO 테스트 2개가 skip되며 Linux CI에서 실행한다. 실제 sigma 값과 최대
 300,000행의 시간·메모리 실측·임계값 조정은 계획대로 Task 7에 남겼다.

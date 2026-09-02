@@ -627,7 +627,9 @@ metric 결과를 지표별 baseline σ에 비교하는 판정을 추가한다.
 - [x] P0-2B의 동일 parser 구현을 격리 subprocess에서 실행해 정확히 4개 필드와 field
       byte 계약을 강제한다. 검증된 행은 exclusive 정규화 JSONL로 저장하고 CSV·JSONL
       identity와 digest를 opaque receipt에 결속한다. scoring은 이 receipt만 받아 정규화 행을
-      streaming 소비하며 P0-2C가 별도 parser·schema 정의를 만들지 않는다.
+      streaming 소비한다. 부모가 정규화 목적지를 `O_EXCL`로 예약하고 worker는 같은 inode에만
+      쓰며 cleanup도 소유 identity가 유지된 파일에만 적용한다. P0-2C가 별도 parser·schema
+      정의를 만들지 않는다.
         `evaluation_id`는 현재 ID 계약에 맞는 정확한 69 byte, `slate_id`·`video_id`는
         comma·quote·개행 없는 ASCII 각 1~64 byte, `score` token은 최대 24 byte다. CRLF 기준
         최악 행 226 byte와 header 39 byte에서 300,000행은 67,800,039 byte이므로 65 MiB 안에

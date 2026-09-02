@@ -116,10 +116,9 @@ def seal_prediction_copy(
     destination_fd: int | None = None
     destination_created = False
     parsed_created = False
+    parsed_owner: _SourceSignature | None = None
     completed = False
     try:
-        if os.path.lexists(parsed_copy):
-            raise _invalid("parsed_destination_exists")
         source_fd = _open_regular_nofollow(candidate_prediction, stage="source_contract")
         before = _source_signature(source_fd)
         if before.size > MAX_PREDICTION_BYTES:
@@ -153,8 +152,9 @@ def seal_prediction_copy(
         os.close(destination_fd)
         destination_fd = None
 
+        parsed_owner = _reserve_parsed_copy(parsed_copy)
         parsed_created = True
-        _run_isolated_parser(judge_copy, parsed_copy)
+        _run_isolated_parser(judge_copy, parsed_copy, parsed_owner)
         copy_signature, copy_sha256 = _file_evidence(
             judge_copy,
             max_bytes=MAX_PREDICTION_BYTES,
@@ -188,8 +188,8 @@ def seal_prediction_copy(
         if not completed:
             if destination_created:
                 _remove_incomplete_copy(judge_copy)
-            if parsed_created:
-                _remove_incomplete_copy(parsed_copy)
+            if parsed_created and parsed_owner is not None:
+                _remove_owned_copy(parsed_copy, parsed_owner)
 
 
 def iter_sealed_prediction_rows(
@@ -350,7 +350,26 @@ def _write_all(fd: int, payload: bytes) -> None:
         view = view[written:]
 
 
-def _run_isolated_parser(judge_copy: Path, parsed_copy: Path) -> None:
+def _reserve_parsed_copy(parsed_copy: Path) -> _SourceSignature:
+    try:
+        fd = os.open(
+            parsed_copy,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | _binary_flag(),
+            0o600,
+        )
+    except (OSError, TypeError, ValueError):
+        raise _invalid("parsed_destination_exists") from None
+    try:
+        return _source_signature(fd)
+    finally:
+        os.close(fd)
+
+
+def _run_isolated_parser(
+    judge_copy: Path,
+    parsed_copy: Path,
+    parsed_owner: _SourceSignature,
+) -> None:
     try:
         completed = subprocess.run(  # noqa: S603 - argv는 고정 모듈과 정수 상한이다.
             [
@@ -360,6 +379,8 @@ def _run_isolated_parser(judge_copy: Path, parsed_copy: Path) -> None:
                 str(_MAX_PARSED_BYTES),
                 str(judge_copy),
                 str(parsed_copy),
+                str(parsed_owner.device),
+                str(parsed_owner.inode),
             ],
             check=False,
             capture_output=True,
@@ -374,6 +395,19 @@ def _run_isolated_parser(judge_copy: Path, parsed_copy: Path) -> None:
 def _remove_incomplete_copy(path: Path) -> None:
     try:
         path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _remove_owned_copy(path: Path, owner: _SourceSignature) -> None:
+    try:
+        current = _signature_from_stat(os.lstat(path))
+        if (
+            stat.S_ISREG(current.mode)
+            and current.device == owner.device
+            and current.inode == owner.inode
+        ):
+            path.unlink()
     except OSError:
         pass
 

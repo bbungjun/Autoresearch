@@ -16,6 +16,7 @@ from pathlib import Path
 import ctypes
 import json
 import os
+import stat
 import sys
 
 
@@ -111,22 +112,36 @@ def main(argv: list[str] | None = None) -> int:
     """자원 상한 적용 뒤 공통 parser를 실행한다."""
 
     arguments = sys.argv[1:] if argv is None else argv
-    if len(arguments) != 4:
+    if len(arguments) != 6:
         return 2
-    output_created = False
     try:
         memory_limit = int(arguments[0])
         output_limit = int(arguments[1])
+        expected_device = int(arguments[4])
+        expected_inode = int(arguments[5])
         if memory_limit <= 0 or output_limit <= 0:
             return 2
         _apply_memory_limit(memory_limit)
         from prediction_parser import iter_prediction_copy
     except (MemoryError, OSError, ValueError):
         return 1
+    output_fd = -1
     try:
         output_path = Path(arguments[3])
-        with output_path.open("xb") as output:
-            output_created = True
+        flags = os.O_WRONLY | getattr(os, "O_BINARY", 0)
+        output_fd = os.open(output_path, flags | getattr(os, "O_NOFOLLOW", 0))
+        opened = os.fstat(output_fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_dev != expected_device
+            or opened.st_ino != expected_inode
+            or opened.st_size != 0
+        ):
+            os.close(output_fd)
+            output_fd = -1
+            return 1
+        with os.fdopen(output_fd, "wb", closefd=True) as output:
+            output_fd = -1
             written = 0
             for row in iter_prediction_copy(Path(arguments[2])):
                 payload = (
@@ -144,12 +159,10 @@ def main(argv: list[str] | None = None) -> int:
             output.flush()
             os.fsync(output.fileno())
     except BaseException:
-        if output_created:
-            try:
-                output_path.unlink(missing_ok=True)
-            except OSError:
-                pass
         return 1
+    finally:
+        if output_fd >= 0:
+            os.close(output_fd)
     return 0
 
 
