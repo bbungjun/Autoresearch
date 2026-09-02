@@ -6,9 +6,9 @@ label-free slate와 Judge 전용 label artifact를 조립하는 경계를 담당
 [기능] Stage B의 공개 요청·receipt·error·source seam과 snapshot builder, Stage C의
 fixture/candidate handoff typed contract, canonical identity helper, P0-2A ranking metric,
 P0-2B scoring, P0-2C 봉인 ingestion·판정, P0-2D domain interface, final 소비 registry와
-append-only Trial Ledger를 제공한다.
+append-only Trial Ledger, 고정 candidate 명령을 실행·회수하는 LocalRunner를 제공한다.
 
-[비책임] action log 생성(autoresearch.action_log_generation), 후보 학습·실행,
+[비책임] action log 생성(autoresearch.action_log_generation), candidate 코드 변경·학습 구현,
 실제 baseline sigma 측정과 반복 Controller를 담당하지 않는다.
 """
 
