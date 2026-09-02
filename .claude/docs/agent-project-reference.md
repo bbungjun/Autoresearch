@@ -98,6 +98,8 @@ docs/
   맡는다. `prediction.py`와 `autoresearch.cli harness-predict`는 로컬 설정·임베딩 적재·학습과
   native 모델/receipt/CSV 게시를 연결한다. 설정은 선택 `--config`(기본
   `harness_config.json`)로 제공하며 준비된 모델만 사용한다. 출력은 기존 파일을 덮어쓰지 않는다.
+  final metadata·workspace는 별도 준비/게시 interface에서 소비 grant를 검증한다. fixture는
+  고정 registry 위치의 현재 final marker만 선택적 상태로 허용하고 원본 receipt는 유지한다.
 - **비책임:** GCP 자원 생성·운영 Vertex AI 경로 교체·시스템 드라이버 관리·임베딩 파인튜닝은
   이 로컬 adapter의 책임이 아니다. 실제 agent·REPORT·calibration의 연결은
   Task 6/7 후속 범위다. 위 Stage B/C facade 목록은 최초 단계의 계약 설명이며 전체

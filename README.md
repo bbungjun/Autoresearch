@@ -98,7 +98,8 @@ cooperating publisher에 한해 동일한 완성 target을 재사용하고, 불�
 target은 덮어쓰지 않고 실패합니다.
 
 이후 RuleBased fixture, candidate workspace, Sealed Judge, ledger·Controller,
-metadata v2, 로컬 피처/임베딩과 seed별 재학습 CLI를 구현했습니다. 실제 agent·REPORT 통합은
+metadata v2, 로컬 피처/임베딩과 seed별 재학습 CLI를 구현했습니다. final용 metadata·workspace는
+별도 interface에서 기존 소비 grant 검증 후 전달합니다. 실제 agent·REPORT 통합은
 후속 Task 6/7 범위입니다. snapshot 계약 정본은
 [`Research Harness P0-1 평가 snapshot`](docs/specs/2026-08-31-research-harness-evaluation-snapshot.md)입니다.
 

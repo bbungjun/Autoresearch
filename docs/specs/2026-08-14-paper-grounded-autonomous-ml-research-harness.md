@@ -236,14 +236,15 @@ Candidate에 공개하는 실행 context는 worktree root,
 환경은 host 전체를 복사하지 않고 프로세스 실행에 필요한 OS 경로 변수와 Harness가 정한
 고정 Python 설정만 allowlist한다. GCS·BigQuery·GitHub 등 원격 credential 변수, credential
 파일 경로, `JudgeSnapshotHandoff`, labels, final holdout, fixture 생성 입력과 fixture seed는
-context에 포함하지 않는다. 모델 재학습 seed를 argv에 넣고 실제 subprocess를 실행하는
+validation context에 포함하지 않는다. 모델 재학습 seed를 argv에 넣고 실제 subprocess를 실행하는
 책임은 `LocalRunner`가 소유한다.
 
 반복용 workspace는 validation 전용이다. final holdout은 소비 registry를 선점한
-Controller가 별도의 final 실행 경계에서만 주입한다. Task 3은 아직 존재하지 않는 registry
-권한을 흉내 내는 토큰이나 validation manifest의 split flag를 만들지 않는다. 따라서
-Task 3의 공개 API에는 final 주입 함수가 없고, Task 4의 registry와 Task 5b Controller를
-연결할 때 별도 인터페이스를 완성한다.
+Controller가 별도의 final 실행 경계에서만 주입한다. Task 3 당시에는 registry 권한을
+흉내 내는 토큰이나 validation manifest의 split flag를 만들지 않았다. #49에서 실제
+`FinalConsumptionGrant`를 요구하는 `open_final_candidate_workspace`를 별도로 추가한다.
+정확한 metadata·게시 계약은 evaluation snapshot spec §18.9를 따르며, validation
+진입점에는 final 선택 인자를 추가하지 않는다.
 
 Candidate는 저장소 코드와 데이터 파일을 자유롭게 바꿀 수 있다. `harness_out`은
 `predictions.csv`를 받아들이는 유일한 산출물 경계이지, worktree의 다른 변경을 금지하는
@@ -446,7 +447,8 @@ interface는 기본 교체 지점이지 수정 파일 allowlist가 아니다. �
 별도로 추출해 과거 action log와 조립한다. 필요한 재료는 다음과 같다. 이는 입력 의미의
 요약이며, 정확한 파일명·컬럼·manifest 목표는 evaluation snapshot spec §18을 따른다.
 #40에서 typed schema·순수 정규화·시점 선택, #42에서 validation용 파일 게시·workspace
-opt-in 연결을 구현했다. final 전달·checkpoint 영속화와 피처 학습 연결은 아직 구현하지 않았다.
+opt-in 연결을 구현했다. #44/#46/#48에서 피처·GPU 임베딩·재학습 CLI를 연결했다.
+#49의 final 전달 계약은 evaluation snapshot spec §18.9를 따르며 checkpoint 영속화는 후속이다.
 
 - 사용자: ID, 나이, 직업, 시청 시간대, 관심 키워드, 선호 카테고리와 사용 가능 시점.
 - 영상·채널: 영상 ID, 카테고리, 길이, 게시 시각, 조회·좋아요·댓글 수, 채널 구독자·

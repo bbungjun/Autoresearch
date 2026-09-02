@@ -1337,7 +1337,7 @@ CLI는 설정/입력 검증 → GPU 적재 → 새 fit → 모델/receipt/CSV �
 - [x] seed별 split/sampling/새 fit 및 같은 seed 재현 테스트
 - [x] CLI/설정/비덮어쓰기 산출물·안전한 오류 계약과 테스트
 - [x] 실제 GPU 임베딩 + CPU LightGBM CLI smoke, 재현 receipt 보존
-- [ ] 독립 리뷰·회귀·Ruff·CI·PR·squash merge와 결과 기록
+- [x] 독립 리뷰·회귀·Ruff·CI·PR·squash merge와 결과 기록
 
 **준비 결과:** 기존 production builder로 validation 전용 v2 입력을 만들었다. 평가일은
 2026-09-01, history는 08-30/08-31 각각 5,400 events(4,800 impressions), validation은
@@ -1397,6 +1397,58 @@ Rich 색상 코드가 `--seed` 문자열 사이에 들어가 원시 출력 asser
 exit code를 검사한다. 제품 오류 처리나 필수 seed 계약을 느슨하게 바꾸지 않았다.
 수정 후 신규 core/CLI는 **56 passed (9.70초)**이며 전체 Ruff·diff check를 통과했다.
 Python 3.12의 첫 CI도 같은 한 테스트만 실패했음을 확인했다.
+
+**#50 최종 반영:** 색상 회귀를 포함한 Harness **798 passed, 11 skipped (140.41초)**,
+Python 3.11(5분 9초)/3.12(6분 20초), feast/postgres, lock/export, Ruff와 대상 이미지 CI가
+통과했다. 변경 없는 mlflow/agent 이미지는 기존 path filter로 skip됐다. 독립 재리뷰에
+차단 사항이 없었고 `c80e5b80876387d139a5e11fef417e665033727d`로 squash merge했다.
+
+### Goal 4A: final metadata·workspace 소비 권한 연결 — #49
+
+**문제:** 재학습 CLI까지 준비됐지만 final용 v2 입력·workspace 진입점은 없다. 연결 검토 중
+실제 fixture의 registry marker를 만들면 기존 exact-tree가 추가 파일로 거부하는 결합 문제도
+발견했다. 임시 fixture 복사본에서 metadata 준비 성공 → 실제 grant 발급 성공 → 다시 준비 시
+`fixture_source_provenance` 실패를 재현했다. 실제 실험 상태는 변경하지 않았다.
+
+**해결:** snapshot spec §18.9에 따라 작은 final 전용 interface를 추가하고 기존 validation
+진입점은 그대로 둔다. 소비 권한과 현재 marker를 확인한 뒤 동일 metadata bytes를 게시한다.
+기존 registry 위치 변경 대신 fixture exact-tree에 현재 final marker만 좁게 허용한다.
+구현 worker는 metadata/data-view와 RED 테스트, coordinator는 fixture 결합·workspace·문서,
+독립 reviewer는 전체 결과를 검토한다.
+
+- [x] final 권한/paired bytes/validation 분리 테스트 RED → GREEN
+- [x] fixture registry 상태 공존과 추가 파일·alias 거부 회귀
+- [x] final disposable workspace·최소 process context·회수 연결
+- [ ] 독립 리뷰·Harness 회귀·Ruff·CI·PR·squash merge
+- [ ] 문제·해결·검증 결과와 남은 제한 기록
+
+**검증 결과:** final interface 부재 **1 failed** 뒤 신규 23개를 구현하고 기존 validation
+metadata/data-view/registry를 포함해 **100 passed (39.60초)**를 확인했다. fixture 소비 상태
+결합 테스트는 **3 failed, 4 passed**에서 **7 passed**로 바뀌었고, 같은 fixture 재사용이
+marker를 보존하는 테스트도 추가했다. final workspace interface와 facade 부재를 각각 RED로
+확인한 뒤 연결했다. fixture/workspace 통합은 **15 passed (18.87초)**, 기존 workspace 회귀는
+**30 passed, 1 skipped (69.48초)**였다. 동일 grant에서 두 detached workspace가 같은
+metadata/view digest를 받고 종료 후 회수되는 것을 확인했다. 원본 fixture descriptor·평가
+fingerprint와 소비 위치는 바꾸지 않았으며 grant의 marker 권한 검사도 유지했다.
+
+**한계:** 단위·통합 테스트는 임시 복사본만 소비했다. 실제 final 실험 또는 성능 개선을
+완료한 결과가 아니다. 준비 metadata는 아직 메모리 값이며 새 프로세스 재개 결속은 후속이다.
+동일 OS 사용자에 대한 완전 격리·악의적 race 방지는 범위 밖이다. 독립 리뷰·전체 회귀·CI
+결과는 확인 후 이어서 기록한다.
+
+**전체 회귀 발견:** 첫 전체 실행은 **835 passed, 11 skipped, 1 failed (177.00초)**였다.
+실패는 기존 `test_slate`의 package export exact-set에 새 final interface 세 개를 아직
+반영하지 않은 계약 목록 누락이었다. subset 검사로 완화하지 않고 승인된 세 이름만
+expected set에 추가했다. 제품 동작은 바꾸지 않았다.
+독립 reviewer는 신규 **38 passed (35.75초)**, 기존 workspace/data-view/fixture/registry
+**120 passed, 3 skipped (91.69초)**와 Ruff·diff check를 직접 확인했고 추가 차단 사항은
+없었다. export exact-set 보완도 재리뷰 및 별도 실행 **1 passed**로 확인했다.
+최종 Harness 전체 회귀는 **836 passed, 11 skipped (174.72초)**다. 기존 플랫폼 조건의
+skip이며 신규 38개는 모두 실행됐다. 전체 Ruff·diff check도 통과했다.
+
+**후속:** Goal 4B에서 immutable run 입력·checkpoint 재개와 실제 coding agent·Controller
+adapter를, 이어 context-free 실험 기록 검토와 REPORT를 연결한다. Goal 5에서만 실제
+5-seed sigma와 품질·자율성·비용 및 개선/무변경/복구 시나리오를 측정한다.
 
 ## Task 7: 지표별 baseline σ 측정 + end-to-end 완주
 

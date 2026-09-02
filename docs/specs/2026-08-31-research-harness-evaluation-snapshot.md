@@ -1152,8 +1152,9 @@ git diff --check
 이 절은 **v2 전체 목표와 부분 구현의 경계**를 기록한다. #40에서 §18.7의 순수 정규화·
 시점 선택과 `CandidateDataManifestV2` 모델을 구현했다. `CandidateDataManifest`는 여전히
 v1만 받는다. #42는 별도 opt-in v2 파일 게시와 validation workspace 연결을 구현한다.
-인자를 생략한 기존 v1 경로는 slate와 history만 복사한다. final 전달·checkpoint 영속화는
-아직 구현하지 않았다. 기존 v1 reader·fixture·evaluation fingerprint는 그대로 보존한다.
+인자를 생략한 기존 v1 경로는 slate와 history만 복사한다. #49는 §18.9의 final 전달을
+구현하며 checkpoint 영속화는 후속이다. 기존 v1 reader·fixture·evaluation fingerprint는
+그대로 보존한다.
 
 ### 18.1 전달 파일과 소유권
 
@@ -1355,3 +1356,41 @@ metadata hash/rows/schema 및 snapshot/evaluation identity를 재확인한다. �
 workspace의 기존 `candidate_view_sha256`은 v2 manifest 전체 digest여서 metadata 변경도
 반영한다. 실패 시 workspace를 회수한다. 이 필드 제공이 Controller checkpoint 영속화까지
 완성했다는 뜻은 아니다. final 권한·registry와 모델 실행 경로는 이번 단계에서 변경하지 않는다.
+
+### 18.9 final metadata·소비 grant·workspace 연결 (#49)
+
+validation 공개 interface에는 split/final 선택 인자를 추가하지 않는다. 다음 final 전용
+interface는 Harness 소유이며 coding agent에 Judge handoff나 grant를 넘기는 통로가 아니다.
+
+- `prepare_final_candidate_metadata(judge, *, source)`는 검증된 fixture의 final slate와
+  허용 history impression을 기준으로 §18.8과 동일한 정규화·관측 제한을 적용한다.
+  `PreparedCandidateMetadata`의 evaluation ID는 final ID다. run 시작에 Judge 측에서
+  준비하고 baseline/candidate의 계획된 paired seed 전체에서 같은 bytes를 재사용한다.
+- `materialize_final_candidate_data_view(request, *, source, metadata, grant)`는 실제
+  `FinalConsumptionGrant` 타입과 현재 marker·handoff 동일성을 검증한 뒤 final v2만 게시한다.
+  missing/duck grant, 다른 snapshot, 삭제·변조된 marker와 validation bundle 혼용은 실패한다.
+  기존 target 재사용 직전과 staging rename 직전에도 권한을 재확인한다. 같은 claim 안의
+  계획된 paired 실행을 허용하는 것이지 새 claim이나 실패 후 재평가를 허용하지 않는다.
+- `open_final_candidate_workspace(request, *, source, metadata, grant)`는 기존 detached
+  checkout·credential 검사·회수 구현을 공유한다. candidate process context에는 기존
+  `cwd/slate/predictions/environment`만 있고, handoff·grant·marker 경로는 넣지 않는다.
+  `candidate_view_sha256`은 final metadata를 포함한 전체 v2 manifest를 식별한다.
+
+v1/validation v2의 입력과 오류 의미는 유지한다. 공통 private 구현에서 선택한 split의
+slate receipt만 사용하며 history cutoff, 독립 byte copy, exact tree, lock/write-once 게시와
+metadata schema/hash 검증을 공유한다. final 데이터 준비 실패는 기존 StageC/workspace
+오류로 정제한다. OS 사용자에 의한 악의적 파일 race까지 완전 차단한다고 주장하지 않는다.
+
+**fixture와 소비 상태의 결합.** 기존 registry의 고정 상태 루트는 snapshot의
+`evaluation-snapshots/by-hash` 상위이며 fixture snapshot에서는 fixture root 자체다.
+소비 기록을 생성하면 기존 fixture exact-tree와 충돌하는 것을 실제 임시 복사본으로
+재현했다. registry 위치를 바꾸지 않고 fixture 검증에 선택적인
+`final-holdout-consumed` 디렉터리 및 현재 final evaluation ID 이름의 일반 파일 하나만
+허용한다. 빈 디렉터리도 허용하며 다른 파일·하위 폴더·alias는 계속 거부한다. 원본 데이터
+receipt/fingerprint는 바꾸지 않는다. marker 내용의 권한 검증은 registry가 담당하므로
+validation 데이터 검증이 marker 내용만을 이유로 실패하지는 않는다. final은 marker가
+삭제되거나 내용이 바뀌면 기존 grant도 거부한다.
+
+이 단계는 final 입력 전달까지다. 준비 bytes의 새 프로세스 복구·run/checkpoint 결속,
+실제 agent·Controller adapter·REPORT·실측은 후속이며 단위 테스트의 final 소비를 실제
+실험 완주로 계산하지 않는다.

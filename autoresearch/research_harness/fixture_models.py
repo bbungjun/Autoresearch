@@ -6,7 +6,7 @@
 [기능] Judge 전용 fixture descriptor·receipt와 candidate-safe data view manifest·receipt를
 제공하고 상대 경로 및 seed의 기본 계약을 fail-closed로 검증한다. Metadata v2 manifest는
 별도 모델에서 고정 경로·행 수·digest를 검증하며 기존 v1 reader 계약은 유지한다.
-Validation metadata의 prepared bytes/receipt는 Harness 메모리에서 불변 값으로 전달한다.
+각 split metadata의 prepared bytes/receipt는 Harness 메모리에서 불변 값으로 전달한다.
 
 [비책임] 실제 일일 producer 실행, snapshot build, handoff 재검증과 candidate view 게시는
 후속 Stage C orchestration 모듈이 담당한다.
@@ -364,7 +364,7 @@ class PreparedMetadataArtifact:
 
 @dataclass(frozen=True, slots=True)
 class PreparedCandidateMetadata:
-    """Validation 입력으로 준비한 불변 bundle. 원본 경로와 생성 상태는 저장하지 않는다."""
+    """하나의 split용 불변 bundle. 원본 경로와 생성 상태는 저장하지 않는다."""
 
     snapshot_fingerprint: SnapshotFingerprint
     evaluation_id: EvaluationId

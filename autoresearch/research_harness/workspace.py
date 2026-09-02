@@ -1,13 +1,14 @@
 """Research Harness의 disposable candidate 작업공간 경계.
 
-[파이프라인] 고정된 champion SHA와 validation ``CandidateDataView``를 받아 coding agent와
+[파이프라인] 고정된 champion SHA와 label-free ``CandidateDataView``를 받아 coding agent와
 LocalRunner가 사용할 일회성 Git worktree를 준비하고, trial 종료 뒤 회수한다.
 
-[기능] 정확한 기준 SHA checkout, validation 전용 입력·예측 출력 경로, credential-free
+[기능] 정확한 기준 SHA checkout, label-free 입력·예측 출력 경로, credential-free
 최소 프로세스 환경, 변경 내용 credential 검사와 ledger용 diff fingerprint를 제공한다.
 Prepared metadata를 명시적으로 주입하면 validation v2를 게시하고 전체 view digest를 전달한다.
+별도 final interface는 소비 grant 검증 뒤에만 final v2를 게시하며 같은 회수 구현을 쓴다.
 
-[비책임] candidate subprocess 실행·seed 전달·timeout 회수, final holdout 소비 권한,
+[비책임] candidate subprocess 실행·seed 전달·timeout 회수, final holdout 소비 권한 발급,
 Judge 채점·ledger 기록, 기존 executor verifier 정책은 담당하지 않는다.
 """
 
@@ -27,9 +28,11 @@ import subprocess
 from typing import Protocol
 
 from applications.experiment_platform.executor.safety import contains_credential_value
+from autoresearch.research_harness.consumption_registry import FinalConsumptionGrant
 from autoresearch.research_harness.candidate_data_view import (
     materialize_candidate_data_view,
     materialize_candidate_data_view_v2,
+    materialize_final_candidate_data_view,
 )
 from autoresearch.research_harness.evaluation_source import ActionLogSource
 from autoresearch.research_harness.fixture_errors import StageCError
@@ -94,7 +97,7 @@ class WorkspaceError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class CandidateWorkspaceRequest:
-    """하나의 validation trial worktree를 만드는 Harness 소유 입력."""
+    """하나의 label-free trial worktree를 만드는 Harness 소유 입력."""
 
     repository_root: Path
     base_sha: str
@@ -154,6 +157,47 @@ def open_candidate_workspace(
     process context에 전달하지 않으며 기존 candidate_view_sha256이 전체 입력을 식별한다.
     """
 
+    with _open_candidate_workspace(request, source=source, metadata=metadata, grant=None) as workspace:
+        yield workspace
+
+
+@contextmanager
+def open_final_candidate_workspace(
+    request: CandidateWorkspaceRequest,
+    *,
+    source: ActionLogSource,
+    metadata: PreparedCandidateMetadata,
+    grant: FinalConsumptionGrant,
+) -> Iterator[CandidateWorkspace]:
+    """유효한 final 소비 권한으로만 v2 worktree를 열고 종료 시 회수한다.
+
+    Args:
+        request: 고정 SHA, Judge handoff와 독립 workspace root.
+        source: 같은 fixture의 검증된 history source.
+        metadata: Judge 측에서 미리 준비한 final 전용 불변 metadata.
+        grant: 같은 snapshot과 현재 marker에 결속된 소비 권한.
+
+    Yields:
+        grant나 Judge 경로를 포함하지 않는 candidate process context의 workspace.
+
+    Raises:
+        WorkspaceError: 권한·입력·checkout·회수 검증이 실패한 경우.
+    """
+    if not isinstance(grant, FinalConsumptionGrant) or not grant._authorizes(request.judge):
+        raise WorkspaceError(WorkspaceErrorCode.DATA_VIEW_INVALID, "final_grant")
+    with _open_candidate_workspace(request, source=source, metadata=metadata, grant=grant) as workspace:
+        yield workspace
+
+
+@contextmanager
+def _open_candidate_workspace(
+    request: CandidateWorkspaceRequest,
+    *,
+    source: ActionLogSource,
+    metadata: PreparedCandidateMetadata | None,
+    grant: FinalConsumptionGrant | None,
+) -> Iterator[CandidateWorkspace]:
+
     repository, workspace = _validate_request(request)
     created = False
     identity: _WorktreeIdentity | None = None
@@ -174,12 +218,18 @@ def open_candidate_workspace(
             raise WorkspaceError(WorkspaceErrorCode.GIT_FAILED, "checkout_identity")
         try:
             view_request = CandidateDataViewRequest(request.judge, workspace)
-            data_view = (
-                materialize_candidate_data_view(view_request, source=source)
-                if metadata is None else materialize_candidate_data_view_v2(
+            if grant is not None:
+                if metadata is None:
+                    raise WorkspaceError(WorkspaceErrorCode.DATA_VIEW_INVALID, "final_metadata_required")
+                data_view = materialize_final_candidate_data_view(
+                    view_request, source=source, metadata=metadata, grant=grant,
+                )
+            elif metadata is None:
+                data_view = materialize_candidate_data_view(view_request, source=source)
+            else:
+                data_view = materialize_candidate_data_view_v2(
                     view_request, source=source, metadata=metadata,
                 )
-            )
         except StageCError:
             raise WorkspaceError(
                 WorkspaceErrorCode.DATA_VIEW_INVALID,
