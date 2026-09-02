@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum, unique
-from math import ceil, fsum, isclose, isfinite
+from math import ceil, fsum, isfinite
 
 from autoresearch.research_harness.judge import JudgeScoringResult
 
@@ -313,4 +313,4 @@ def _delta_value(deltas: Sequence[MetricDelta], metric: JudgeMetric) -> float:
 
 
 def _at_least(value: float, threshold: float) -> bool:
-    return value > threshold or isclose(value, threshold, rel_tol=1e-12, abs_tol=1e-15)
+    return value >= threshold

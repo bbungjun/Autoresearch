@@ -14,7 +14,6 @@ Judge 소유 CSV 사본을 ranking·probability metric 하나의 불변 결과�
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum, unique
 from pathlib import Path
 
 import pyarrow as pa
@@ -31,6 +30,7 @@ from autoresearch.research_harness.evaluation_snapshot_models import (
 )
 from autoresearch.research_harness.fixture_errors import StageCError
 from autoresearch.research_harness.fixture_models import JudgeSnapshotHandoff
+from autoresearch.research_harness.judge_errors import JudgeError, JudgeErrorCode
 from autoresearch.research_harness.local_evaluation_fixture import (
     _io_path,
     _validated_judge_snapshot,
@@ -41,6 +41,10 @@ from autoresearch.research_harness.prediction_parser import (
     PredictionRow,
     is_canonical_ascii,
     parse_prediction_copy as _parse_prediction_copy,
+)
+from autoresearch.research_harness.prediction_ingestion import (
+    SealedPredictionReceipt,
+    iter_sealed_prediction_rows,
 )
 from autoresearch.research_harness.ranking_metrics import (
     RankingMetricError,
@@ -71,29 +75,6 @@ _LABEL_SCHEMA = pa.schema(
         pa.field("clicked", pa.bool_(), nullable=False),
     ]
 )
-
-
-@unique
-class JudgeErrorCode(StrEnum):
-    """P0-2 호출자가 안전하게 분기할 수 있는 오류 코드."""
-
-    INVALID_TARGET = "invalid_judge_target"
-    INVALID_PREDICTIONS = "invalid_predictions"
-
-
-@dataclass(frozen=True, slots=True)
-class JudgeError(Exception):
-    """원본 prediction 값과 Judge path를 포함하지 않는 P0-2 오류."""
-
-    code: JudgeErrorCode
-    stage: str
-    row_number: int | None = None
-
-    def __str__(self) -> str:
-        rendered = f"{self.code.value}: stage={self.stage}"
-        if self.row_number is not None:
-            rendered += f": row_number={self.row_number}"
-        return rendered
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False)
@@ -176,14 +157,14 @@ def parse_prediction_copy(prediction_copy: Path) -> tuple[PredictionRow, ...]:
 
 def score_predictions(
     target: JudgeEvaluationTarget,
-    prediction_copy: Path,
+    sealed_prediction: SealedPredictionReceipt,
 ) -> JudgeScoringResult:
     """validation target과 exact 1:1 prediction을 결합해 모든 P0-2B 지표를 계산한다."""
 
     if not isinstance(target, JudgeEvaluationTarget):
         raise JudgeError(JudgeErrorCode.INVALID_TARGET, "target_type")
     target_rows = _load_verified_target_rows(target)
-    prediction_rows = parse_prediction_copy(prediction_copy)
+    prediction_rows = iter_sealed_prediction_rows(sealed_prediction)
     expected_id = target._handoff.validation_id
 
     prediction_by_key: dict[tuple[str, str], PredictionRow] = {}
@@ -195,7 +176,7 @@ def score_predictions(
 
     target_by_key = {(row.slate_id, row.video_id): row for row in target_rows}
     if (
-        len(prediction_rows) != len(target_rows)
+        len(prediction_by_key) != len(target_rows)
         or len(target_by_key) != len(target_rows)
         or prediction_by_key.keys() != target_by_key.keys()
     ):

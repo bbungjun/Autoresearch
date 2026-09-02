@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import subprocess
 
@@ -9,7 +10,10 @@ import pytest
 
 from autoresearch.research_harness.judge import JudgeError, JudgeErrorCode
 import autoresearch.research_harness.prediction_ingestion as ingestion
-from autoresearch.research_harness.prediction_ingestion import seal_prediction_copy
+from autoresearch.research_harness.prediction_ingestion import (
+    SealedPredictionReceipt,
+    seal_prediction_copy,
+)
 
 
 _HEADER = b"evaluation_id,slate_id,video_id,score\n"
@@ -92,7 +96,7 @@ def test_seal_prediction_copy_rejects_source_growth_during_copy(
         nonlocal calls
         calls += 1
         signature = real_signature(fd)
-        if calls == 2:
+        if calls == 3:
             return signature._replace(size=signature.size + 1)
         return signature
 
@@ -147,6 +151,28 @@ def test_seal_prediction_copy_maps_parser_memory_failure_to_invalid_predictions(
     assert not (tmp_path / "copy.csv").exists()
 
 
+def test_seal_prediction_copy_removes_copy_after_interruption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "candidate.csv"
+    _valid_prediction(source)
+    destination = tmp_path / "copy.csv"
+
+    def interrupted(judge_copy: Path, parsed_copy: Path) -> None:
+        del judge_copy
+        parsed_copy.write_bytes(b"partial")
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(ingestion, "_run_isolated_parser", interrupted)
+
+    with pytest.raises(KeyboardInterrupt):
+        seal_prediction_copy(source, destination)
+
+    assert not destination.exists()
+    assert not destination.with_name(f"{destination.name}.parsed.jsonl").exists()
+
+
 def test_seal_prediction_copy_runs_the_shared_parser_on_the_judge_copy(
     tmp_path: Path,
 ) -> None:
@@ -179,3 +205,50 @@ def test_judge_scoring_does_not_open_candidate_workspace_paths() -> None:
 
     assert "candidate_prediction" not in source
     assert "os.open(" not in source
+
+
+def test_sealed_receipt_rejects_direct_construction() -> None:
+    with pytest.raises(JudgeError) as error:
+        SealedPredictionReceipt()
+
+    assert error.value.code is JudgeErrorCode.INVALID_PREDICTIONS
+    assert error.value.stage == "sealed_receipt"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX FIFO contract")
+def test_seal_prediction_copy_rejects_fifo_without_blocking(tmp_path: Path) -> None:
+    source = tmp_path / "candidate.fifo"
+    os.mkfifo(source)
+
+    with pytest.raises(JudgeError) as error:
+        seal_prediction_copy(source, tmp_path / "copy.csv")
+
+    assert error.value.code is JudgeErrorCode.INVALID_PREDICTIONS
+    assert error.value.stage == "source_contract"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX FIFO contract")
+def test_seal_prediction_copy_rejects_regular_to_fifo_swap_without_blocking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "candidate.csv"
+    _valid_prediction(source)
+    real_open = ingestion.os.open
+    swapped = False
+
+    def swap_then_open(path: Path, flags: int, mode: int = 0o777) -> int:
+        nonlocal swapped
+        if Path(path) == source and not swapped:
+            swapped = True
+            source.unlink()
+            os.mkfifo(source)
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(ingestion.os, "open", swap_then_open)
+
+    with pytest.raises(JudgeError) as error:
+        seal_prediction_copy(source, tmp_path / "copy.csv")
+
+    assert error.value.code is JudgeErrorCode.INVALID_PREDICTIONS
+    assert error.value.stage == "source_contract"

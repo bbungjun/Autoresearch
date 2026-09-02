@@ -3,8 +3,8 @@
 [파이프라인] candidate prediction 봉인 사본 생성 뒤, metric 결합 전에 CSV의 물리·값
 계약을 검증하는 구간을 담당한다.
 
-[기능] 격리 parser subprocess와 Judge scoring이 공유하는 단일 parser 구현과 typed row를
-제공한다.
+[기능] 격리 parser subprocess가 Judge scoring용 정규화 행을 만들 때 사용하는 단일 parser
+구현과 typed row를 제공한다.
 
 [비책임] candidate 경로 열기·사본 생성·자원 제한은 ``prediction_ingestion``이, target과
 지표 결합은 ``judge``가, coverage·sigma 판정은 ``judge_decision``이 담당한다.
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
+from collections.abc import Iterator
 from pathlib import Path
 import re
 
@@ -47,7 +48,12 @@ class PredictionRow:
 def parse_prediction_copy(prediction_copy: Path) -> tuple[PredictionRow, ...]:
     """Judge 소유 CSV 사본을 streaming parse해 typed row로 반환한다."""
 
-    rows: list[PredictionRow] = []
+    return tuple(iter_prediction_copy(prediction_copy))
+
+
+def iter_prediction_copy(prediction_copy: Path) -> Iterator[PredictionRow]:
+    """검증된 행을 보존하지 않고 순서대로 내보낸다."""
+
     try:
         with prediction_copy.open("rb") as stream:
             header = stream.readline(len(PREDICTION_HEADER) + 3)
@@ -64,14 +70,13 @@ def parse_prediction_copy(prediction_copy: Path) -> tuple[PredictionRow, ...]:
                     and len(raw_line) == MAX_ROW_BYTES + 2
                 ):
                     raise PredictionFormatError("field_bytes", row_number)
-                if len(rows) >= MAX_PREDICTION_ROWS:
+                if row_number > MAX_PREDICTION_ROWS + 1:
                     raise PredictionFormatError("row_limit", row_number)
-                rows.append(_parse_prediction_line(raw_line, row_number))
+                yield _parse_prediction_line(raw_line, row_number)
     except PredictionFormatError:
         raise
     except (OSError, TypeError, ValueError):
         raise PredictionFormatError("read") from None
-    return tuple(rows)
 
 
 def _parse_prediction_line(raw_line: bytes, row_number: int) -> PredictionRow:

@@ -107,28 +107,28 @@ def test_screening_requires_strict_primary_improvement() -> None:
 
 
 def test_confirmation_promotes_at_exact_primary_and_guardrail_boundaries() -> None:
-    baseline = _score()
+    baseline = _score(log_loss=0.5, brier=0.5)
     candidate = _score(
-        ndcg_at_10=0.52,
-        recall_at_10=0.49,
-        ndcg_at_24=0.49,
-        grouped_roc_auc=0.49,
-        pr_auc=0.49,
-        log_loss=0.41,
-        brier=0.21,
+        ndcg_at_10=0.625,
+        recall_at_10=0.4375,
+        ndcg_at_24=0.4375,
+        grouped_roc_auc=0.4375,
+        pr_auc=0.4375,
+        log_loss=0.5625,
+        brier=0.5625,
     )
     pairs = tuple(
         PairedJudgeResult(seed=seed, baseline=baseline, candidate=candidate)
         for seed in range(5)
     )
 
-    result = compare_confirmation(pairs, baseline_sigmas=_sigmas())
+    result = compare_confirmation(pairs, baseline_sigmas=_sigmas(0.0625))
 
     assert result.decision is JudgeDecision.PROMOTE
     assert result.reason_code is JudgeReasonCode.PROMOTION_THRESHOLD_MET
-    assert result.delta_for(JudgeMetric.NDCG_AT_10) == pytest.approx(0.02)
-    assert result.delta_for(JudgeMetric.LOG_LOSS) == pytest.approx(-0.01)
-    assert result.delta_for(JudgeMetric.BRIER) == pytest.approx(-0.01)
+    assert result.delta_for(JudgeMetric.NDCG_AT_10) == 0.125
+    assert result.delta_for(JudgeMetric.LOG_LOSS) == -0.0625
+    assert result.delta_for(JudgeMetric.BRIER) == -0.0625
 
 
 def test_confirmation_discards_just_below_primary_threshold() -> None:

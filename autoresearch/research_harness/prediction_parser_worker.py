@@ -3,8 +3,8 @@
 [파이프라인] Judge ingestion이 candidate 파일을 소유 사본으로 만든 뒤, scoring 전에 parser
 시간·메모리 상한을 강제하는 구간을 담당한다.
 
-[기능] POSIX address-space 상한을 먼저 설정하고 공통 prediction parser를 실행해 성공 여부만
-종료 코드로 반환한다.
+[기능] POSIX address-space 상한을 먼저 설정하고 공통 prediction parser를 실행해 검증된 행을
+exclusive 정규화 JSONL로 저장하고 성공 여부를 종료 코드로 반환한다.
 
 [비책임] candidate 파일 복사, Judge target 결합, metric 계산과 판정은 각각
 ``prediction_ingestion``, ``judge``, ``judge_decision``이 담당한다.
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import ctypes
+import json
 import os
 import sys
 
@@ -110,22 +111,44 @@ def main(argv: list[str] | None = None) -> int:
     """자원 상한 적용 뒤 공통 parser를 실행한다."""
 
     arguments = sys.argv[1:] if argv is None else argv
-    if len(arguments) != 2:
+    if len(arguments) != 4:
         return 2
+    output_created = False
     try:
         memory_limit = int(arguments[0])
-        if memory_limit <= 0:
+        output_limit = int(arguments[1])
+        if memory_limit <= 0 or output_limit <= 0:
             return 2
         _apply_memory_limit(memory_limit)
-        from prediction_parser import (
-            PredictionFormatError,
-            parse_prediction_copy,
-        )
+        from prediction_parser import iter_prediction_copy
     except (MemoryError, OSError, ValueError):
         return 1
     try:
-        parse_prediction_copy(Path(arguments[1]))
-    except (MemoryError, OSError, PredictionFormatError):
+        output_path = Path(arguments[3])
+        with output_path.open("xb") as output:
+            output_created = True
+            written = 0
+            for row in iter_prediction_copy(Path(arguments[2])):
+                payload = (
+                    json.dumps(
+                        [row.evaluation_id, row.slate_id, row.video_id, row.score],
+                        ensure_ascii=True,
+                        separators=(",", ":"),
+                    ).encode("ascii")
+                    + b"\n"
+                )
+                written += len(payload)
+                if written > output_limit:
+                    raise MemoryError
+                output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+    except BaseException:
+        if output_created:
+            try:
+                output_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         return 1
     return 0
 

@@ -33,6 +33,10 @@ from autoresearch.research_harness.judge import (
 from autoresearch.research_harness.local_evaluation_fixture import (
     _validated_judge_handoff,
 )
+from autoresearch.research_harness.prediction_ingestion import (
+    SealedPredictionReceipt,
+    seal_prediction_copy,
+)
 from autoresearch.research_harness.snapshot_publisher import publish_snapshot
 
 
@@ -151,6 +155,10 @@ def _write_predictions(
     path = tmp_path / "predictions.csv"
     path.write_bytes(_prediction_bytes(evaluation_id, rows))
     return path
+
+
+def _seal_predictions(tmp_path: Path, source: Path) -> SealedPredictionReceipt:
+    return seal_prediction_copy(source, tmp_path / "sealed-predictions.csv")
 
 
 def test_public_interface_keeps_target_and_parser_types_opaque() -> None:
@@ -374,7 +382,7 @@ def test_scoring_rejects_missing_duplicate_or_extra_prediction_keys(
     path = _write_predictions(tmp_path, str(judge_handoff.validation_id), rows)
 
     with pytest.raises(JudgeError) as error:
-        score_predictions(target, path)
+        score_predictions(target, _seal_predictions(tmp_path, path))
 
     assert error.value.code is JudgeErrorCode.INVALID_PREDICTIONS
 
@@ -387,7 +395,7 @@ def test_prediction_cannot_select_the_final_holdout_id(
     path = _write_predictions(tmp_path, str(judge_handoff.final_holdout_id))
 
     with pytest.raises(JudgeError) as error:
-        score_predictions(target, path)
+        score_predictions(target, _seal_predictions(tmp_path, path))
 
     assert error.value.code is JudgeErrorCode.INVALID_PREDICTIONS
 
@@ -399,7 +407,9 @@ def test_scoring_combines_ranking_and_probability_metrics(
     target = build_validation_target(judge_handoff)
     path = _write_predictions(tmp_path, str(judge_handoff.validation_id))
 
-    result = score_predictions(target, path)
+    receipt = _seal_predictions(tmp_path, path)
+
+    result = score_predictions(target, receipt)
 
     assert result.evaluation_id == judge_handoff.validation_id
     assert result.row_count == 2
@@ -427,7 +437,7 @@ def test_scoring_revalidates_target_artifact_after_target_creation(
     path = _write_predictions(tmp_path, str(judge_handoff.validation_id))
 
     with pytest.raises(JudgeError) as error:
-        score_predictions(target, path)
+        score_predictions(target, _seal_predictions(tmp_path, path))
 
     assert error.value.code is JudgeErrorCode.INVALID_TARGET
 
@@ -440,7 +450,7 @@ def test_judge_error_does_not_disclose_prediction_or_target_values(
     path = _write_predictions(tmp_path, "eval_" + "f" * 64)
 
     with pytest.raises(JudgeError) as error:
-        score_predictions(target, path)
+        score_predictions(target, _seal_predictions(tmp_path, path))
 
     rendered = str(error.value)
     assert str(path) not in rendered
@@ -448,3 +458,50 @@ def test_judge_error_does_not_disclose_prediction_or_target_values(
     assert "eval_" not in rendered
     assert "video-" not in rendered
     assert sha256(path.read_bytes()).hexdigest() not in rendered
+
+
+def test_scoring_rejects_unsealed_candidate_path(
+    judge_handoff,
+    tmp_path: Path,
+) -> None:
+    target = build_validation_target(judge_handoff)
+    path = _write_predictions(tmp_path, str(judge_handoff.validation_id))
+
+    with pytest.raises(JudgeError) as error:
+        score_predictions(target, path)  # type: ignore[arg-type]
+
+    assert error.value.code is JudgeErrorCode.INVALID_PREDICTIONS
+    assert error.value.stage == "sealed_receipt"
+
+
+def test_scoring_rejects_tampered_sealed_copy(
+    judge_handoff,
+    tmp_path: Path,
+) -> None:
+    target = build_validation_target(judge_handoff)
+    path = _write_predictions(tmp_path, str(judge_handoff.validation_id))
+    receipt = _seal_predictions(tmp_path, path)
+    receipt.path.write_bytes(receipt.path.read_bytes() + b"tampered")
+
+    with pytest.raises(JudgeError) as error:
+        score_predictions(target, receipt)
+
+    assert error.value.code is JudgeErrorCode.INVALID_PREDICTIONS
+    assert error.value.stage == "sealed_copy_identity"
+
+
+def test_scoring_rejects_tampered_normalized_rows(
+    judge_handoff,
+    tmp_path: Path,
+) -> None:
+    target = build_validation_target(judge_handoff)
+    path = _write_predictions(tmp_path, str(judge_handoff.validation_id))
+    receipt = _seal_predictions(tmp_path, path)
+    parsed = receipt.path.with_name(f"{receipt.path.name}.parsed.jsonl")
+    parsed.write_bytes(parsed.read_bytes() + b"tampered")
+
+    with pytest.raises(JudgeError) as error:
+        score_predictions(target, receipt)
+
+    assert error.value.code is JudgeErrorCode.INVALID_PREDICTIONS
+    assert error.value.stage in {"parsed_copy_contract", "parsed_copy_identity"}
