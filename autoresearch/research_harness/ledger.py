@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum, unique
+import errno
 import json
 import math
 import os
@@ -28,6 +29,7 @@ from typing import Iterator
 from autoresearch.research_harness.consumption_registry import (
     FinalConsumptionEvidence,
 )
+from autoresearch.research_harness._filesystem import sync_directory
 
 
 _CONTRACT_VERSION = "trial-ledger-v1"
@@ -236,7 +238,10 @@ def _locked_ledger(path: Path) -> Iterator[int]:
     try:
         lock_descriptor = _open_lock(lock_path)
         _acquire_lock(lock_descriptor)
-        ledger_descriptor = _open_data_file(path)
+        ledger_descriptor, created = _open_data_file(path)
+        if created:
+            os.fsync(ledger_descriptor)
+            sync_directory(path.parent)
         yield ledger_descriptor
     except LedgerError:
         raise
@@ -263,10 +268,14 @@ def _open_lock(path: Path) -> int:
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(path, flags, 0o600)
-    if os.fstat(descriptor).st_size == 0:
-        os.write(descriptor, b"0")
-        os.fsync(descriptor)
-    return descriptor
+    try:
+        if os.fstat(descriptor).st_size == 0:
+            os.write(descriptor, b"0")
+            os.fsync(descriptor)
+        return descriptor
+    except OSError:
+        os.close(descriptor)
+        raise
 
 
 def _acquire_lock(descriptor: int) -> None:
@@ -277,9 +286,12 @@ def _acquire_lock(descriptor: int) -> None:
         while True:
             try:
                 msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
-                return
-            except OSError:
+            except OSError as error:
+                if not _windows_lock_is_contended(error):
+                    raise
                 time.sleep(0.01)
+            else:
+                return
     else:
         import fcntl
 
@@ -298,14 +310,28 @@ def _release_lock(descriptor: int) -> None:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
 
 
-def _open_data_file(path: Path) -> int:
-    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0)
+def _windows_lock_is_contended(error: OSError) -> bool:
+    if error.winerror is not None:
+        return error.winerror in {33, 36}
+    return error.errno in {errno.EACCES, errno.EDEADLK}
+
+
+def _open_data_file(path: Path) -> tuple[int, bool]:
+    flags = os.O_RDWR | getattr(os, "O_BINARY", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags, 0o600)
-    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+    try:
+        descriptor = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+        created = True
+    except FileExistsError:
+        descriptor = os.open(path, flags)
+        created = False
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise LedgerError(LedgerErrorCode.INVALID_REQUEST, "ledger_file")
+        return descriptor, created
+    except (LedgerError, OSError):
         os.close(descriptor)
-        raise LedgerError(LedgerErrorCode.INVALID_REQUEST, "ledger_file")
-    return descriptor
+        raise
 
 
 def _read_state(descriptor: int) -> TrialLedgerState:
@@ -335,7 +361,7 @@ def _read_state(descriptor: int) -> TrialLedgerState:
     seen_checkpoints: set[str] = set()
     evidence: list[FinalConsumptionEvidence] = []
     try:
-        lines = payload.splitlines()
+        lines = payload.splitlines(keepends=True)
         for expected_sequence, line in enumerate(lines):
             envelope = json.loads(line, parse_constant=_reject_json_constant)
             if not isinstance(envelope, dict) or set(envelope) != {
@@ -354,6 +380,8 @@ def _read_state(descriptor: int) -> TrialLedgerState:
                 raise ValueError
             record = _record_from_payload(envelope["record_type"], envelope["payload"])
             _validate_record(record)
+            if line != _canonical_line(expected_sequence, record):
+                raise ValueError
             if isinstance(record, TrialRecord):
                 if record.trial_id in seen_trials:
                     raise ValueError
@@ -626,9 +654,7 @@ def _validate_metrics(metrics: object) -> None:
             raise ValueError
         names.add(metric.name)
         if metric.value is not None and (
-            isinstance(metric.value, bool)
-            or not isinstance(metric.value, (int, float))
-            or not math.isfinite(metric.value)
+            not isinstance(metric.value, float) or not math.isfinite(metric.value)
         ):
             raise ValueError
 

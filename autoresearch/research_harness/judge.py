@@ -113,7 +113,7 @@ class JudgeEvaluationTarget:
 
 @dataclass(frozen=True, slots=True)
 class JudgeScoringResult:
-    """P0-2C coverage gate와 판정이 소비할 validation metric 묶음."""
+    """P0-2C coverage gate와 판정이 소비할 evaluation metric 묶음."""
 
     evaluation_id: EvaluationId
     row_count: int
@@ -196,7 +196,7 @@ def score_predictions(
     target: JudgeEvaluationTarget,
     sealed_prediction: SealedPredictionReceipt,
 ) -> JudgeScoringResult:
-    """validation target과 exact 1:1 prediction을 결합해 모든 P0-2B 지표를 계산한다."""
+    """evaluation target과 exact 1:1 prediction을 결합해 모든 P0-2B 지표를 계산한다."""
 
     if not isinstance(target, JudgeEvaluationTarget):
         raise JudgeError(JudgeErrorCode.INVALID_TARGET, "target_type")

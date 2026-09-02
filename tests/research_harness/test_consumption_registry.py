@@ -18,6 +18,7 @@ from autoresearch.research_harness import (
     ConsumptionRegistryError,
     ConsumptionRegistryErrorCode,
     FinalConsumptionRequest,
+    FinalConsumptionEvidence,
     LocalEvaluationFixtureRequest,
     build_final_target,
     build_local_evaluation_fixture,
@@ -165,7 +166,7 @@ def test_directory_sync_failure_keeps_consumed_marker(
     def fail_sync(_: Path) -> None:
         raise OSError("sensitive local detail")
 
-    monkeypatch.setattr(registry_module, "_sync_directory", fail_sync)
+    monkeypatch.setattr(registry_module, "sync_directory", fail_sync)
     with pytest.raises(ConsumptionRegistryError) as captured:
         claim_final_consumption(request)
 
@@ -191,6 +192,20 @@ def test_prior_evidence_missing_is_integrity_violation_without_recreation(
 
     assert captured.value.code is ConsumptionRegistryErrorCode.INTEGRITY_VIOLATION
     assert not grant.evidence.marker_path.exists()
+
+
+def test_prior_evidence_verification_does_not_depend_on_new_request_time(
+    source_handoff,
+    tmp_path: Path,
+) -> None:
+    _, _, request = _case(source_handoff, tmp_path)
+    grant = claim_final_consumption(request)
+    resumed = replace(request, started_at=datetime(2026, 9, 3, tzinfo=UTC))
+
+    with pytest.raises(ConsumptionRegistryError) as captured:
+        claim_final_consumption(resumed, prior_evidence=grant.evidence)
+
+    assert captured.value.code is ConsumptionRegistryErrorCode.ALREADY_CONSUMED
 
 
 @pytest.mark.parametrize("invalid", ["relative", "missing_registry", "foreign_snapshot"])
@@ -221,6 +236,51 @@ def test_invalid_state_root_fails_before_marker(
         / "final-holdout-consumed"
         / str(handoff.final_holdout_id)
     ).exists()
+
+
+def test_state_root_ancestor_cannot_create_a_second_registry(
+    source_handoff,
+    tmp_path: Path,
+) -> None:
+    state_root, handoff, request = _case(source_handoff, tmp_path)
+    claim_final_consumption(request)
+    ancestor_registry = tmp_path / "final-holdout-consumed"
+    ancestor_registry.mkdir()
+    second_request = replace(request, judge_state_root=tmp_path)
+
+    with pytest.raises(ConsumptionRegistryError) as captured:
+        claim_final_consumption(second_request)
+
+    assert captured.value.code is ConsumptionRegistryErrorCode.STATE_UNAVAILABLE
+    assert not (ancestor_registry / str(handoff.final_holdout_id)).exists()
+    assert (
+        state_root / "final-holdout-consumed" / str(handoff.final_holdout_id)
+    ).exists()
+
+
+def test_grant_has_no_externally_callable_issuance_factory() -> None:
+    assert not hasattr(FinalConsumptionGrant, "_from_claim")
+
+
+def test_internal_grant_without_a_real_canonical_marker_is_rejected(
+    source_handoff,
+    tmp_path: Path,
+) -> None:
+    _, handoff, _ = _case(source_handoff, tmp_path)
+    fake = FinalConsumptionEvidence(
+        marker_path=(
+            tmp_path
+            / "final-holdout-consumed"
+            / str(handoff.final_holdout_id)
+        ).resolve(),
+        marker_sha256="f" * 64,
+    )
+    grant = registry_module._issue_grant(handoff, fake)
+
+    with pytest.raises(JudgeError) as captured:
+        build_final_target(handoff, grant)
+
+    assert captured.value.code is JudgeErrorCode.INVALID_TARGET
 
 
 def test_forged_handoff_does_not_consume_marker(

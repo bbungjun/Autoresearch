@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
+import errno
 import json
 import multiprocessing
 from pathlib import Path
@@ -254,6 +255,39 @@ def test_newline_terminated_invalid_last_record_fails_closed(tmp_path: Path) -> 
     assert path.read_bytes() == damaged
 
 
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n"])
+def test_newline_terminated_noncanonical_record_fails_closed(
+    tmp_path: Path,
+    line_ending: str,
+) -> None:
+    path = _ledger_path(tmp_path)
+    open_trial_ledger(path).append(_trial(tmp_path))
+    parsed = json.loads(path.read_bytes())
+    noncanonical = (json.dumps(parsed, sort_keys=False) + line_ending).encode()
+    path.write_bytes(noncanonical)
+
+    with pytest.raises(LedgerError) as captured:
+        open_trial_ledger(path)
+
+    assert captured.value.code is LedgerErrorCode.INTEGRITY_VIOLATION
+    assert path.read_bytes() == noncanonical
+
+
+def test_integer_metric_is_rejected_instead_of_aliasing_float_payload(
+    tmp_path: Path,
+) -> None:
+    trial = _trial(tmp_path)
+    integer_metric = replace(
+        trial,
+        metrics=(LedgerMetric(name="ndcg_at_10", value=1),),
+    )
+
+    with pytest.raises(LedgerError) as captured:
+        open_trial_ledger(_ledger_path(tmp_path)).append(integer_metric)
+
+    assert captured.value.code is LedgerErrorCode.INVALID_REQUEST
+
+
 def test_sequence_gap_and_duplicate_key_fail_closed(tmp_path: Path) -> None:
     path = _ledger_path(tmp_path)
     ledger = open_trial_ledger(path)
@@ -348,6 +382,25 @@ def test_fsync_failure_is_ambiguous_but_retry_is_idempotent(
     assert captured.value.code is LedgerErrorCode.IO_FAILED
     assert "sensitive" not in str(captured.value)
     assert retry == LedgerAppendReceipt(0, False)
+
+
+def test_new_ledger_syncs_parent_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _ledger_path(tmp_path)
+    synced: list[Path] = []
+    monkeypatch.setattr(ledger_module, "sync_directory", synced.append, raising=False)
+
+    open_trial_ledger(path)
+
+    assert synced == [path.parent]
+
+
+def test_windows_non_contention_lock_error_is_not_retried() -> None:
+    access_denied = OSError(errno.EINVAL, "sensitive")
+
+    assert not ledger_module._windows_lock_is_contended(access_denied)
 
 
 @pytest.mark.parametrize(

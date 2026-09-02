@@ -23,6 +23,7 @@ import re
 import stat
 
 from autoresearch.research_harness.fixture_errors import StageCError
+from autoresearch.research_harness._filesystem import sync_directory
 from autoresearch.research_harness.fixture_models import JudgeSnapshotHandoff
 from autoresearch.research_harness.local_evaluation_fixture import (
     _validated_judge_snapshot,
@@ -95,29 +96,6 @@ class FinalConsumptionGrant:
             "grant_construction",
         )
 
-    @classmethod
-    def _from_claim(
-        cls,
-        handoff: JudgeSnapshotHandoff,
-        evidence: FinalConsumptionEvidence,
-    ) -> FinalConsumptionGrant:
-        grant = object.__new__(cls)
-        object.__setattr__(grant, "_snapshot_root", handoff.snapshot_root.resolve())
-        object.__setattr__(
-            grant,
-            "_snapshot_fingerprint",
-            str(handoff.snapshot_fingerprint),
-        )
-        object.__setattr__(grant, "_manifest_sha256", handoff.manifest_sha256)
-        object.__setattr__(
-            grant,
-            "_final_evaluation_id",
-            str(handoff.final_holdout_id),
-        )
-        object.__setattr__(grant, "_evidence", evidence)
-        object.__setattr__(grant, "_token", _GRANT_TOKEN)
-        return grant
-
     @property
     def evidence(self) -> FinalConsumptionEvidence:
         """Return immutable marker evidence for the Trial Ledger."""
@@ -132,8 +110,13 @@ class FinalConsumptionGrant:
                 and self._snapshot_fingerprint == str(handoff.snapshot_fingerprint)
                 and self._manifest_sha256 == handoff.manifest_sha256
                 and self._final_evaluation_id == str(handoff.final_holdout_id)
-                and self._evidence.marker_sha256
+                and self._evidence.marker_path.name == self._final_evaluation_id
+                and self._evidence.marker_path.parent
+                == self._snapshot_root.parents[2] / _REGISTRY_DIRECTORY
+                and _DIGEST_PATTERN.fullmatch(self._evidence.marker_sha256) is not None
                 and self._evidence.marker_path.is_absolute()
+                and sha256(_read_regular_file(self._evidence.marker_path)).hexdigest()
+                == self._evidence.marker_sha256
             )
         except (AttributeError, OSError, RuntimeError):
             return False
@@ -202,13 +185,27 @@ def claim_final_consumption(
             pass
 
     try:
-        _sync_directory(registry_root)
+        sync_directory(registry_root)
     except OSError:
         raise ConsumptionRegistryError(
             ConsumptionRegistryErrorCode.STATE_UNAVAILABLE,
             "registry_sync",
         ) from None
-    return FinalConsumptionGrant._from_claim(handoff, evidence)
+    return _issue_grant(handoff, evidence)
+
+
+def _issue_grant(
+    handoff: JudgeSnapshotHandoff,
+    evidence: FinalConsumptionEvidence,
+) -> FinalConsumptionGrant:
+    grant = object.__new__(FinalConsumptionGrant)
+    object.__setattr__(grant, "_snapshot_root", handoff.snapshot_root.resolve())
+    object.__setattr__(grant, "_snapshot_fingerprint", str(handoff.snapshot_fingerprint))
+    object.__setattr__(grant, "_manifest_sha256", handoff.manifest_sha256)
+    object.__setattr__(grant, "_final_evaluation_id", str(handoff.final_holdout_id))
+    object.__setattr__(grant, "_evidence", evidence)
+    object.__setattr__(grant, "_token", _GRANT_TOKEN)
+    return grant
 
 
 def _validated_handoff(request: FinalConsumptionRequest) -> JudgeSnapshotHandoff:
@@ -252,18 +249,20 @@ def _validated_registry_root(
         state_root = configured_root.resolve(strict=True)
         registry_root = (state_root / _REGISTRY_DIRECTORY).resolve(strict=True)
         snapshot_root = handoff.snapshot_root.resolve(strict=True)
+        expected_state_root = snapshot_root.parents[2]
         if (
             not state_root.is_dir()
             or not registry_root.is_dir()
             or registry_root.parent != state_root
-            or not snapshot_root.is_relative_to(state_root)
-            or snapshot_root == state_root
+            or snapshot_root.parent.name != "by-hash"
+            or snapshot_root.parent.parent.name != "evaluation-snapshots"
+            or state_root != expected_state_root
         ):
             raise ValueError
         with os.scandir(registry_root):
             pass
         return state_root, registry_root
-    except (OSError, RuntimeError, ValueError):
+    except (IndexError, OSError, RuntimeError, ValueError):
         raise ConsumptionRegistryError(
             ConsumptionRegistryErrorCode.STATE_UNAVAILABLE,
             "state_root_validation",
@@ -295,10 +294,9 @@ def _verify_prior_evidence(
             not isinstance(provided, FinalConsumptionEvidence)
             or provided.marker_path != expected.marker_path
             or _DIGEST_PATTERN.fullmatch(provided.marker_sha256) is None
-            or provided.marker_sha256 != expected.marker_sha256
             or not os.path.lexists(expected.marker_path)
             or sha256(_read_regular_file(expected.marker_path)).hexdigest()
-            != expected.marker_sha256
+            != provided.marker_sha256
         ):
             raise ValueError
     except (OSError, RuntimeError, ValueError):
@@ -338,53 +336,3 @@ def _write_all(descriptor: int, payload: bytes) -> None:
         if written <= 0:
             raise OSError
         offset += written
-
-
-def _sync_directory(path: Path) -> None:
-    if os.name == "nt":
-        _sync_windows_directory(path)
-        return
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    descriptor = os.open(path, flags)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _sync_windows_directory(path: Path) -> None:
-    import ctypes
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateFileW.argtypes = [
-        ctypes.c_wchar_p,
-        ctypes.c_uint32,
-        ctypes.c_uint32,
-        ctypes.c_void_p,
-        ctypes.c_uint32,
-        ctypes.c_uint32,
-        ctypes.c_void_p,
-    ]
-    kernel32.CreateFileW.restype = ctypes.c_void_p
-    kernel32.FlushFileBuffers.argtypes = [ctypes.c_void_p]
-    kernel32.FlushFileBuffers.restype = ctypes.c_int
-    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-    kernel32.CloseHandle.restype = ctypes.c_int
-
-    handle = kernel32.CreateFileW(
-        str(path),
-        0x40000000,
-        0x00000001 | 0x00000002 | 0x00000004,
-        None,
-        3,
-        0x02000000,
-        None,
-    )
-    invalid_handle = ctypes.c_void_p(-1).value
-    if handle in {None, invalid_handle}:
-        raise OSError(ctypes.get_last_error(), "directory_open_failed")
-    try:
-        if not kernel32.FlushFileBuffers(handle):
-            raise OSError(ctypes.get_last_error(), "directory_sync_failed")
-    finally:
-        kernel32.CloseHandle(handle)
