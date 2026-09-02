@@ -444,6 +444,17 @@ def test_lock_hardlink_is_rejected_without_mutating_external_file(
     assert external.read_bytes() == b""
 
 
+def test_empty_lock_left_by_crash_is_recovered_under_lock(tmp_path: Path) -> None:
+    path = _ledger_path(tmp_path)
+    lock_path = path.with_name(f".{path.name}.lock")
+    lock_path.write_bytes(b"")
+
+    ledger = open_trial_ledger(path)
+
+    assert ledger.read_state().last_sequence == -1
+    assert lock_path.read_bytes() == b"0"
+
+
 def test_windows_non_contention_lock_error_is_not_retried() -> None:
     access_denied = OSError(errno.EINVAL, "sensitive")
 

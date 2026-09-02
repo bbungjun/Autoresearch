@@ -243,6 +243,7 @@ def _locked_ledger(path: Path) -> Iterator[int]:
         lock_acquired = True
         if not _open_lock_matches(lock_path, lock_descriptor, lock_identity):
             raise LedgerError(LedgerErrorCode.IO_FAILED, "lock_validation")
+        _initialize_locked_file(lock_descriptor)
         ledger_descriptor, _ = _open_data_file(path)
         os.fsync(ledger_descriptor)
         sync_directory(path.parent)
@@ -272,34 +273,31 @@ def _locked_ledger(path: Path) -> Iterator[int]:
 def _open_lock(path: Path) -> tuple[int, tuple[int, int]]:
     flags = os.O_RDWR | getattr(os, "O_BINARY", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
-    for _ in range(100):
-        created = False
-        try:
-            descriptor = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
-            created = True
-        except FileExistsError:
-            identity = _safe_regular_file_identity(path)
-            if identity is None:
-                raise LedgerError(LedgerErrorCode.IO_FAILED, "lock_validation") from None
-            descriptor = os.open(path, flags)
-        try:
-            identity = _safe_regular_file_identity(path)
-            if identity is None or not _open_lock_matches(path, descriptor, identity):
-                raise LedgerError(LedgerErrorCode.IO_FAILED, "lock_validation")
-            if created:
-                _write_all(descriptor, b"0")
-                os.fsync(descriptor)
-            elif os.fstat(descriptor).st_size == 0:
-                os.close(descriptor)
-                time.sleep(0.01)
-                continue
-            if not _open_lock_matches(path, descriptor, identity):
-                raise LedgerError(LedgerErrorCode.IO_FAILED, "lock_validation")
-            return descriptor, identity
-        except (LedgerError, OSError):
-            os.close(descriptor)
-            raise
-    raise LedgerError(LedgerErrorCode.IO_FAILED, "lock_prepare")
+    try:
+        descriptor = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        if _safe_regular_file_identity(path) is None:
+            raise LedgerError(LedgerErrorCode.IO_FAILED, "lock_validation") from None
+        descriptor = os.open(path, flags)
+    try:
+        identity = _safe_regular_file_identity(path)
+        if identity is None or not _open_lock_matches(path, descriptor, identity):
+            raise LedgerError(LedgerErrorCode.IO_FAILED, "lock_validation")
+        return descriptor, identity
+    except (LedgerError, OSError):
+        os.close(descriptor)
+        raise
+
+
+def _initialize_locked_file(descriptor: int) -> None:
+    size = os.fstat(descriptor).st_size
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    if size == 0:
+        _write_all(descriptor, b"0")
+        os.fsync(descriptor)
+        return
+    if size != 1 or os.read(descriptor, 1) != b"0":
+        raise LedgerError(LedgerErrorCode.IO_FAILED, "lock_validation")
 
 
 def _open_lock_matches(
