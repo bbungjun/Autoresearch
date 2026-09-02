@@ -194,16 +194,11 @@ class _PipeReader:
             return not self.failed
         self.thread.join(timeout=_TERMINATION_GRACE_SECONDS)
         if self.thread.is_alive():
-            try:
-                self.pipe.close()
-            except OSError:
-                self.failed = True
-            self.thread.join(timeout=_TERMINATION_GRACE_SECONDS)
-        else:
-            try:
-                self.pipe.close()
-            except OSError:
-                self.failed = True
+            return False
+        try:
+            self.pipe.close()
+        except OSError:
+            self.failed = True
         return not self.failed and not self.thread.is_alive()
 
 

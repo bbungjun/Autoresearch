@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import time
 from typing import NoReturn
 
@@ -463,6 +464,29 @@ def test_cleanup_exception_is_typed_and_does_not_replace_start_failure(
 
     assert captured.value.code is RunnerErrorCode.CLEANUP_FAILED
     assert "detail" not in str(captured.value)
+
+
+def test_pipe_reader_cleanup_is_bounded_while_writer_is_alive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writer = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        stdout=subprocess.PIPE,
+    )
+    assert writer.stdout is not None
+    reader = runner_module._PipeReader(writer.stdout)
+    reader.start()
+    monkeypatch.setattr(runner_module, "_TERMINATION_GRACE_SECONDS", 0.05)
+
+    started_at = time.monotonic()
+    try:
+        assert reader.finish() is False
+        assert time.monotonic() - started_at < 1.0
+    finally:
+        writer.kill()
+        writer.wait(timeout=5)
+        reader.thread.join(timeout=5)
+        writer.stdout.close()
 
 
 def test_persistent_process_after_successful_cleanup_is_process_leak(
