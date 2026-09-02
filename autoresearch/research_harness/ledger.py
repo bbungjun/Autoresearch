@@ -98,6 +98,10 @@ class TrialRecord:
     artifacts: tuple[LedgerArtifactEvidence, ...]
     champion_lineage: tuple[str, ...]
     final_consumption: FinalConsumptionEvidence | None
+    experiment_summary: str | None = None
+    failure_stage: str | None = None
+    failure_stdout_tail: str = ""
+    failure_stderr_tail: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -536,7 +540,7 @@ def _record_payload(record: LedgerRecord) -> dict[str, object]:
     ]
     final = _evidence_payload(record.final_consumption)
     if isinstance(record, TrialRecord):
-        return {
+        payload: dict[str, object] = {
             "artifacts": artifacts,
             "base_sha": record.base_sha,
             "candidate_sha": record.candidate_sha,
@@ -556,6 +560,15 @@ def _record_payload(record: LedgerRecord) -> dict[str, object]:
             "split": record.split,
             "trial_id": record.trial_id,
         }
+        if record.experiment_summary is not None:
+            payload["experiment_summary"] = record.experiment_summary
+        if record.failure_stage is not None:
+            payload["failure_stage"] = record.failure_stage
+        if record.failure_stdout_tail:
+            payload["failure_stdout_tail"] = record.failure_stdout_tail
+        if record.failure_stderr_tail:
+            payload["failure_stderr_tail"] = record.failure_stderr_tail
+        return payload
     return {
         "artifacts": artifacts,
         "checkpoint_id": record.checkpoint_id,
@@ -585,7 +598,13 @@ def _record_from_payload(record_type: object, payload: object) -> LedgerRecord:
             "duration_ms", "failure_reason_code", "artifacts", "champion_lineage",
             "final_consumption",
         }
-        if set(payload) != required:
+        optional = {
+            "experiment_summary",
+            "failure_stage",
+            "failure_stdout_tail",
+            "failure_stderr_tail",
+        }
+        if not required <= set(payload) or not set(payload) <= required | optional:
             raise ValueError
         return TrialRecord(
             trial_id=payload["trial_id"], split=payload["split"],
@@ -599,6 +618,10 @@ def _record_from_payload(record_type: object, payload: object) -> LedgerRecord:
             artifacts=tuple(_artifact(item) for item in _list(payload["artifacts"])),
             champion_lineage=tuple(_list(payload["champion_lineage"])),
             final_consumption=_evidence(payload["final_consumption"]),
+            experiment_summary=payload.get("experiment_summary"),
+            failure_stage=payload.get("failure_stage"),
+            failure_stdout_tail=payload.get("failure_stdout_tail", ""),
+            failure_stderr_tail=payload.get("failure_stderr_tail", ""),
         )
     if record_type == "checkpoint":
         required = {
@@ -673,6 +696,26 @@ def _validate_record(record: LedgerRecord) -> None:
             _validate_identifier(record.reason_code)
             if record.failure_reason_code is not None:
                 _validate_identifier(record.failure_reason_code)
+            if record.failure_stage is not None:
+                _validate_identifier(record.failure_stage)
+                if record.failure_reason_code is None:
+                    raise ValueError
+            for tail in (record.failure_stdout_tail, record.failure_stderr_tail):
+                if not isinstance(tail, str) or len(tail.encode("utf-8")) > 65536:
+                    raise ValueError
+            if (
+                (record.failure_stdout_tail or record.failure_stderr_tail)
+                and record.failure_reason_code is None
+            ):
+                raise ValueError
+            if record.experiment_summary is not None and (
+                not isinstance(record.experiment_summary, str)
+                or not record.experiment_summary
+                or len(record.experiment_summary) > 16384
+                or "\n" in record.experiment_summary
+                or "\0" in record.experiment_summary
+            ):
+                raise ValueError
             _validate_metrics(record.metrics)
             _validate_artifacts(record.artifacts)
             if any(_SHA_PATTERN.fullmatch(item) is None for item in record.champion_lineage):

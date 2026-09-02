@@ -23,10 +23,12 @@ from autoresearch.research_harness.evaluation_snapshot_models import (
     EvaluationSnapshotReceipt,
     EvaluationSnapshotRequest,
 )
+from autoresearch.research_harness.consumption_registry import FinalConsumptionGrant
 from autoresearch.research_harness.evaluation_source import ActionLogSource
 from autoresearch.research_harness.fixture_models import JudgeSnapshotHandoff
 from autoresearch.research_harness.judge import (
     JudgeScoringResult,
+    build_final_target,
     build_validation_target,
     score_predictions,
 )
@@ -97,8 +99,10 @@ class ResearchDomain(ABC):
         self,
         handoff: JudgeSnapshotHandoff,
         sealed_prediction: SealedPredictionReceipt,
+        *,
+        final_grant: FinalConsumptionGrant | None = None,
     ) -> JudgeScoringResult:
-        """validation handoff와 봉인 prediction을 결합해 지표를 계산한다."""
+        """validation 또는 grant가 승인한 final prediction 지표를 계산한다."""
 
         raise NotImplementedError
 
@@ -155,8 +159,14 @@ class YouTubeCTRDomain(ResearchDomain):
         self,
         handoff: JudgeSnapshotHandoff,
         sealed_prediction: SealedPredictionReceipt,
+        *,
+        final_grant: FinalConsumptionGrant | None = None,
     ) -> JudgeScoringResult:
-        target = build_validation_target(handoff)
+        target = (
+            build_validation_target(handoff)
+            if final_grant is None
+            else build_final_target(handoff, final_grant)
+        )
         return score_predictions(target, sealed_prediction)
 
     @overload

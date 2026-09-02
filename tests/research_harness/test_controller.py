@@ -16,7 +16,8 @@ from autoresearch.model_evaluation.probability_metrics import (
 )
 from autoresearch.research_harness import (
     ConfirmationDecision,
-    EvaluationId,
+    ConsumptionRegistryError,
+    ConsumptionRegistryErrorCode,
     FinalConsumptionEvidence,
     FinalConsumptionGrant,
     JudgeDecision,
@@ -29,8 +30,11 @@ from autoresearch.research_harness import (
     RankingMetricResult,
     ResearchDomain,
     ScreeningResult,
-    SnapshotFingerprint,
     open_trial_ledger,
+)
+from autoresearch.research_harness.evaluation_snapshot_models import (
+    EvaluationId,
+    SnapshotFingerprint,
 )
 from autoresearch.research_harness.controller import (
     ControllerConclusion,
@@ -81,6 +85,18 @@ def _score(value: float) -> JudgeScoringResult:
             brier=1.0 - value,
             grouped_roc_auc=GroupedRocAuc(value, 40, 40, 0, 0),
         ),
+    )
+
+
+def _score_for(value: float, evaluation_id: EvaluationId) -> JudgeScoringResult:
+    score = _score(value)
+    return JudgeScoringResult(
+        evaluation_id=evaluation_id,
+        row_count=score.row_count,
+        ndcg_at_10=score.ndcg_at_10,
+        recall_at_10=score.recall_at_10,
+        ndcg_at_24=score.ndcg_at_24,
+        probability=score.probability,
     )
 
 
@@ -190,8 +206,13 @@ class FakeRunner:
     ) -> PairedRunReceipt:
         del domain
         self.final_runs.append(request)
+        evaluation_id = request.handoff.final_holdout_id
         return PairedRunReceipt(
-            pair=PairedJudgeResult(request.seed, _score(0.5), _score(0.7)),
+            pair=PairedJudgeResult(
+                request.seed,
+                _score_for(0.5, evaluation_id),
+                _score_for(0.7, evaluation_id),
+            ),
             duration_ms=20,
             artifacts=(),
         )
@@ -219,7 +240,7 @@ def _request(tmp_path: Path, *, max_trials: int = 2) -> ControllerRunRequest:
         champion_sha=_BASE_SHA,
         handoff=_handoff(tmp_path),
         judge_state_root=state_root.resolve(),
-        baseline_sigmas=((JudgeMetric.NDCG_AT_10.value, 0.01),),
+        baseline_sigmas=tuple((metric.value, 0.01) for metric in JudgeMetric),
         screening_seed=7,
         confirmation_seeds=(11, 12, 13, 14, 15),
         ledger=open_trial_ledger((run_root / "experiment-ledger.jsonl").resolve()),
@@ -334,3 +355,45 @@ def test_controller_resume_replays_feedback_without_repeating_runner(
     assert resumed_runner.validation_runs == []
     assert resumed_runner.final_runs == []
 
+
+def test_controller_time_budget_stops_validation_but_keeps_terminal_final(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_final_claim(monkeypatch, tmp_path)
+    ticks = iter((0.0, 61.0))
+    monkeypatch.setattr(controller_module.time, "monotonic", lambda: next(ticks))
+    planner = SequencePlanner((_card("card-1"),), [])
+    runner = FakeRunner()
+
+    result = ResearchController(FakeDomain(), planner, runner).run(_request(tmp_path))
+
+    assert result.validation_trials == 0
+    assert planner.calls == []
+    assert runner.preparations == []
+    assert len(runner.final_runs) == 5
+
+
+def test_controller_does_not_run_final_when_registry_rejects_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_claim(*args: object, **kwargs: object) -> Never:
+        del args, kwargs
+        raise ConsumptionRegistryError(
+            ConsumptionRegistryErrorCode.ALREADY_CONSUMED,
+            "marker_exists",
+        )
+
+    monkeypatch.setattr(controller_module, "claim_final_consumption", reject_claim)
+    planner = SequencePlanner((_card("card-1"),), [])
+    runner = FakeRunner()
+
+    result = ResearchController(FakeDomain(), planner, runner).run(
+        _request(tmp_path, max_trials=1)
+    )
+
+    assert result.conclusion is ControllerConclusion.INCONCLUSIVE
+    assert result.final_reason_code == "already_consumed"
+    assert result.final_consumption is None
+    assert runner.final_runs == []

@@ -6,11 +6,29 @@ label-free slate와 Judge 전용 label artifact를 조립하는 경계를 담당
 [기능] Stage B의 공개 요청·receipt·error·source seam과 snapshot builder, Stage C의
 fixture/candidate handoff typed contract, canonical identity helper, P0-2A ranking metric,
 P0-2B scoring, P0-2C 봉인 ingestion·판정, P0-2D domain interface, final 소비 registry와
-append-only Trial Ledger, 고정 candidate 명령을 실행·회수하는 LocalRunner를 제공한다.
+append-only Trial Ledger, LocalRunner 및 반복 ResearchController를 제공한다.
 
 [비책임] action log 생성(autoresearch.action_log_generation), candidate 코드 변경·학습 구현,
-실제 baseline sigma 측정과 반복 Controller를 담당하지 않는다.
+실제 baseline sigma 측정, candidate coding adapter와 REPORT를 담당하지 않는다.
 """
+
+from autoresearch.research_harness.controller import (
+    ControllerConclusion,
+    ControllerError,
+    ControllerErrorCode,
+    ControllerRunRequest,
+    ControllerRunResult,
+    FinalPairRequest,
+    PairedRunReceipt,
+    PrepareCandidateRequest,
+    PreparedCandidate,
+    ResearchBudget,
+    ResearchController,
+    ResearchPlanner,
+    ResearchTrialRunner,
+    TrialExecutionError,
+    ValidationPairRequest,
+)
 
 from autoresearch.research_harness.evaluation_errors import (
     EvaluationSnapshotError,
@@ -31,6 +49,14 @@ from autoresearch.research_harness.candidate_data_view import (
     materialize_candidate_data_view,
 )
 from autoresearch.research_harness.fixture_errors import StageCError, StageCErrorCode
+from autoresearch.research_harness.feedback import (
+    ExperimentCard,
+    FeedbackFailure,
+    FeedbackMetric,
+    FeedbackPayload,
+    TrialFeedbackSummary,
+    build_feedback,
+)
 from autoresearch.research_harness.fixture_inputs import (
     canonical_fixture_dates,
     descriptor_sha256,
@@ -132,6 +158,11 @@ __all__ = [
     "CandidateWorkspaceRequest",
     "CheckpointRecord",
     "ConfirmationDecision",
+    "ControllerConclusion",
+    "ControllerError",
+    "ControllerErrorCode",
+    "ControllerRunRequest",
+    "ControllerRunResult",
     "ConsumptionRegistryError",
     "ConsumptionRegistryErrorCode",
     "DomainError",
@@ -139,12 +170,17 @@ __all__ = [
     "EvaluationSnapshotError",
     "EvaluationSnapshotReceipt",
     "EvaluationSnapshotRequest",
+    "ExperimentCard",
+    "FeedbackFailure",
+    "FeedbackMetric",
+    "FeedbackPayload",
     "FixtureDescriptor",
     "FixtureInputReceipt",
     "FixturePartitionReceipt",
     "FinalConsumptionEvidence",
     "FinalConsumptionGrant",
     "FinalConsumptionRequest",
+    "FinalPairRequest",
     "JudgeSnapshotHandoff",
     "JudgeError",
     "JudgeErrorCode",
@@ -164,10 +200,17 @@ __all__ = [
     "LocalRunner",
     "MetricDelta",
     "PairedJudgeResult",
+    "PairedRunReceipt",
+    "PrepareCandidateRequest",
+    "PreparedCandidate",
     "RankingMetricError",
     "RankingMetricErrorCode",
     "RankingMetricResult",
     "ResearchDomain",
+    "ResearchBudget",
+    "ResearchController",
+    "ResearchPlanner",
+    "ResearchTrialRunner",
     "RunnerError",
     "RunnerErrorCode",
     "ScreeningResult",
@@ -178,10 +221,14 @@ __all__ = [
     "TrialLedger",
     "TrialLedgerState",
     "TrialRecord",
+    "TrialExecutionError",
+    "TrialFeedbackSummary",
     "YouTubeCTRDomain",
     "WorkspaceError",
     "WorkspaceErrorCode",
+    "ValidationPairRequest",
     "build_evaluation_snapshot",
+    "build_feedback",
     "build_final_target",
     "build_local_evaluation_fixture",
     "build_validation_target",

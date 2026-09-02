@@ -161,6 +161,7 @@ def test_trial_optional_experiment_memory_round_trips(tmp_path: Path) -> None:
     trial = replace(
         _trial(tmp_path),
         experiment_summary='{"card_id":"card-1"}',
+        failure_reason_code="predict_crash",
         failure_stage="candidate_run",
     )
 
