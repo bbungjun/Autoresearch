@@ -213,8 +213,9 @@ candidate는 주어진 seed를 split·sampling·모델 초기화를 포함한 �
 - 영속 Trial Ledger와 checkpoint
 
 LocalRunner는 candidate를 새 process group/session으로 시작한다. 정상 종료·timeout·취소·
-예외의 모든 경로에서 TERM grace 뒤 KILL과 최종 wait를 수행해 child·grandchild를 완전히
-회수하며, 남은 프로세스가 있으면 trial을 성공으로 기록하지 않는다. 재사용 출발점은 현행
+예외의 모든 경로에서 TERM grace 뒤 KILL과 최종 wait를 수행해 소유 group/Job을 상속한
+child·grandchild를 회수하며, 남은 프로세스가 있으면 trial을 성공으로 기록하지 않는다.
+재사용 출발점은 현행
 Codex worker의 process-group 회수 계약이다
 (`applications/experiment_platform/executor/codex_worker.py:537-574,624-670`).
 
@@ -262,6 +263,137 @@ ID를 포함하고 초기화된 submodule은 staged gitlink와 HEAD 일치를 �
 경로를 정렬하므로 repository의 diff 출력 설정과 무관하게 같은 변경은 같은 fingerprint를 만들고,
 파일명·내용·삭제·mode 변경은 fingerprint를 바꾼다. credential 검사는 현재 bytes뿐 아니라
 commit될 index blob에도 동일하게 적용한다.
+
+#### 4.4.2 LocalRunner 계약
+
+Task 5a의 공개 경계는 동기식 `LocalRunner.run(request) -> LocalRunReceipt` 하나다.
+`LocalRunRequest`는 `CandidateProcessContext`, 재학습 `seed`, wall-clock
+`timeout_seconds`만 받는다. 호출자는 실행 파일·module·argv·환경을 바꿀 수 없다. Runner는
+현재 Python interpreter로 아래 고정 명령을 조립하고, workspace가 만든 `cwd`와 최소 환경을
+그대로 사용한다.
+
+```text
+python -m autoresearch.cli harness-predict \
+  --slate <context.slate> \
+  --out <context.predictions> \
+  --seed <seed>
+```
+
+요청은 실행 전에 fail-closed 검증한다. `seed`는 bool이 아닌 0 이상 32-bit 정수이고
+timeout은 유한한 양수다. `cwd`는 존재하는 절대 디렉토리, slate는
+`cwd/harness_in/slate.parquet`, predictions는
+`cwd/harness_out/predictions.csv`여야 한다. stale prediction이 이미 있으면 삭제하거나
+덮어쓰지 않고 `runner_invalid_request`로 거부한다. 입력·출력 경로와 환경을 다시 선택하거나
+host 환경을 합치는 기능은 제공하지 않는다. `CandidateProcessContext`는 자유 생성 가능한
+dataclass이므로 provenance를 신뢰하지 않는다. Runner는 환경 이름의 중복, 이름·값의 NUL과 허용
+값을 검사하고, 실행 시점 host의 OS 경로 allowlist와 고정
+`PYTHONDONTWRITEBYTECODE=1`, `PYTHONUNBUFFERED=1`로 다시 계산한 값과 정확히 일치할 때만
+실행한다. trusted launcher는 candidate의 `Popen(env=...)` 경계에서 이 allowlist만 전달한다.
+Python candidate가 시작된 뒤 interpreter 자체가 locale 정규화를 위해 `LC_CTYPE` 같은 변수를
+추가할 수 있으나, 이는 host 환경 상속으로 간주하지 않는다. `PYTHONPATH`, credential 변수와
+그 밖의 추가 host 환경은 candidate 생성 경계에서 거부한다. candidate stdin은
+항상 `DEVNULL`이며 Harness stdin을 상속하지 않는다. subprocess는 필요한 세 pipe 외의 handle을
+상속하지 않도록 `close_fds=True`로 시작한다. trusted launcher의 stdin gate pipe만 parent와
+launcher 사이의 추가 private handle이며 candidate에는 전달하지 않는다. stale output은
+`Path.exists()`가 아니라 broken
+symlink도 잡는 `lexists` 의미로 검사해 symlink·FIFO·directory를 모두 실행 전에 거부한다.
+
+성공 receipt는 prediction 경로, exit code, 실행 시간(ms), stdout/stderr tail 문자열을 담는다.
+출력 pipe는 별도 reader가 계속 비우되 decode 전 bytes 기준으로 각각 마지막 64 KiB만 보존하고
+UTF-8 replacement decoding하므로 candidate의 많은 로그가 Harness 메모리를 무제한 소비하지
+않는다. receipt와 error의 tail 필드는 dataclass `repr=False`이며 안전한 `str`/`repr`에 로그와
+경로를 넣지 않는다. Task 5b만 explicit field access로 bounded feedback payload를 조립하고,
+credential 형식과 control character를 정제한 뒤에만 외부 feedback 또는 ledger에 넣을 수 있다.
+ledger 영속화 여부도 그 단계에서 별도로 결정한다. 성공은 parent exit code가 0이고 전체
+process tree가 종료됐으며, 정확한 predictions 경로에 symlink가 아닌 regular file이 새로
+생겼을 때만 가능하다. CSV schema·행 수·prediction 값의 의미 검증과 Judge 전용 copy는
+`seal_prediction_copy()`의 책임이다.
+
+안정된 실패 코드는 다음으로 제한한다.
+
+| 코드 | 의미 |
+| --- | --- |
+| `runner_invalid_request` | seed·timeout·context·stale output이 계약을 위반함 |
+| `runner_start_failed` | subprocess를 시작하거나 process-tree 격리 경계를 만들지 못함 |
+| `predict_timeout` | wall-clock timeout을 초과함 |
+| `predict_crash` | candidate parent가 0이 아닌 exit code로 종료함 |
+| `invalid_predictions` | exit 0 뒤 prediction regular file이 없음 |
+| `runner_process_leaked` | 정상 parent 선종료 때 descendant를 관측했거나 강제 회수 뒤에도 process가 남음 |
+| `runner_cleanup_failed` | TERM/KILL/final wait 또는 output reader 정리를 완료하지 못함 |
+
+공개 타입은 `RunnerErrorCode(StrEnum)`, `RunnerError`, `LocalRunRequest`,
+`LocalRunReceipt`, 무인자 stateless `LocalRunner` 다섯 개다. request 필드는
+`process: CandidateProcessContext`, `seed: int`, `timeout_seconds: float`다. receipt 필드는
+`predictions: Path`, `exit_code: int`, `duration_ms: int`, `stdout_tail: str`,
+`stderr_tail: str`이며 성공 exit code는 항상 0이다. error 필드는
+`code: RunnerErrorCode`, `stage: str`, `exit_code: int | None`, `duration_ms: int`, 두 tail
+문자열이다. pre-start validation 오류는 exit code `None`, duration 0, 빈 tail을 사용한다.
+`RunnerError`는 이를 구조화해 Controller가 다음 행동을 정하게 한다. 문자열 표현에는 candidate
+로그와 로컬 경로를 넣지 않는다. 예측 파일 내용이나 credential을 오류 문자열에 복사하지 않는다.
+
+candidate는 새 process group/session에서 시작한다. POSIX는 session process group을 쓴다.
+Windows는 candidate가 결속 전에 descendant를 만드는 race를 허용하지 않는다. trusted
+launcher는 candidate workspace 밖의 Harness package에 있는 절대 script 경로를
+`sys.executable -I <trusted-script>`로 실행하며, candidate module이나 `sitecustomize`를
+workspace에서 import하지 않는다. launcher는 stdin gate에서 한 byte를 기다리고 그 전에는
+candidate import·실행을 하지 않는다. parent는 launcher를 kill-on-close Job Object에 결속하고
+launcher가 아직 살아 있음을 확인한 뒤 gate byte를 쓰고 pipe를 닫아야만 고정 candidate 명령을
+시작한다. Job 결속, 생존 확인, gate write/close 중 하나라도 실패하면 candidate를 release하지
+않고 launcher를 회수해 `runner_start_failed`로 끝낸다. candidate와 그 descendant는
+breakaway를 허용하지 않는 같은 Job을 상속한다. launcher는
+`CREATE_NEW_PROCESS_GROUP`으로 만들고 timeout·취소 때 `CTRL_BREAK_EVENT`를 group-wide
+best-effort graceful 요청으로 보낸 뒤, grace를 넘기면 `TerminateJobObject`를 사용한다.
+console이 없는 환경의 `CTRL_BREAK_EVENT` 실패는 force 종료와 active-process=0 확인이 성공하면
+cleanup 실패가 아니다. 정상 parent
+종료에도 active process count가 0인지 확인하고, termination 뒤에도 0이 될 때까지 bounded
+wait한 후 마지막에 Job handle을 닫는다. Job handle은 start·success·failure·cancellation의
+모든 경로에서 닫고 gate pipe도 start failure를 포함한 모든 경로에서 닫는다.
+
+launcher는 candidate `Popen` 성공 여부를 candidate가 알지 못하는 parent 소유 임시 status
+artifact에 `started|failed`로 한 번 기록한다. Runner는 이 private status를 확인해 launcher 내부
+start 실패를 `runner_start_failed`로 분류하고, 정상적으로 시작한 candidate의 실제 exit 127은
+`predict_crash`로 구분한다. status artifact 생성·읽기·정리 실패도 start/cleanup 실패 계약에
+포함하며 오류 문자열에는 그 경로를 노출하지 않는다.
+
+timeout·취소·내부 예외를 포함한 모든 종료 경로는 살아 있는 tree에 가능한 TERM-equivalent를
+요청하고 짧은 grace 뒤 KILL-equivalent를 적용한 다음 final wait를 수행한다. Windows에서
+이미 parent가 끝나 descendant만 남은 경우에는 일반적인 tree-wide graceful signal이 없으므로
+grace 확인 뒤 Job 전체를 종료한다. 회수 실패는 성공이나 단순 candidate crash로 낮추지 않는다.
+
+`run()`은 성공할 때만 receipt를 반환하고 계약상 실패에는 `RunnerError`를 발생시킨다. 복합
+실패의 우선순위는 결정적이다. 실행 결과가 timeout·crash·invalid prediction이더라도 종료
+API 오류, pipe reader 미종료 또는 final parent wait 실패면 `runner_cleanup_failed`가 우선한다.
+종료 API가 반환했지만 소유 경계가 여전히 active process를 보고하면
+`runner_process_leaked`다. 정상 parent 뒤 descendant를 발견해 전부 회수한 경우에도 candidate가
+실행 계약을 위반했으므로 `runner_process_leaked`다. 이 둘이 없을 때만 primary
+timeout·crash·invalid prediction을 반환한다. `KeyboardInterrupt`·`SystemExit`는 회수 후 원래
+예외를 다시 발생시키며, 회수 실패 시 원래 예외에 경로·로그 없는
+`runner_cleanup_failed` note를 붙여 두 사건을 모두 보존한다. 그 밖의 내부 `BaseException`도
+같은 규칙으로 원래 예외를 보존한다.
+
+MVP 자원 상한은 wall-clock timeout과 stdout/stderr tail 메모리 상한이다. prediction artifact는
+후속 sealed ingestion의 파일 크기·parser 메모리 상한을 통과해야 한다. candidate 전체의
+CPU·RSS·filesystem quota와 별도 OS 사용자/container에 의한 적대적 격리는 Task 5a의 로컬
+실행 경계가 보장한다고 주장하지 않으며, 실제 E2E 측정 뒤 Kubernetes/container runner에서
+보강한다.
+
+POSIX 소유 경계는 새 session의 process group이다. Candidate가 의도적으로 `setsid()`·double
+fork 등으로 새 session을 만들면 이 경계를 벗어날 수 있으며, Task 5a가 완전한 적대적 OS
+격리를 제공한다고 주장하지 않는다. 이 탈출까지 막는 요구는 별도 OS 사용자와 PID namespace,
+cgroup/container를 쓰는 후속 runner 범위다. Windows Job은 breakaway를 허용하지 않는다.
+
+Task 5a는 실제 사용되지 않는 `CandidateArtifact`, `TrialResult`, 비동기
+`ExperimentRunner` 계층을 미리 만들지 않는다. Task 5b Controller가 receipt와 ledger를 실제로
+연결할 때 공통 runner Protocol을 가장 작은 소비자 인터페이스로 추출한다.
+
+POSIX process-group과 Windows Job Object 경로는 각각 실제 subprocess 통합 테스트로
+검증한다. 활성 GitHub CI(Ubuntu)는 POSIX의 즉시 grandchild spawn, 정상 parent 선종료,
+timeout과 cancellation 회수를 실행한다. Windows 보장은 Windows 개발 환경에서 같은 네 경로와
+Job 결속 실패 gate를 실행한 근거를 PR에 남긴다. 지원 OS의 해당 통합 검증 없이 process-tree
+회수를 완료했다고 기록하지 않는다. 정상 parent 선종료 사례에서는 launcher가 candidate exit
+code를 그대로 전달하고 candidate가 남긴 실제 grandchild만 group/Job에 남아야 한다. POSIX
+회수 완료는 특정 grandchild의 wait syscall이 아니라 bounded poll 뒤 소유 process-group이
+사라졌다는 사실로 검증한다.
 
 ## 5. 목표 아키텍처
 
@@ -356,6 +488,10 @@ class ExperimentRunner(ABC):
 class LocalRunner(ExperimentRunner): ...
 class KubernetesJobRunner(ExperimentRunner): ...
 ```
+
+위 `ExperimentRunner` 계층은 Kubernetes 실행까지 포함한 목표 구조다. Task 5a MVP의 실제
+계약은 4.4.2의 동기식 `LocalRunner`이며, Task 5b에서 실제 소비 형태가 확인되기 전에는 위
+placeholder 타입을 구현하지 않는다.
 
 MVP에는 `YouTubeCTRDomain`과 `LocalRunner`만 실제 구현한다. `YouTubeCTRDomain`은 MVP가
 실제로 호출하는 `build_evaluation_snapshot()`, `validate_candidate()`, `evaluate()`,

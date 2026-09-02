@@ -836,18 +836,88 @@ Linux `OSError`에 `winerror`가 없다는 이식성 오류가 드러났다. fil
 
 ## Task 5a: LocalRunner
 
-- [ ] `runner.py` — workspace에서 고정 진입점
-      (`harness-predict --slate <in> --out <out> --seed <n>`)을 subprocess로 실행.
-      timeout·자원 상한·stdout/stderr tail 수집. 실패는 reason code로 분류
-      (`predict_timeout`, `predict_crash`, `invalid_predictions`, …)
-- [ ] candidate를 새 process group/session으로 시작한다. 정상 종료·timeout·취소·예외 모두
-      TERM grace 뒤 KILL과 최종 wait를 거쳐 child/grandchild까지 완전히 회수하고, 남은
-      process가 있으면 실행 실패로 처리한다. 기존 패턴은
+- [x] `runner.py` — 공개 경계를 `LocalRunner.run(LocalRunRequest) -> LocalRunReceipt`
+      하나로 제한한다. request는 `CandidateProcessContext`, 0 이상 32-bit `seed`, 유한한
+      양수 timeout만 받고, 호출자 지정 command·argv·환경 확장은 허용하지 않는다
+- [x] workspace에서 현재 Python interpreter의 고정 진입점
+      (`-m autoresearch.cli harness-predict --slate <in> --out <out> --seed <n>`)을
+      subprocess로 실행한다. stale output은 실행 전에 거부하고 stdin은 항상 `DEVNULL`로
+      닫으며 불필요한 handle을 상속하지 않는다. stale 검사는 broken symlink를 포함한
+      `lexists` 의미를 사용한다
+- [x] 자유 생성 가능한 `CandidateProcessContext`를 provenance로 신뢰하지 않는다. 환경의
+      중복·NUL을 거부하고 실행 시점 allowlist OS 값과 고정 Python 설정을 재계산해 exact
+      equality를 확인한 뒤에만 candidate에 전달한다
+- [x] stdout/stderr pipe를 계속 비우되 각각 마지막 64 KiB만 보존하고, wall-clock timeout을
+      적용한다. 상한은 decode 전 bytes 기준이고 UTF-8 replacement decode한다. tail 필드는
+      `repr=False`로 implicit 로그 노출을 막는다. MVP의 candidate 자원 상한은 이 둘이며
+      CPU·RSS·filesystem quota와 적대적 격리는 E2E 측정 뒤 별도 runner에서 보강한다
+- [x] 실패는 `runner_invalid_request`, `runner_start_failed`, `predict_timeout`,
+      `predict_crash`, `invalid_predictions`, `runner_process_leaked`,
+      `runner_cleanup_failed`로 분류한다. 오류 문자열에는 로그·로컬 경로를 넣지 않는다
+- [x] exit 0 뒤 exact output이 새 regular file인지 확인한다. CSV 의미 검증과 Judge copy는
+      기존 `seal_prediction_copy()`에 남겨 runner가 Sealed Judge 책임을 침범하지 않게 한다
+- [x] candidate를 새 process group/session으로 시작한다. 정상 종료·timeout·취소·예외 모두
+      TERM grace 뒤 KILL과 최종 wait를 거쳐 소유 group/Job을 상속한 child/grandchild를
+      회수하고, 남은 process가 있으면 실행 실패로 처리한다. POSIX에서 의도적으로 새 session을
+      만드는 적대적 탈출은 container/PID namespace 후속 범위다. 기존 패턴은
       `applications/experiment_platform/executor/codex_worker.py:537-574,624-670`이다
-- [ ] 테스트: seed가 argv에 전달됨, 정상 실행, timeout, 비정상 종료, 산출물 미생성 각각의
-      reason code와 timeout 뒤 grandchild process가 남지 않음을 검증한다
+- [x] POSIX는 새 session/process group, Windows는 kill-on-close Job Object를 사용한다.
+      Windows는 candidate workspace 밖 절대 경로의 `-I` trusted launcher를 Job에 먼저 붙이고
+      private stdin gate를 release한 뒤 candidate를 만드는 방식으로 pre-assignment spawn race를
+      없앤다. gate 전 candidate import를 금지하고 모든 gate/Job handle을 회수한다.
+      best-effort `CTRL_BREAK_EVENT` grace 뒤
+      `TerminateJobObject`, active process count 0 확인, 모든 경로의 handle close 순서를
+      지킨다
+- [x] launcher는 parent 소유 임시 status artifact로 candidate `Popen`의 started/failed를
+      보고해 내부 start 실패와 candidate 실제 exit 127을 구분한다. status 실패·cleanup은
+      start/cleanup 오류 우선순위에 포함하고 경로를 노출하지 않는다
+- [x] cleanup 실패는 timeout·crash·invalid prediction보다 우선한다. 정상 parent 종료 뒤
+      descendant를 발견해 성공적으로 회수했으면 `runner_process_leaked`다. cancellation에서는
+      회수 후 `KeyboardInterrupt`/`SystemExit`를 다시 발생시키고 cleanup 실패는 sanitized
+      exception note로 함께 보존한다
+- [x] 테스트용 임시 `autoresearch.cli` candidate package를 public interface로 실행해
+      command·seed·최소 환경 전달, 정상 실행, bounded tail, invalid request/stale output,
+      start 실패, timeout, 비정상 종료, 산출물 미생성의 reason code를 검증한다
+- [x] stale broken symlink·FIFO/directory와 성공 뒤 symlink/non-regular output을 나눠 검증하고,
+      receipt/error `repr`에 tail·경로·credential이 나타나지 않는지 확인한다
+- [x] timeout, 정상 parent 선종료, cancellation에서 즉시 spawn한 grandchild가 실제로
+      회수되는지 POSIX·Windows 각각 통합 검증한다. Windows에서는 candidate release 전 Job
+      결속 실패도 검증한다. 활성 Ubuntu CI와 로컬 Windows의 OS별 실행 근거를 PR에 남긴다
+- [x] 문서의 문제·해결·결과 기록을 실제 검증 근거로 갱신한다. `TrialResult`와 공통
+      `ExperimentRunner`는 Task 5b 소비 형태가 생길 때까지 만들지 않는다
 
 **검증:** `uv run python -m pytest tests/research_harness/test_runner.py -v`
+
+### Task 5a 포트폴리오 기록
+
+**문제.** 자율 실험 candidate를 host process에서 직접 호출하면 timeout 뒤 child가 남거나,
+parent가 먼저 끝낸 grandchild가 다음 trial의 CPU·파일을 계속 점유할 수 있었다. 기존 Codex
+worker의 POSIX process-group 패턴은 Windows에서 parent만 종료하므로 그대로 재사용할 수 없었다.
+또한 자유 생성 가능한 `CandidateProcessContext`를 신뢰하면 호출자가 `PYTHONPATH`나 credential
+환경을 다시 넣을 수 있고, Windows에서 일반 `Popen` 후 Job Object에 붙이면 candidate가 그
+짧은 사이에 Job 밖 descendant를 만들 수 있었다.
+
+**해결.** 공개 interface를 stateless `LocalRunner.run()` 하나로 제한하고 command·argv·환경을
+Harness가 고정했다. candidate workspace 밖의 절대 경로에 있는 trusted launcher를 `-I`로
+시작해 1-byte gate에서 정지시키고, Windows Job Object 또는 POSIX session에 먼저 결속한 뒤에만
+candidate를 release한다. timeout·정상 parent 선종료·cancellation은 공통 cleanup 상태 머신에서
+graceful 요청, 강제 종료, active tree 부재, final wait, pipe reader 종료 순으로 처리한다.
+stdout/stderr는 계속 drain하면서 decode 전 마지막 64 KiB만 보존하고, 오류 우선순위와 안전한
+representation을 typed contract로 고정했다. prediction CSV 의미 검증은 기존 Sealed Judge에
+남겨 runner가 채점 책임을 중복 소유하지 않게 했다.
+
+**결과.** Windows 개발 환경에서 고정 argv·seed·stdin 차단·exact 최소 환경, forged context,
+stale/non-regular artifact, crash·missing output, launcher 시작·Job 결속 실패, 64 KiB tail,
+timeout·정상 parent 선종료·cancellation 뒤 실제 grandchild 회수를 검증한 집중 테스트가
+26개 통과했고 symlink·FIFO 환경 의존 테스트 4개는 skip됐다. Research Harness 전체는
+467개 통과·11개 환경 의존 skip, 저장소 전체 Ruff는 통과했다. 독립 spec 검토에서 발견한
+Windows pre-assignment spawn race, console 없는 host의 `CTRL_BREAK_EVENT` 실패, 환경 재주입,
+stdin/handle 상속과 복합 오류 모호성을 구현 전에 계약과 반례로 보강했다. 코드 리뷰에서는
+시작 gate 도중 cancellation, cleanup 예외가 원래 오류를 덮는 경로, candidate start 실패와
+exit 127 혼동, 살아 있는 writer의 buffered pipe close가 무기한 대기하는 문제를 재현했다.
+이를 no-throw cleanup, 별도 start status, deadline 뒤 non-blocking 실패 반환으로 수정했다. 이 단계는
+wall-clock·로그 메모리·소유 group/Job 수명만 제한하며 CPU/RSS/filesystem quota와 적대적 격리는
+실제 E2E 측정 후 별도 container/Kubernetes runner에서 판단한다.
 
 ---
 
