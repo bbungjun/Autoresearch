@@ -80,6 +80,15 @@ from autoresearch.research_harness.ranking_metrics import (
     recall_at_k,
 )
 from autoresearch.research_harness.slate import build_evaluation_snapshot
+from autoresearch.research_harness.workspace import (
+    CandidateChangeReceipt,
+    CandidateProcessContext,
+    CandidateWorkspace,
+    CandidateWorkspaceRequest,
+    WorkspaceError,
+    WorkspaceErrorCode,
+    open_candidate_workspace,
+)
 
 
 __all__ = [
@@ -88,6 +97,10 @@ __all__ = [
     "CandidateDataViewReceipt",
     "CandidateDataViewRequest",
     "CandidateHistoryReceipt",
+    "CandidateChangeReceipt",
+    "CandidateProcessContext",
+    "CandidateWorkspace",
+    "CandidateWorkspaceRequest",
     "ConfirmationDecision",
     "DomainError",
     "DomainErrorCode",
@@ -118,6 +131,8 @@ __all__ = [
     "StageCError",
     "StageCErrorCode",
     "YouTubeCTRDomain",
+    "WorkspaceError",
+    "WorkspaceErrorCode",
     "build_evaluation_snapshot",
     "build_local_evaluation_fixture",
     "build_validation_target",
@@ -126,6 +141,7 @@ __all__ = [
     "compare_confirmation",
     "descriptor_sha256",
     "ndcg_at_k",
+    "open_candidate_workspace",
     "recall_at_k",
     "screen_candidate",
     "seal_prediction_copy",
