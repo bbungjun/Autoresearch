@@ -577,6 +577,29 @@ P0-2C의 ingestion byte 상한은 **65 MiB + 1 byte probe**로 고정한다. CRL
 호출하게 해 Judge와 정의가 갈라지지 않게 한다. 지표별 coverage gate와 `None` 판정은
 P0-2C가 결과를 소비하면서 적용한다.
 
+##### Portfolio Record — P0-2B validation Judge scoring
+
+**문제.** 자율 실험 candidate가 자기 CSV의 `evaluation_id`로 validation과 final holdout 중
+유리한 대상을 고르거나, 일부 key만 제출하고도 점수를 받으면 실험 지표를 신뢰할 수 없다.
+기존 probability metric도 CLI 내부에 묶여 있어 Judge가 별도 정의를 만들 경우 같은 score가
+서로 다른 증거가 될 위험이 있었다. 또한 최초 문서의 64 MiB 계산은 실제 69-byte evaluation
+ID를 64 byte로 세어 300,000행 최악 크기를 잘못 계산했다.
+
+**해결.** 검증된 Stage C handoff만 받는 `build_validation_target()`이 validation artifact를
+고정하고, 직접 만들 수 없는 opaque target을 `score_predictions()`에 전달하도록 interface를
+제한했다. streaming parser는 exact header, ASCII field byte, 300,000행, finite `[0,1]` score를
+검증하고 target key와 누락·중복·extra 없는 exact 1:1 관계만 허용한다. CSV로 표현할 수 없는
+artifact key와 null identity는 candidate 오류가 아니라 target 오류로 조기 거부한다. 기존 CLI의
+ROC-AUC·PR-AUC·Log Loss·Brier·grouped ROC-AUC 계산은 순수 probability module로 이동해
+Judge와 공유하고, 단일 클래스는 count와 `None`으로 구조화해 P0-2C가 판정하게 했다.
+
+**결과.** P0-2B 집중 계약 테스트 29개가 통과했으며 64/65-byte ID, 24/25-byte score,
+정확히 300,000/300,001행, LF/CRLF, final ID 선택 시도, key 누락·중복·extra, artifact 변조와
+null identity를 회귀 고정했다. 기존 평가 계산 회귀 25개와 Research Harness 회귀
+`319 passed, 3 skipped`, 전체 Ruff가 통과했다. 독립 spec 및 코드·보안 리뷰는 수정 후
+Critical/Important/Minor 발견 없이 PASS했다. candidate 경로 봉인, subprocess 자원 제한,
+coverage gate와 sigma 판정은 의도대로 P0-2C에 남아 있다.
+
 | 판정 | 조건 |
 | --- | --- |
 | `promote` | `Δ_ndcg_at_10 ≥ 2σ_ndcg_at_10`이고 모든 guardrail `Δ_metric ≥ -1σ_metric` |

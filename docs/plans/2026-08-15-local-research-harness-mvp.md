@@ -584,29 +584,29 @@ P0-2B/C에는 final target factory를 두지 않으며, 후속 final registry Ta
 `FinalConsumptionGrant` 전용 factory가 추가되기 전 production scoring은 validation으로
 제한한다. candidate 경로에서 안전하게 사본을 만드는 ingestion과 σ 판정은 P0-2C가 소유한다.
 
-  - [ ] `judge.py` — 입력은 `build_validation_target()`이 만든 trusted target + Judge 소유
+- [x] `judge.py` — 입력은 `build_validation_target()`이 만든 trusted target + Judge 소유
         prediction 사본. target은 expected validation ID·정확한 slate/label artifact를 고정하며
         prediction 값으로 split을 선택하지 않는다. 직접 target 생성과 handoff만으로 final target
         생성을 시도하면 typed `invalid_judge_target` 오류로 거부한다. package 공개 interface는
         `build_validation_target()`, `score_predictions()`, 결과·오류 타입으로 제한하고 opaque
         target과 parser row는 재수출하지 않는다
-  - [ ] Judge 소유 사본을 읽는 parser가 header·field byte·행 수 계약을 검증해 typed prediction
+- [x] Judge 소유 사본을 읽는 parser가 header·field byte·행 수 계약을 검증해 typed prediction
         rows를 만들고, semantic validator와 scoring은 이 값만 소비한다. evaluation ID는 정확히
         69 byte, slate/video ID는 1~64 ASCII byte, score token은 최대 24 ASCII byte, 행은 최대
         300,000개다
-- [ ] **predictions 스키마 강제 검증**: 컬럼은
+- [x] **predictions 스키마 강제 검증**: 컬럼은
       `evaluation_id, slate_id, video_id, score`. `evaluation_id`는 대상 split manifest와
       정확히 같고, 나머지 키는 slate와 정확히 1:1이어야 한다 — 누락 행, 중복 행,
       slate에 없는 행, NaN/Inf 또는 `[0,1]` 밖 score는
       전부 `invalid_predictions`로 거부. 거부는 실행 실패이지 지표 0점이 아니다
-  - [ ] 지표 산출: `JudgeScoringResult`에 primary `ndcg_at_10`, ranking guardrail
+- [x] 지표 산출: `JudgeScoringResult`에 primary `ndcg_at_10`, ranking guardrail
         `recall_at_10`·`ndcg_at_24`,
         probability guardrail은 `labels/scores/groups`를 받는 순수
         `model_evaluation/probability_metrics.py`로 기존 `evaluate.py` 계산을 동작 변경 없이 먼저
         추출하고 기존 CLI와 Judge가 함께 사용한다. 결과에는 row·positive·negative count를
         포함하고 단일 클래스 전역 지표는 `None`으로 구조화한다. 구조 추출과 Judge 동작 추가는
         별도 커밋이다
-- [ ] 테스트: schema·artifact 계약 위반, evaluation ID 불일치, key 누락·중복·extra,
+- [x] 테스트: schema·artifact 계약 위반, evaluation ID 불일치, key 누락·중복·extra,
       `[0,1]` 범위 위반, prediction이 target split을 선택하지 못함, 직접 target 생성과 final
       factory 부재, ranking metric 결합과 기존 probability metric 의미 보존
 
