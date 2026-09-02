@@ -276,11 +276,29 @@ Research Request
 
 ```python
 class ResearchDomain(ABC):
-    def describe_capabilities(self) -> DomainCapabilities: ...
-    def build_evaluation_snapshot(self) -> EvaluationSnapshot: ...
-    def validate_candidate(self, candidate: CandidateArtifact) -> ValidationResult: ...
-    def evaluate(self, candidate: CandidateArtifact) -> DomainMetrics: ...
-    def compare(self, champion: TrialResult, candidate: TrialResult) -> Decision: ...
+    def describe_capabilities(self) -> Never: ...
+    def build_evaluation_snapshot(
+        self,
+        request: EvaluationSnapshotRequest,
+        *,
+        source: ActionLogSource | None = None,
+    ) -> EvaluationSnapshotReceipt: ...
+    def validate_candidate(
+        self,
+        candidate_prediction: Path,
+        judge_copy: Path,
+    ) -> SealedPredictionReceipt: ...
+    def evaluate(
+        self,
+        handoff: JudgeSnapshotHandoff,
+        sealed_prediction: SealedPredictionReceipt,
+    ) -> JudgeScoringResult: ...
+    def compare(
+        self,
+        results: PairedJudgeResult | Sequence[PairedJudgeResult],
+        *,
+        baseline_sigmas: Mapping[str, float] | None = None,
+    ) -> ScreeningResult | ConfirmationDecision: ...
 
 
 class PaperSource(ABC):
@@ -702,8 +720,9 @@ interface에 위임하도록 했다. adapter는 `evaluate()` 안에서 validatio
 `domain_capabilities_unavailable` typed 오류로 거부한다.
 
 **결과.** ABC의 exact 다섯 abstract method, 네 위임 경로, target 생성 순서, screening과
-confirmation 분기, sigma 누락 fail-closed, capability 미지원 오류와 package 공개 surface를
-12개 집중 테스트로 고정했다. Research Harness 전체 `368 passed, 6 skipped`, 전체 Ruff와
+confirmation 분기, 잘못된 sequence·sigma 조합의 fail-closed, capability 미지원 오류·`Never`
+반환 계약을 domain 테스트 13개로 고정했고 package 공개 surface 테스트 3개도 함께
+통과했다. Research Harness 전체 `372 passed, 6 skipped`, 전체 Ruff와
 `git diff --check`가 통과했다. 실제 Controller 주입과 fake domain을 사용한 반복 loop 증명은
 Task 5b에 남으며, capability 모델은 Paper Discovery 요구사항을 측정한 뒤 정의한다.
 

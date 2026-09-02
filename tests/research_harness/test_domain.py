@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Never, cast, get_type_hints
 
 import pytest
 
@@ -47,6 +47,11 @@ def test_youtube_domain_rejects_unimplemented_capability_description() -> None:
 
     assert error.value.code is DomainErrorCode.CAPABILITIES_UNAVAILABLE
     assert str(error.value) == "domain_capabilities_unavailable"
+
+
+def test_capability_description_is_typed_as_never() -> None:
+    assert get_type_hints(ResearchDomain.describe_capabilities)["return"] is Never
+    assert get_type_hints(YouTubeCTRDomain.describe_capabilities)["return"] is Never
 
 
 def test_youtube_domain_delegates_snapshot_build(
@@ -121,7 +126,7 @@ def test_youtube_domain_hides_target_construction_during_evaluation(
 def test_youtube_domain_delegates_confirmation_comparison(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pairs = cast(Any, (object(),) * 5)
+    pairs = tuple(object.__new__(PairedJudgeResult) for _ in range(5))
     sigmas = {"ndcg_at_10": 0.01}
     expected = cast(Any, object())
     calls: list[tuple[object, object]] = []
@@ -163,6 +168,31 @@ def test_youtube_domain_delegates_single_pair_screening(
 
 def test_youtube_domain_confirmation_without_sigmas_fails_closed() -> None:
     result = YouTubeCTRDomain().compare(())
+
+    assert result.decision is None
+    assert result.reason_code is JudgeReasonCode.INVALID_COMPARISON_INPUT
+
+
+def test_youtube_domain_rejects_sigmas_for_single_screening_pair() -> None:
+    pair = object.__new__(PairedJudgeResult)
+
+    result = YouTubeCTRDomain().compare(  # type: ignore[call-overload]
+        pair,
+        baseline_sigmas={"ndcg_at_10": 0.01},
+    )
+
+    assert result.decision is None
+    assert result.reason_code is JudgeReasonCode.INVALID_COMPARISON_INPUT
+
+
+@pytest.mark.parametrize("malformed", ["abcde", [object()] * 5])
+def test_youtube_domain_rejects_malformed_confirmation_sequence(
+    malformed: object,
+) -> None:
+    result = YouTubeCTRDomain().compare(  # type: ignore[call-overload]
+        malformed,
+        baseline_sigmas={"ndcg_at_10": 0.01},
+    )
 
     assert result.decision is None
     assert result.reason_code is JudgeReasonCode.INVALID_COMPARISON_INPUT
