@@ -923,19 +923,25 @@ wall-clock·로그 메모리·소유 group/Job 수명만 제한하며 CPU/RSS/fi
 
 ## Task 5b: 자가 피드백 + Controller
 
-- [ ] `feedback.py` — **에이전트에게 돌려주는 payload**:
+- [ ] spec 7.3에 `ExperimentCard`·`ResearchBudget`, planner/runner seam, budget 종료,
+      ledger-first feedback, final 무피드백과 checkpoint 재생 계약을 고정한다
+- [ ] `feedback.py` — **에이전트에게 돌려주는 불변 payload**:
       - validation primary/guardrail 지표 값과 champion 대비 방향 정규화 델타
       - `decision`과 `reason_code`
       - 이전 trial 이력 요약 (무엇을 시도했고 왜 기각됐는지)
       - 실패 시 stage + reason code + 로그 tail
       - **행 단위 정답과 지표 구현 코드는 포함하지 않는다**
 - [ ] `controller.py` — Task 2d의 `ResearchDomain` interface를 주입받아 snapshot·candidate
-      검증·평가·비교를 호출하고 예산(최대 시간/trial 수) 안에서 반복한다. 구체
+      실행 adapter가 돌려준 paired scoring 결과를 비교하고 예산(최대 시간/trial 수) 안에서
+      반복한다. candidate workspace·LocalRunner·봉인·평가는 `ResearchTrialRunner` adapter가
+      같은 domain interface로 조립하며 Controller는 구체
       `YouTubeCTRDomain`의 slate/Judge 모듈을 Controller에서 직접 호출하지 않는다. spec 7장
       루프 구조를 따르되
       MVP에서는 사람이 준 가설과 `ExperimentCard`를 입력 seam에 주입한다. 다음
       단계에서는 Paper Discovery/Capability Matcher가 만든 `ExperimentCard`가 같은 seam을
       사용한다
+- [ ] `ResearchDomain.evaluate(..., final_grant=...)` keyword-only 확장으로 validation과
+      승인된 final 평가를 같은 domain seam에 유지하고 Controller의 Judge 직접 import를 막는다
 - [ ] 실패 시 사용자에게 묻지 않고 다음 행동을 스스로 정한다(spec 7.2)
 - [ ] validation loop 종료 후 champion을 고정하고 final holdout을 마지막 1회 평가한다.
       필수 절대 `judge_state_root`의 존재·접근을 확인하고 전역 registry marker를 fsync한
@@ -946,6 +952,8 @@ wall-clock·로그 메모리·소유 group/Job 수명만 제한하며 CPU/RSS/fi
 - [ ] 테스트: seed-sensitive fake domain/runner로 2 trial 이상 루프가 도는지,
       피드백 payload에 라벨이 없는지, final 결과가 payload에 없는지, final 평가가 두 번째
       호출을 거부하는지, 예산 소진 시 정상 종료하는지
+- [ ] Task 4 ledger의 기존 record를 깨지 않으면서 새 trial에 canonical
+      `experiment_summary`를 보존하고, 재개 시 planner replay가 달라지면 fail-closed한다
 
 **검증:** `uv run python -m pytest tests/research_harness/ -v`
 
