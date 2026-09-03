@@ -646,6 +646,68 @@ embedding manifest/identity·실행 라이브러리·시간을 담고 로컬 절
 후속 LocalRunner receipt에서 측정한다. 실패는 경로·원문 입력을 노출하지 않는 고정 코드와
 nonzero exit로 전달한다.
 
+### 4.8.1 실제 피처 추가 실험과 입력 증거 (#71, 사전 계약)
+
+**목적과 비범위.** 기존 21개 피처 baseline은 유지하고 실제 coding agent가 candidate에
+`mean_topic_similarity` 수치 피처 하나를 추가한다. 기존 max 기반 `topic_similarity`가
+사용자 키워드 하나의 일치를 나타내는 데 비해 전체 관심사 적합도의 평균이 이를 보완한다는
+일반 가설이다. 실제 추가·학습·평가 완주와 품질 promote는 별도 결과다. 운영
+`MODEL_FEATURE_COLUMNS`, 임베딩 identity, 학습 hyperparameter, split·정답·수치 Judge·
+정책은 변경하지 않는다. 피처 구현을 baseline에 미리 넣거나 candidate patch를 main에
+자동 채택하지 않는다. CLI/config 추가나 범용 feature framework는 필요하지 않다.
+
+**사전 대안 검토.** raw 행동 비중은 canonical fixture 이력이 T-2/T-1이고 학습 라벨은
+T-2라 당일 제외 후 학습 중 cold-start가 된다. 긴 이력은 별도 fixture 계약 작업이다.
+조회수/영상 나이 비율도 검토했으나 fixture metadata에서 두 열이 반대 방향의 같은
+index 순서를 가져 새 tree 분할 정보가 제한된다. 평가 label이나 후보 지표를 보지 않고
+입력·계산 계약만으로 두 대안을 제외했다. 결과를 관측한 뒤 유리한 피처를 고른 것이 아니다.
+
+**피처 계약.** 요청 시각 이하 as-of user/video metadata, 기존 세 keyword 목록과 category
+description·고정 E5 adapter를 사용한다. hobby→interest→lifestyle 순서로 연결하고,
+공백만 있는 문자열을 제외한 뒤 정확한 문자열 기준으로 첫 등장 순서를 유지해 중복 제거한다.
+문자열 자체를 소문자화·strip해 재작성하지 않는다. 기존 query/document normalized vector의
+각 cosine을 [-1,1]로 clip한 값의 산술 평균을 소수 4자리로 반올림한다. 빈 키워드·미관측
+category는 0이다. 기존 max 유사도 값과 21개 열은 변경하지 않고 마지막에 float64 열 하나를
+붙인다. 라벨·ID·미래 metadata·평가기간 행동은 입력으로 추가하지 않는다.
+
+**최소 학습 연결.** `LocalFeatureBatch`라는 기존 interface를 사용한다. local_training은
+학습·예측 피처의 열 순서/타입 일치와 기존 21열 접두부를 검사하고 추가 수치 열을 함께
+학습한다. 추가 열 이름의 중복/기존 열 충돌은 기존 experiment feature 계약으로 검사한다.
+추가 열은 유한·비null 수치여야 하며 식별자·라벨·diagnostics 이름은 거부한다. 이 검사는
+악의적 candidate가 코드를 수정할 수 없게 만드는 보안 장치가 아니라 실수 검출이다.
+receipt의 `feature_columns`는 고정 상수가 아니라 실제 fit/predict 입력 순서를 기록한다.
+정상 21열 baseline receipt의 필드·값은 유지한다. native model feature_names와 receipt를
+사후 독립 대조하며, 추가 열이 model에 존재함과 실제 split 사용/품질 개선도 구분한다.
+
+**실행 전 고정값.** synthetic fixture seed 7101, T=2026-09-01, screening seed 42,
+calibration/confirmation seeds 101~105를 사용한다. 최소 연결 구현 커밋을 baseline으로
+고정하고 calibration과 실제 paired 학습에서 동일 SHA를 사용한다. 기존 calibration 도구의
+선택 `--baseline-sha`는 기본 8dd670...을 유지하되 명시된 lowercase full 40자리 SHA를
+받아 실제 commit과 일치하는지 확인한다. 기존 특정 SHA만 허용하던 초기 측정 제한을
+이 명시적 봉인으로 대체하며 branch·짧은 SHA·다른 seed·출력 재사용은 허용하지 않는다.
+기존 E5 revision과
+기본 LightGBM 설정을 유지한다. 초기 actual coding 1회와 feedback 최대 1회, 기록 Judge
+1회, 새 final 대상 1회가 상한이다. 새 trial 시작 예산 3600초, prediction 300초,
+coding 420초다. 추가 재시도나 성능 기반 fixture seed 탐색은 하지 않는다.
+
+**검증과 gate.** 손 계산 cosine 0.96/-0.8의 평균 0.08, 중복·cold-start·미래 metadata
+불변·행 순서 테스트를 candidate가 구현 전에 작성한다. 준비 단계에서는 대역 피처의
+22열 실제 fit/predict와 receipt·native model 일치, 21열 회귀, 순서/타입/금지열 오류를
+검증한다. 준비 worker가 실제 피처 정답을 제품에 구현하지 않는다. baseline calibration
+5회 중 sigma의 기존 전제가 깨지면 actual coding/final 전에 보고하고 사용자 방향 결정을
+기다린다. σ=0을 epsilon으로 바꾸거나 자동으로 다른 seed를 고르지 않는다. 기존 #69의
+σ=0 진행 승인을 이번 실험으로 확대하지 않는다. 기존 실험과 소비 상태는 보존한다.
+
+**2026-09-03 실행 상태.** 위 계약으로 #71을 한 번 실행했다. baseline 5-fit calibration은
+7개 sigma 모두 기존 전제를 만족했지만 coding 2회 모두 prepare의 workspace_cleanup_failed로
+끝나 추가 피처의 공식 학습·validation은 0회다. 이후 기존 baseline끼리 final 5 pair/10 fit과
+REPORT·기록 Judge1회는 완료됐다. final discard는 피처 효과를 검증한 결과가 아니다.
+피처 실증은 미완료로 유지하며 PR #72는 준비 연결·기록 범위다. 원본 로그와 코드가 가리키는
+intentional hardlink 테스트/회수 정책 충돌은 #73에서 최소 재현부터 조사한다. 실제 잔류
+inode 미확인으로 원인을 단정하지 않는다. 기존 안전 정책·실패 workspace·원본 기록·final
+소비 상태를 유지하며 추가 실제 실행 승인은 별도로 받는다. 상세는
+[실측 보고서 §13](../reports/2026-09-03-local-autonomous-experiment-e2e.md#13-새-피처가-실제-모델과-실험-기록에-들어가는가--71)을 따른다.
+
 ### 4.9 실제 agent 실행과 불변 run 입력 (#52)
 
 기존 `ResearchController` 정책은 유지하고 실제 `ResearchTrialRunner` adapter를 연결한다.

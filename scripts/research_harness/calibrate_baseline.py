@@ -2,7 +2,8 @@
 
 [파이프라인] Controller 실험 전에 baseline noise를 관측하는 calibration 구간이다.
 [기능] 기존 Workspace/LocalRunner/Domain을 조립하고 원본·checkpoint·raw metric과
-ddof=1 표준편차를 새 출력 root에 보존한다. 기존 출력은 재실행하거나 덮어쓰지 않는다.
+ddof=1 표준편차를 새 출력 root에 보존한다. 기본 baseline 또는 명시한 full commit SHA를
+저장소 commit과 대조하며 기존 출력은 재실행하거나 덮어쓰지 않는다.
 [비책임] agent, final holdout, registry 초기화, sigma 정책 변경과 모델 다운로드는 하지 않는다.
 """
 
@@ -17,6 +18,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import statistics
 import subprocess
 import sys
@@ -188,7 +190,8 @@ def _single_fit(request: CalibrationRequest, prepared: dict, seed: int, output: 
 
 def run_calibration(request: CalibrationRequest) -> dict:
     """새 출력에서 baseline seed 5개를 각 1회 실행하고 실패 시 중단 사실을 보존한다."""
-    if (request.seeds != SEEDS or request.baseline_sha != BASELINE_SHA
+    if (request.seeds != SEEDS or not isinstance(request.baseline_sha, str)
+            or re.fullmatch(r'[0-9a-f]{40}', request.baseline_sha) is None
             or type(request.timeout_seconds) not in {float, int} or not math.isfinite(request.timeout_seconds)
             or request.timeout_seconds <= 0 or not request.out.is_absolute() or os.path.lexists(request.out)
             or not request.out.parent.is_dir() or request.out.parent.resolve() != request.out.parent.absolute()):
