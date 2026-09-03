@@ -153,7 +153,7 @@ docs: 아키텍처 개요 갱신
 ## PR Creation
 
 **PR 생성 전 체크:**
-- [ ] 테스트 통과: `python -m pytest -v`
+- [ ] 테스트 통과: `uv run python -m pytest -n 4 --dist loadfile --durations=25`
 - [ ] 시크릿, `.env`, 데이터 파일이 포함되지 않았다
 - [ ] 커밋 메시지가 컨벤션을 따른다
 - [ ] PR 라벨을 1개 이상 부착했다 (아래 매핑 참조)
@@ -422,7 +422,7 @@ push, 수동 실행(`workflow_dispatch`)에서 동작합니다. 두 파일 모�
 `pull_request:` 트리거에 `branches:` 필터가 없어 base 브랜치를 가리지
 않지만, `push:`는 `main` 전용입니다.
 
-- `ci.yml`: Python 3.11 / 3.12에서 `python -m pytest`, feast·postgres 그룹
+- `ci.yml`: Python 3.11 / 3.12에서 `python -m pytest -n 4 --dist loadfile --durations=25`, feast·postgres 그룹
   테스트, `uv lock & proxy export drift`, 이미지 빌드와 import smoke check
 - `lint.yml`: `Ruff`
 - `release-drafter.yml`: GitHub가 자동 제공하는 `GITHUB_TOKEN`만 사용하는 release note 초안 갱신

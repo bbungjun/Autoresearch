@@ -120,6 +120,7 @@
 ### 📚 저장소 메타 (Repository Meta)
 
 - [문제 해결 기록 — CI Docker 반복 빌드 개선](runbooks/ci-docker-cache.md) — 병목 근거, 대안·트레이드오프, 구현·리뷰·검증, 포트폴리오 초안과 후속 측정 (#81)
+- [문제 해결 기록 — CI pytest 병렬 실행](runbooks/ci-pytest-parallel.md) — 직렬 실행 병목 근거, xdist 선택과 로컬 비교, 원격 실측 계획 (#85)
 - [ADR 0002 — 저장소 책임 경계](adr/0002-repository-responsibility-boundaries.md)
 - [Spec — 저장소 구조 재정리](specs/2026-07-15-repo-restructure.md)
 - [Spec — 머지된 PR 리포트 아카이브](specs/2026-07-26-pr-report-archive-design.md)
