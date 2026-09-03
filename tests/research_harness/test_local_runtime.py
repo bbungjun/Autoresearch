@@ -129,11 +129,14 @@ def test_runtime_restores_metadata_without_source_preparation(run_config, monkey
     import autoresearch.research_harness.local_runtime as runtime
     import autoresearch.research_harness.candidate_data_view as views
     import autoresearch.research_harness.local_trial_runner as trials
+    import autoresearch.research_harness.report as report
 
     monkeypatch.setattr(runtime, "_runtime_identity", lambda _: "{}")
     captured = []
     monkeypatch.setattr(trials, "LocalResearchTrialRunner", lambda **kwargs: captured.append(kwargs))
-    result = ControllerRunResult(ControllerConclusion.NO_IMPROVEMENT, "a" * 40, 0, (), None, "test", None)
+    result = ControllerRunResult(ControllerConclusion.INCONCLUSIVE, "a" * 40, 0, (), None, "already_consumed", None)
+    published = []
+    monkeypatch.setattr(report, "publish_research_report", lambda *args, **kwargs: published.append(kwargs))
 
     class Controller:
         def __init__(self, *args):
@@ -150,14 +153,17 @@ def test_runtime_restores_metadata_without_source_preparation(run_config, monkey
         pytest.fail("resume queried metadata source")
     monkeypatch.setattr(views, "prepare_candidate_metadata", unexpected)
     monkeypatch.setattr(views, "prepare_final_candidate_metadata", unexpected)
+    monkeypatch.setattr(runtime, "ResearchController", unexpected)
+    monkeypatch.setattr(trials, "LocalResearchTrialRunner", unexpected)
     assert run_local_research(run_config) == result
-    assert captured[1]["validation_metadata"] == first
-    assert "training" not in captured[1]["prediction_config"]
+    assert captured[0]["validation_metadata"] == first
+    assert "training" not in captured[0]["prediction_config"]
+    assert len(published) == 2
     assert (run_config.run_root / "controller-result.json").exists()
     drifted = run_config.model_copy(update={"screening_seed": 43})
     with pytest.raises(LocalRuntimeError):
         run_local_research(drifted)
-    assert len(captured) == 2
+    assert len(captured) == 1
 
 
 def test_runtime_does_not_initialize_registry(run_config) -> None:
@@ -222,3 +228,20 @@ def test_snapshot_mutation_is_rejected_before_agent(run_config, monkeypatch) -> 
 def test_invalid_model_does_not_become_contextlib_type_error(run_config) -> None:
     with pytest.raises(LocalRuntimeError, match="local_embedding_model_invalid"):
         run_local_research(run_config)
+
+
+def test_cli_report_failure_is_translated_without_private_traceback(monkeypatch, tmp_path) -> None:
+    from autoresearch.cli import app
+    from typer.testing import CliRunner
+    import autoresearch.research_harness.local_runtime as runtime
+    from autoresearch.research_harness.report import ReportError
+
+    monkeypatch.setattr(runtime, "load_run_config", lambda _: object())
+    def fail_report(config):
+        with runtime._run_lock(tmp_path):
+            raise ReportError("terminal_binding_conflict")
+    monkeypatch.setattr(runtime, "run_local_research", fail_report)
+    response = CliRunner().invoke(app, ["harness-run", "--config", "private-name.json"])
+    assert response.exit_code == 1
+    assert "report_terminal_binding_conflict" in response.output
+    assert "private-name" not in response.output and "Traceback" not in response.output

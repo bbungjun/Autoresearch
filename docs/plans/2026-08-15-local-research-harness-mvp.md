@@ -1193,8 +1193,8 @@ final metadata·권한 연결, checkpoint 영속화, 피처/임베딩·학습은
 | --- | --- | --- |
 | 1 (#44) | 로컬 21개 피처, 최소 embedding interface, 손 계산 및 시간 경계 테스트 | #45 CI 통과·머지 완료 |
 | 2 (#46) | 실제 로컬 GPU adapter, 모델 고정 revision/파일 해시, 캐시 분리, CUDA 추론·OOM 검증 | #47 CI 통과·머지 완료 |
-| 3 (#48) | 재학습 CLI, seed별 학습·예측, 입력 무결성과 완전 라벨 기간 검증 | 진행 중 |
-| 4 | final 권한/metadata, checkpoint identity, 실제 coding agent·독립 Judge·REPORT 연결 (필요하면 여러 PR) | 대기 |
+| 3 (#48) | 재학습 CLI, seed별 학습·예측, 입력 무결성과 완전 라벨 기간 검증 | #50 CI 통과·머지 완료 |
+| 4 | final 권한/metadata, checkpoint identity, 실제 coding agent·독립 Judge·REPORT 연결 (필요하면 여러 PR) | #51·#53 머지 완료, #55 기록 Judge/REPORT 진행 중 |
 | 5 | 5회 독립 재학습 calibration, E2E·복구·판정 시나리오와 품질/자율성/비용 실측 | 대기 |
 
 완료는 테스트 adapter의 성공이 아니라 실제 로컬 모델·agent의 완주와 증거 보존, 모든
@@ -1472,7 +1472,12 @@ Controller 정책을 한 run에서 실행·재개할 수 없었다. Codex CLI �
 - [x] 실제 trial runner의 candidate commit·seed paired 실행·봉인/평가 연결
 - [x] local 실행 설정과 checkpoint 결속·재개 CLI 및 README/reference 갱신
 - [x] 실제 agent 코드 변경/실제 학습 연결 smoke (5-seed calibration과 구분)
-- [ ] 독립 리뷰·회귀·CI·PR·merge, 문제/해결/결과 기록
+- [x] 독립 리뷰·회귀·CI·PR·merge, 문제/해결/결과 기록
+
+**완료 판정:** 아래 중간 실패와 권한 복구 과정을 거쳐 #53은 head `0a7ba94a`의
+독립 리뷰·CI 통과 후 `d1f18f75`로 squash merge되었다. 처음 Feast 빌드의 Docker Hub
+인증 연결 timeout은 코드 변경 없이 재실행하여 통과했고 최신 CI 전체도 성공했다.
+이 완료는 Goal 4B 범위이며 Goal 4C REPORT와 Goal 5 실측은 포함하지 않는다.
 
 **한계:** 새 실행의 LLM 호출 횟수는 exactly-once가 아니다. 중단된 validation attempt는
 다시 실행할 수 있으며 그 비용과 실패를 보존한다. 실제 품질 개선은 보장하지 않는다.
@@ -1566,6 +1571,58 @@ output 1,776 / reasoning output 248 tokens이며 달러 비용은 미확인이�
 이 결과는 Controller 전체 실행·독립 연구 기록 Judge·5-seed calibration을 대신하지 않는다.
 앞선 실패한 임시 폴더는 새 성공으로 지우지 않았으며 운영 제약은
 [#54](https://github.com/bbungjun/Autoresearch/issues/54)에서 추적한다.
+
+### Goal 4C: 구조화 기록·독립 Judge·REPORT (#55)
+
+선행 #53은 CI·독립 리뷰 후 squash merge되었다. Windows sandbox 설정은 실험 호출
+범위로만 명시했으며 full-access/전역 정책 변경은 하지 않았다. 최종 로컬 Harness 회귀는
+짧은 새 pytest 임시 경로에서 962 passed, 13 skipped였다. 기본 Windows 임시 경로의
+260자 길이 제한 실패는 별도 관측이며 해당 OS 설정을 변경하지 않았다.
+
+**문제:** 실제 agent가 코드를 바꾸고 독립 학습·채점을 수행해도 변경 설명과 수치가
+분산되어 있다. 종료 후 연구 기록을 읽는 새 Judge와 사람이 읽을 REPORT가 없고,
+기존 runtime 재호출은 이미 종료 결과가 있어도 Controller를 다시 진입한다.
+
+**해결:** 기존 RunInputContract·typed ledger·CodingAgent seam을 재사용하는 report
+module 하나로 기록 조립·단일 advisory 검토·안전한 Markdown 게시를 제공한다.
+독립 설계 리뷰로 validation champion/최종 채택 구분, baseline mean 출처, 종료 결과
+재사용, intent 복구 조건, 비용 중복 집계 방지, 자유 텍스트 private 경로 정제를 고정했다.
+spec §10.1.1이 정본이며 별도 framework나 LLM feedback loop는 추가하지 않는다.
+
+- [x] 종료 결과와 input/ledger 결속 및 report-only 재개 테스트를 먼저 작성한다.
+- [x] golden record/REPORT, final-vs-validation, 부분 final과 실제 가능한 판정 조합을 검증한다.
+- [x] 단일 read-only Judge, intent crash/timeout/cleanup/잘못된 응답·동시 재개의 호출 횟수를 검증한다.
+- [x] 모든 attempt 시간·token coverage, private 경로 정제·Markdown 안전성·digest drift를 검증한다.
+- [x] 기존 harness-run 종료 단계에 연결하고 README/책임 지도/docstring을 갱신한다.
+- [ ] 독립 구현 리뷰·전체 Harness 회귀·CI·PR·squash merge와 검증 근거를 기록한다.
+
+**결과:** report module과 내부 terminal/file helper, runtime 배선을 구현했다. 최초 RED는
+모듈 부재였으며 자격 증명 형태 텍스트 누출과 Judge cwd 회수 실패의 RED도 수정했다.
+독립 리뷰에서 intent/원본 evidence drift, 실패 Judge 비용 손실, free-text 정제, bare link와
+cleanup 실패 재개 문제를 발견·보완했다. 실제 `predictions.training.json`을 선별 투영하고
+대형 모델/예측 파일은 스트리밍 해시로 검증한다. validation promote 뒤 final discard와
+부분 final INCONCLUSIVE golden도 검증했다.
+
+구현 worker의 report/runtime 테스트는 53 passed, 독립 reviewer의 report/runtime/CodingAgent
+회귀는 84 passed(38.56초)였다. 전체 Harness 회귀는 추가 테스트 확장 전 수집 기준
+975 passed, 13 skipped(330.95초)였고 이후 새 테스트는 위 집중 회귀에 포함했다.
+경고 2개는 기존 MLflow/Pydantic deprecation이며 전체 Ruff와 diff 검사는 통과했다.
+현재 미해결 리뷰 차단 사항은 없으며 CI/PR/merge는 이어서 확인한다.
+실제 5-seed 품질/자율성/비용은 다음 Task 7에서 측정하며 이 PR의 golden fixture 수치를
+실측 개선으로 표현하지 않는다. Windows 입력/pytest 회수 제약은 #54에서 계속 추적한다.
+
+**실제 read-only Judge smoke 관측:** #52의 실제 단일 seed validation을 정제한 기록만
+새 빈 cwd의 `gpt-5.6-sol`/medium 호출에 전달했다. 도구 호출 이벤트 없이 strict JSON을
+반환했고 workspace를 회수했다. 총 18.328초(agent 18.281초), input 16,206 / cached 0 /
+output 697 / reasoning output 118 tokens였다. 달러 비용은 미측정이며 final은 소비하지 않았다.
+이는 report publisher/Controller 완주가 아닌 실제 fresh-context/read-only 호출 검증이다.
+
+Judge는 확률 지표 개선과 ranking 악화를 구분했지만, **공유 evaluation_id를 식별자 충돌로
+잘못 해석했다.** 실제 계약은 evaluation_id가 snapshot/split 식별자이며 같은 paired 비교는
+동일 ID가 필수다. 이 오판을 숨기거나 같은 검토를 재호출하지 않고 보존했다. 해결은 Judge의
+권한을 넓히는 대신 구조화 기록과 prompt에 도메인 식별자 의미를 추가하는 것이다. 이 한 번
+관측은 기록 검토 agent도 근거 설명을 오해할 수 있음을 보여주며, advisory 의견이 수치 판정을
+덮어쓰지 않는 역할 분리의 필요성을 뒷받침한다. 향후 실측에서 오판 감소 여부를 확인한다.
 
 ## Task 7: 지표별 baseline σ 측정 + end-to-end 완주
 
