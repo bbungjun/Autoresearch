@@ -144,6 +144,40 @@ def test_no_change_keeps_champion_sha(repository, final_case, tmp_path: Path) ->
     assert result.candidate_sha == repository[1]
 
 
+def test_temp_cleanup_failure_preserves_candidate_before_rejecting_return(repository, final_case, tmp_path: Path) -> None:
+    class CleanupFailureAgent(Agent):
+        def run(self, request):
+            response = super().run(request)
+
+            def cleanup(*args):
+                assert list((tmp_path / "attempts").glob("*/candidate.patch"))
+                assert list((tmp_path / "attempts").glob("*/candidate.json"))
+                raise trial_module.CodingAgentError("agent_temp_cleanup_failed", "temp_cleanup")
+
+            request.cleanup_stack.push(cleanup)
+            return response
+
+    with pytest.raises(TrialExecutionError, match="agent_temp_cleanup_failed"):
+        _prepare(_adapter(repository, final_case, tmp_path, agent=CleanupFailureAgent()), repository)
+    assert next((tmp_path / "attempts").glob("*/candidate.patch")).read_bytes()
+    assert len(list((tmp_path / "attempts").glob("*/failure.json"))) == 1
+
+
+def test_successful_deferred_cleanup_artifacts_are_returned(repository, final_case, tmp_path: Path) -> None:
+    class CleanupAgent(Agent):
+        def run(self, request):
+            response = super().run(request)
+            request.artifact_root.mkdir()
+            def cleanup(*args):
+                for name in ("temp-cleanup.json", "temp-cleanup.stdout.log", "temp-cleanup.stderr.log"):
+                    (request.artifact_root / name).write_text("{}")
+            request.cleanup_stack.push(cleanup)
+            return response
+
+    candidate = _prepare(_adapter(repository, final_case, tmp_path, agent=CleanupAgent()), repository)
+    assert sum("temp-cleanup." in item.uri for item in candidate.artifacts) == 3
+
+
 def test_blocked_agent_is_failure_not_successful_no_change(repository, final_case, tmp_path: Path) -> None:
     with pytest.raises(TrialExecutionError, match="agent_blocked"):
         _prepare(_adapter(repository, final_case, tmp_path, agent=Agent("blocked")), repository)

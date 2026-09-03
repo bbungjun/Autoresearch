@@ -8,13 +8,15 @@ sandbox 구현을 명시하되 요청의 read-only/workspace-write 범위는 유
 반환 JSON의 업무 스키마 검증은 호출자가 담당한다.
 검증된 candidate 입력 identity가 전달된 Windows coding prepare에만 비상속 READ
 ACE를 추가하며, 권한 준비가 실패하면 CLI를 시작하지 않고 실패 증거를 남긴다.
+등록된 Windows coding temp는 candidate 증거 보존 뒤 동일 sandbox 주체로 회수한다.
 [비책임] Git 변경·commit, final grant·정답, Controller 재개와 REPORT는 각각 workspace,
 local trial adapter와 Controller가 소유한다. 동일 OS 사용자에 대한 보안 격리는 아니다.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from contextlib import ExitStack, contextmanager
+from dataclasses import asdict, dataclass, field, replace
 import hashlib
 import json
 import math
@@ -24,11 +26,12 @@ import stat
 import subprocess
 import sys
 import time
-from typing import Literal, Protocol
+from typing import Iterator, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, field_validator
 
 from autoresearch.research_harness.ledger import LedgerArtifactEvidence
+from autoresearch.research_harness import _agent_temp
 from autoresearch.research_harness._windows_sandbox_inputs import CandidateInputIdentity, InputAccessError, grant_input_read
 from autoresearch.research_harness.runner import (
     _PipeReader,
@@ -41,6 +44,7 @@ from autoresearch.research_harness.runner import (
 
 _LIMIT = 1024 * 1024
 _EVENT_LIMIT = 64 * 1024
+_TEMP_TIMEOUT_SECONDS = 30.0
 _JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 _ENVIRONMENT = (
     "COMSPEC", "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "HOME", "USERPROFILE",
@@ -83,6 +87,7 @@ class CodingAgentRequest:
     artifact_root: Path = field(repr=False)
     mode: Literal["workspace-write", "read-only"]
     candidate_inputs: CandidateInputIdentity | None = None
+    cleanup_stack: ExitStack | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,7 +141,11 @@ class CodexCodingAgent:
     def run(self, request: CodingAgentRequest) -> CodingAgentReceipt:
         """새 evidence 디렉터리에 한 번 실행하고 응답 또는 typed failure를 반환한다."""
         _validate_request(self.config, request)
-        return _run(self.config, request)
+        if request.cleanup_stack is not None:
+            return _run(self.config, request)
+        with ExitStack() as stack:
+            receipt = _run(self.config, replace(request, cleanup_stack=stack))
+        return replace(receipt, artifacts=_evidence(request.artifact_root))
 
 
 def _json_bytes(value: object) -> bytes:
@@ -165,6 +174,8 @@ def _validate_request(config: CodexAgentConfig, request: CodingAgentRequest) -> 
         if request.candidate_inputs is not None and (
             request.mode != "workspace-write" or not isinstance(request.candidate_inputs, CandidateInputIdentity)
         ):
+            raise ValueError
+        if request.cleanup_stack is not None and not isinstance(request.cleanup_stack, ExitStack):
             raise ValueError
         if not isinstance(request.prompt, str) or not 0 < len(request.prompt.encode("utf-8")) <= _LIMIT:
             raise ValueError
@@ -197,8 +208,17 @@ def _codex_argv(config: CodexAgentConfig, request: CodingAgentRequest) -> tuple[
         "-c", "model_reasoning_effort=" + json.dumps(config.reasoning_effort),
         "-c", 'approval_policy="never"',
         *(("-c", 'windows.sandbox="elevated"') if os.name == "nt" else ()),
+        *_temp_settings(request),
         "-C", str(request.cwd), "-",
     )
+
+
+def _temp_settings(request: CodingAgentRequest) -> tuple[str, ...]:
+    if os.name != "nt" or request.candidate_inputs is None:
+        return ()
+    path = str(request.cwd / "harness_out/.agent-tmp")
+    return tuple(value for name in ("TEMP", "TMP", "TMPDIR", "PYTEST_DEBUG_TEMPROOT")
+                 for value in ("-c", f"shell_environment_policy.set.{name}=" + json.dumps(path)))
 
 
 def _environment(config: CodexAgentConfig) -> dict[str, str]:
@@ -312,7 +332,8 @@ def _read_response(path: Path) -> bytes:
 
 def _evidence(root: Path) -> tuple[LedgerArtifactEvidence, ...]:
     result = []
-    for name in ("prompt.txt", "schema.json", "stdout.log", "stderr.log", "response.json", "receipt.json", "input-access.json"):
+    for name in ("prompt.txt", "schema.json", "stdout.log", "stderr.log", "response.json", "receipt.json", "input-access.json",
+                 "temp-cleanup.json", "temp-cleanup.stdout.log", "temp-cleanup.stderr.log"):
         path = root / name
         try:
             payload = _read_response(path)
@@ -343,6 +364,122 @@ def _prepare_input_access(request: CodingAgentRequest) -> None:
     _write(request.artifact_root / "input-access.json", _json_bytes(receipt))
 
 
+def _cleanup_temp_process(config: CodexAgentConfig, request: CodingAgentRequest) -> dict[str, JsonValue]:
+    """LLM 없이 고정 trusted helper를 같은 sandbox와 owned process tree로 실행한다."""
+    owner: _TreeOwner | None = None
+    process: subprocess.Popen[bytes] | None = None
+    readers: tuple[_PipeReader, _PipeReader] | None = None
+    stdout, stderr = _CapturedLog(events=False), _CapturedLog(events=False)
+    started = time.monotonic()
+    failure: BaseException | None = None
+    result: dict[str, JsonValue] = {"status": "failed", "removed_count": None, "object_count": None}
+    try:
+        _agent_temp.validate(request.cwd, json.loads(_read_response(request.artifact_root / "temp-registration.json")))
+        worker = Path(__file__).with_name("_agent_worker.py").resolve(strict=True)
+        helper = Path(_agent_temp.__file__).resolve(strict=True)
+        if helper.is_relative_to(request.cwd) or not _safe_path(helper, directory=False) or not _safe_ancestors(helper.parent):
+            raise ValueError("untrusted_temp_helper")
+        command = (str(config.executable), "sandbox", "--permission-profile", ":workspace",
+                   "--include-managed-config", "-c", 'windows.sandbox="elevated"',
+                   "-C", str(request.cwd), sys.executable, "-I", "-S", str(helper))
+        owner = _new_tree_owner()
+        process = subprocess.Popen(
+            (sys.executable, "-I", "-S", str(worker), str(request.artifact_root / "temp-registration.json"), *command),
+            cwd=request.cwd, env=_environment(config), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, close_fds=True, start_new_session=os.name == "posix",
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+        )
+        owner.attach(process)
+        assert process.stdin is not None and process.stdout is not None and process.stderr is not None
+        readers = (_PipeReader(process.stdout, buffer=stdout), _PipeReader(process.stderr, buffer=stderr))
+        for reader in readers:
+            reader.start()
+        process.stdin.write(b"\x00")
+        process.stdin.flush()
+        process.stdin.close()
+        process.wait(timeout=_TEMP_TIMEOUT_SECONDS)
+        if owner.is_alive(process):
+            raise RuntimeError("temp_process_leaked")
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        failure = error
+    except (KeyboardInterrupt, SystemExit) as error:
+        failure = error
+    finally:
+        cleanup = _cleanup_started(owner, process, readers)
+    try:
+        if stdout.total <= _LIMIT:
+            result = _parse_object(bytes(stdout.payload))
+    except (ValueError, UnicodeError, RecursionError):
+        pass
+    result.update(duration_ms=max(0, int((time.monotonic() - started) * 1000)),
+                  exit_code=process.returncode if process is not None else None,
+                  process_cleanup_ok=cleanup.cleanup_ok, process_leaked=cleanup.process_leaked)
+    log_evidence_failed = False
+    try:
+        _write(request.artifact_root / "temp-cleanup.stdout.log", bytes(stdout.payload))
+        _write(request.artifact_root / "temp-cleanup.stderr.log", bytes(stderr.payload))
+    except (OSError, ValueError):
+        log_evidence_failed = True
+        result["log_evidence_failed"] = True
+    if (failure is not None or not cleanup.cleanup_ok or cleanup.process_leaked
+            or process is None or process.returncode != 0 or stdout.total > _LIMIT or stderr.total > _LIMIT or log_evidence_failed):
+        result["status"] = "failed"
+        result["error_type"] = type(failure).__name__ if failure is not None else "process_failure"
+    if isinstance(failure, (KeyboardInterrupt, SystemExit)):
+        result["status"] = "interrupted"
+        setattr(failure, "temp_cleanup_receipt", result)
+        raise failure
+    return result
+
+
+@contextmanager
+def _temp_lifecycle(config: CodexAgentConfig, request: CodingAgentRequest) -> Iterator[dict[str, object]]:
+    """호출자 증거 보존 뒤 회수하며 진행 중 원 오류를 cleanup 오류로 덮지 않는다."""
+    try:
+        registration = _agent_temp.register(request.cwd)
+        _write(request.artifact_root / "temp-registration.json", _json_bytes(registration))
+    except (OSError, ValueError):
+        _write(request.artifact_root / "temp-cleanup.json", _json_bytes({
+            "version": "agent-temp-cleanup-v1", "status": "not_run", "reason": "registration_failed",
+        }))
+        raise CodingAgentError("agent_temp_registration_failed", "temp_registration") from None
+    state: dict[str, object] = {"process_ready": False}
+    original: BaseException | None = None
+    try:
+        yield state
+    except BaseException as error:
+        original = error
+        raise
+    finally:
+        receipt: dict[str, JsonValue] = {"version": "agent-temp-cleanup-v1", "status": "not_run",
+                                      "reason": "agent_process_not_reclaimed", "removed_count": None}
+        interrupted: BaseException | None = None
+        try:
+            if state["process_ready"]:
+                receipt = {"version": "agent-temp-cleanup-v1", **_cleanup_temp_process(config, request)}
+                if receipt.get("status") == "complete":
+                    _agent_temp.validate(request.cwd, registration, empty=True)
+                    receipt["host_verified_empty"] = True
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+            receipt.update(status="failed", error_type=type(error).__name__)
+        except (KeyboardInterrupt, SystemExit) as error:
+            interrupted = error
+            receipt.update(getattr(error, "temp_cleanup_receipt", {"status": "interrupted"}))
+        try:
+            _write(request.artifact_root / "temp-cleanup.json", _json_bytes(receipt))
+        except (OSError, ValueError):
+            receipt["status"] = "evidence_failed"
+        if receipt["status"] != "complete":
+            if original is not None:
+                original.add_note("agent_temp_cleanup_failed")
+            elif interrupted is not None:
+                raise interrupted
+            else:
+                raise CodingAgentError("agent_temp_cleanup_failed", "temp_cleanup", artifacts=_evidence(request.artifact_root))
+        if isinstance(original, CodingAgentError):
+            original.artifacts = _evidence(request.artifact_root)
+
+
 def _run(config: CodexAgentConfig, request: CodingAgentRequest) -> CodingAgentReceipt:
     started = time.monotonic()
     root = request.artifact_root
@@ -354,12 +491,21 @@ def _run(config: CodexAgentConfig, request: CodingAgentRequest) -> CodingAgentRe
     interruption: BaseException | None = None
     response: dict[str, JsonValue] = {}
     created = False
+    temp_state: dict[str, object] | None = None
     try:
         root.mkdir(mode=0o700)
         created = True
-        _write(root / "prompt.txt", request.prompt.encode("utf-8"))
+        prompt = request.prompt
+        if os.name == "nt" and request.candidate_inputs is not None:
+            prompt += ("\n임시 파일과 pytest 기본 임시 산출물은 harness_out/.agent-tmp를 사용하십시오. "
+                       "TEMP/TMP/TMPDIR/PYTEST_DEBUG_TEMPROOT는 이 경로로 설정되어 있습니다. "
+                       "별도 --basetemp나 등록 경로 밖 private 임시 폴더를 만들지 마십시오.\n")
+        _write(root / "prompt.txt", prompt.encode("utf-8"))
         _write(root / "schema.json", _json_bytes(request.output_schema))
         _prepare_input_access(request)
+        if os.name == "nt" and request.candidate_inputs is not None:
+            assert request.cleanup_stack is not None
+            temp_state = request.cleanup_stack.enter_context(_temp_lifecycle(config, request))
         worker = Path(__file__).with_name("_agent_worker.py").resolve(strict=True)
         owner = _new_tree_owner()
         process = subprocess.Popen(
@@ -407,6 +553,9 @@ def _run(config: CodexAgentConfig, request: CodingAgentRequest) -> CodingAgentRe
         error = CodingAgentError("agent_interrupted", "cancelled")
     finally:
         cleanup = _cleanup_started(owner, process, readers)
+        if temp_state is not None:
+            temp_state["process_ready"] = (cleanup.cleanup_ok and not cleanup.process_leaked
+                                           and (error is None or error.code != "agent_process_leaked"))
         if not cleanup.cleanup_ok:
             error = CodingAgentError("agent_cleanup_failed", "cleanup")
         elif cleanup.process_leaked:

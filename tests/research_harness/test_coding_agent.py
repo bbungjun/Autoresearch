@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from contextlib import ExitStack
 import hashlib
 import json
 import os
@@ -141,6 +142,237 @@ def test_candidate_input_access_is_windows_codex_prepare_only(tmp_path, monkeypa
     agent._prepare_input_access(request)
     assert len(calls) == expected
     assert (request.artifact_root / "input-access.json").exists() == bool(expected)
+
+
+@pytest.mark.parametrize("platform,has_inputs", [("nt", True), ("nt", False), ("posix", True)])
+def test_temp_settings_apply_only_to_candidate_shell_not_host(tmp_path, monkeypatch, platform, has_inputs):
+    request = replace(_request(tmp_path), candidate_inputs=agent.CandidateInputIdentity("a" * 64, "eval_" + "b" * 64) if has_inputs else None)
+    monkeypatch.setattr(agent, "os", SimpleNamespace(**{**vars(os), "name": platform}))
+    monkeypatch.setenv("TEMP", "host-temp-sentinel")
+    settings = agent._temp_settings(request)
+    assert bool(settings) == (platform == "nt" and has_inputs)
+    assert agent._environment(_config())["TEMP"] == "host-temp-sentinel"
+    if settings:
+        assert len(settings) == 8
+        assert all(str(request.cwd / "harness_out/.agent-tmp") == json.loads(value.split("=", 1)[1]) for value in settings[1::2])
+
+
+def _temp_request(tmp_path):
+    request = _request(tmp_path)
+    request.artifact_root.mkdir()
+    (request.cwd / ".git").write_text("gitdir: trusted")
+    (request.cwd / "harness_out").mkdir()
+    return request
+
+
+def test_temp_cleanup_is_deferred_and_adds_verified_sidecar(tmp_path, monkeypatch):
+    request = _temp_request(tmp_path)
+    calls = []
+    monkeypatch.setattr(agent, "_cleanup_temp_process", lambda *args: calls.append("cleanup") or {"status": "complete", "removed_count": 0})
+    with ExitStack() as stack:
+        state = stack.enter_context(agent._temp_lifecycle(_config(), request))
+        state["process_ready"] = True
+        assert calls == []
+    assert calls == ["cleanup"]
+    receipt = json.loads((request.artifact_root / "temp-cleanup.json").read_bytes())
+    assert receipt["host_verified_empty"] is True
+
+
+def test_unreclaimed_agent_never_starts_temp_helper(tmp_path, monkeypatch):
+    request = _temp_request(tmp_path)
+    monkeypatch.setattr(agent, "_cleanup_temp_process", lambda *args: pytest.fail("unsafe helper launch"))
+    with pytest.raises(agent.CodingAgentError, match="agent_temp_cleanup_failed"):
+        with agent._temp_lifecycle(_config(), request):
+            pass
+    assert json.loads((request.artifact_root / "temp-cleanup.json").read_bytes())["status"] == "not_run"
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, KeyboardInterrupt, SystemExit])
+def test_cleanup_failure_preserves_original_exception_and_partial_count(tmp_path, monkeypatch, error_type):
+    request = _temp_request(tmp_path)
+    monkeypatch.setattr(agent, "_cleanup_temp_process", lambda *args: {"status": "failed", "removed_count": 2})
+    original = error_type("original")
+    with pytest.raises(error_type) as caught:
+        with agent._temp_lifecycle(_config(), request) as state:
+            state["process_ready"] = True
+            raise original
+    assert caught.value is original
+    assert "agent_temp_cleanup_failed" in original.__notes__
+    assert json.loads((request.artifact_root / "temp-cleanup.json").read_bytes())["removed_count"] == 2
+
+
+def test_helper_success_without_actual_empty_anchor_is_failure(tmp_path, monkeypatch):
+    request = _temp_request(tmp_path)
+    monkeypatch.setattr(agent, "_cleanup_temp_process", lambda *args: {"status": "complete", "removed_count": 0})
+    with pytest.raises(agent.CodingAgentError, match="agent_temp_cleanup_failed"):
+        with agent._temp_lifecycle(_config(), request) as state:
+            state["process_ready"] = True
+            (request.cwd / "harness_out/.agent-tmp/remains").touch()
+    assert json.loads((request.artifact_root / "temp-cleanup.json").read_bytes())["status"] == "failed"
+
+
+def test_helper_interrupt_preserves_partial_sidecar_and_cancellation(tmp_path, monkeypatch):
+    request = _temp_request(tmp_path)
+    interruption = KeyboardInterrupt()
+    interruption.temp_cleanup_receipt = {"status": "interrupted", "removed_count": 1}
+    def interrupt(*args):
+        raise interruption
+    monkeypatch.setattr(agent, "_cleanup_temp_process", interrupt)
+    with pytest.raises(KeyboardInterrupt) as caught:
+        with agent._temp_lifecycle(_config(), request) as state:
+            state["process_ready"] = True
+    assert caught.value is interruption
+    assert json.loads((request.artifact_root / "temp-cleanup.json").read_bytes())["removed_count"] == 1
+
+
+def test_original_coding_error_receives_deferred_cleanup_evidence(tmp_path, monkeypatch):
+    request = _temp_request(tmp_path)
+    monkeypatch.setattr(agent, "_cleanup_temp_process", lambda *args: {"status": "failed", "removed_count": 1})
+    original = agent.CodingAgentError("agent_crash", "exit", duration_ms=73)
+    with pytest.raises(agent.CodingAgentError) as caught:
+        with agent._temp_lifecycle(_config(), request) as state:
+            state["process_ready"] = True
+            raise original
+    assert caught.value is original and original.duration_ms == 73
+    assert any(item.uri.endswith("temp-cleanup.json") for item in original.artifacts)
+
+
+def test_temp_helper_owned_gate_uses_fixed_sandbox_and_preserves_logs(tmp_path, monkeypatch):
+    request = _temp_request(tmp_path)
+    registration = agent._agent_temp.register(request.cwd)
+    agent._write(request.artifact_root / "temp-registration.json", agent._json_bytes(registration))
+    (request.cwd / "harness_out/.agent-tmp/scratch").touch()
+    popen = agent.subprocess.Popen
+    commands = []
+    def fake_sandbox(command, **kwargs):
+        commands.append(command)
+        # CLI 전용 경계만 대체하고 실제 gate/owner/stdlib worker는 그대로 실행한다.
+        index = command.index("sandbox")
+        helper = command[-1]
+        return popen((*command[:index - 1], sys.executable, "-I", "-S", helper), **kwargs)
+    monkeypatch.setattr(agent.subprocess, "Popen", fake_sandbox)
+    result = agent._cleanup_temp_process(_config(), request)
+    assert result["status"] == "complete" and result["removed_count"] == 1
+    assert result["process_cleanup_ok"] is True
+    command = commands[0]
+    assert command[command.index("--permission-profile") + 1] == ":workspace"
+    assert "--include-managed-config" in command and 'windows.sandbox="elevated"' in command
+    assert command[-4:-1] == (sys.executable, "-I", "-S")
+    assert (request.artifact_root / "temp-cleanup.stdout.log").exists()
+    assert (request.artifact_root / "temp-cleanup.stderr.log").exists()
+
+
+def test_changed_temp_boundary_never_launches_helper(tmp_path, monkeypatch):
+    request = _temp_request(tmp_path)
+    registration = agent._agent_temp.register(request.cwd)
+    agent._write(request.artifact_root / "temp-registration.json", agent._json_bytes(registration))
+    (request.cwd / ".git").write_text("changed")
+    monkeypatch.setattr(agent.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("boundary must stop launch"))
+    assert agent._cleanup_temp_process(_config(), request)["status"] == "failed"
+
+
+@pytest.mark.parametrize("kind", [KeyboardInterrupt, SystemExit])
+def test_helper_log_failure_cannot_mask_interruption_and_partial_receipt(tmp_path, monkeypatch, kind):
+    request = _temp_request(tmp_path)
+    registration = agent._agent_temp.register(request.cwd)
+    agent._write(request.artifact_root / "temp-registration.json", agent._json_bytes(registration))
+    (request.cwd / "harness_out/.agent-tmp/scratch").touch()
+    popen = agent.subprocess.Popen
+    def fake_sandbox(command, **kwargs):
+        index = command.index("sandbox")
+        return popen((*command[:index - 1], sys.executable, "-I", "-S", command[-1]), **kwargs)
+    monkeypatch.setattr(agent.subprocess, "Popen", fake_sandbox)
+    new_owner = agent._new_tree_owner
+    interruption = kind()
+    def interrupted_owner():
+        owner = new_owner()
+        monkeypatch.setattr(owner, "is_alive", lambda process: (_ for _ in ()).throw(interruption))
+        return owner
+    monkeypatch.setattr(agent, "_new_tree_owner", interrupted_owner)
+    write = agent._write
+    def failed_log(path, payload):
+        if path.name.endswith(".log"):
+            raise OSError("local evidence unavailable")
+        write(path, payload)
+    monkeypatch.setattr(agent, "_write", failed_log)
+    with pytest.raises(kind) as caught:
+        agent._cleanup_temp_process(_config(), request)
+    assert caught.value is interruption
+    assert interruption.temp_cleanup_receipt["removed_count"] == 1
+    assert interruption.temp_cleanup_receipt["status"] == "interrupted"
+    assert interruption.temp_cleanup_receipt["log_evidence_failed"] is True
+
+
+@pytest.mark.parametrize("behavior", ["attach_failure", "timeout", "leak", "cleanup_failure"])
+def test_temp_helper_gate_and_process_failures_are_closed(tmp_path, monkeypatch, behavior):
+    request = _temp_request(tmp_path)
+    registration = agent._agent_temp.register(request.cwd)
+    agent._write(request.artifact_root / "temp-registration.json", agent._json_bytes(registration))
+    marker = tmp_path / "released"
+    script = tmp_path / "fake_cleanup.py"
+    script.write_text(
+        "import sys, time, subprocess\nfrom pathlib import Path\n"
+        f"Path({str(marker)!r}).touch()\n"
+        + ("time.sleep(30)\n" if behavior == "timeout" else "")
+        + ("subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n" if behavior == "leak" else "")
+        + "print('{\"status\":\"complete\",\"removed_count\":0}')\n", encoding="utf-8")
+    popen = agent.subprocess.Popen
+    def fake_sandbox(command, **kwargs):
+        index = command.index("sandbox")
+        return popen((*command[:index - 1], sys.executable, "-I", "-S", str(script)), **kwargs)
+    monkeypatch.setattr(agent.subprocess, "Popen", fake_sandbox)
+    if behavior == "attach_failure":
+        new_owner = agent._new_tree_owner
+        def bad_owner():
+            owner = new_owner()
+            monkeypatch.setattr(owner, "attach", lambda process: (_ for _ in ()).throw(OSError("attach failed")))
+            return owner
+        monkeypatch.setattr(agent, "_new_tree_owner", bad_owner)
+    if behavior == "timeout":
+        monkeypatch.setattr(agent, "_TEMP_TIMEOUT_SECONDS", 0.3)
+    if behavior == "cleanup_failure":
+        original = agent._cleanup_started
+        def cleanup_failed(*args):
+            result = original(*args)
+            return SimpleNamespace(cleanup_ok=False, process_leaked=result.process_leaked)
+        monkeypatch.setattr(agent, "_cleanup_started", cleanup_failed)
+    result = agent._cleanup_temp_process(_config(), request)
+    assert result["status"] == "failed"
+    if behavior == "attach_failure":
+        assert not marker.exists()
+    if behavior == "timeout":
+        assert result["error_type"] == "TimeoutExpired"
+    if behavior == "cleanup_failure":
+        assert result["process_cleanup_ok"] is False
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows coding prepare integration")
+@pytest.mark.parametrize("behavior", ["success", "leak", "cleanup_failure"])
+def test_windows_coding_prepare_runs_temp_cleanup_only_after_safe_process_reclaim(tmp_path, monkeypatch, behavior):
+    request = replace(_request(tmp_path), candidate_inputs=agent.CandidateInputIdentity("a" * 64, "eval_" + "b" * 64))
+    (request.cwd / ".git").write_text("gitdir: trusted")
+    (request.cwd / "harness_out").mkdir()
+    monkeypatch.setattr(agent, "_prepare_input_access", lambda request: None)
+    calls = []
+    monkeypatch.setattr(agent, "_cleanup_temp_process", lambda *args: calls.append("cleanup") or {"status": "complete", "removed_count": 0})
+    _fake(monkeypatch, tmp_path, "out.write_text('{}')\n" + (
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n" if behavior == "leak" else ""))
+    if behavior == "cleanup_failure":
+        original = agent._cleanup_started
+        def cleanup_failed(*args):
+            result = original(*args)
+            return SimpleNamespace(cleanup_ok=False, process_leaked=result.process_leaked)
+        monkeypatch.setattr(agent, "_cleanup_started", cleanup_failed)
+    if behavior == "success":
+        receipt = agent.CodexCodingAgent(_config()).run(request)
+        assert any(item.uri.endswith("temp-cleanup.json") for item in receipt.artifacts)
+        assert calls == ["cleanup"]
+    else:
+        with pytest.raises(agent.CodingAgentError) as caught:
+            agent.CodexCodingAgent(_config()).run(request)
+        assert caught.value.code in {"agent_process_leaked", "agent_cleanup_failed"}
+        assert calls == []
+        assert json.loads((request.artifact_root / "temp-cleanup.json").read_bytes())["status"] == "not_run"
 
 
 def test_read_only_request_cannot_receive_input_access_authority(tmp_path, monkeypatch):

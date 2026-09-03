@@ -53,8 +53,9 @@ full-access 설정을 바꾸지 않았습니다.
 실제 학습·예측은 Harness가 수행하도록 역할을 나눴습니다. 이 범위에서 실제 agent의 코드
 변경, 표적 테스트 6개, 단일 seed의 두 독립 학습·채점과 workspace 회수를 확인했습니다.
 확률 지표 개선과 ranking 저하가 함께 관측됐으므로 이를 모델 승격이나 final 개선으로
-표현하지 않았습니다. 범용 Windows pytest 임시 경로의 ACL·회수 제약은
-[#54](https://github.com/bbungjun/Autoresearch/issues/54)에서 여전히 추적합니다.
+표현하지 않았습니다. Windows pytest 임시 경로의 ACL·회수 제약은
+[#54](https://github.com/bbungjun/Autoresearch/issues/54)로 분리했고, 등록된 temp의
+회수 구현과 검증 결과는 §10에 기록했습니다.
 
 ### 자연어 검토를 공식 판정으로 쓰지 않기 — #55 / PR #56
 
@@ -322,8 +323,9 @@ Prediction 설정에는 명시된 embedding 값만 넣어 agent가 바꾼 학습
   구현·독립 검토 자체를 숨기지 않고 협업 및 검증 설계 역량으로 설명합니다.
 - LLM Judge는 실제로 도메인 의미를 오해했습니다. 구조화된 설명을 보강해도 무오류가
   보장되지 않으며, advisory 의견은 공식 수치 판정을 대체하지 않습니다.
-- #54의 Windows 임시 경로 ACL·회수 제약은 미해결입니다. 현재의 좁은 coding 테스트 범위를
-  범용 sandbox 테스트 지원 완료로 표현하지 않습니다.
+- 원본 #60 실험 당시에는 #54의 Windows 임시 경로 회수 제약이 미해결이었습니다.
+  후속 §10에서 등록된 temp 회수를 검증했지만 이를 범용 sandbox 테스트 지원 완료나
+  원본 실험의 실행 범위를 소급해 넓힌 것으로 표현하지 않습니다.
 - 온전한 동일 상태 루트의 final marker는 재소비를 막지만, 상태 루트 전체가 삭제된 과거를
   파일 부재만으로 탐지하지는 못합니다. 자동 reset은 제공하지 않습니다.
 - Parser 측정은 한 Windows/Python 환경에서 사례별 한 번 수행했습니다. 동시 부하나 다른
@@ -439,5 +441,69 @@ mock 통과를 실제 실행 성공으로 오인하지 않고 OS 경계에서 �
 Python 3.11 identity와 타 플랫폼 무동작은 회귀 테스트로 검증하며, 다른 Windows/CLI
 버전의 실제 동작까지 보장하지 않는다. 추가 권한만 READ이며 기존 effective 권한을
 회수하거나 입력을 보안상 read-only로 강제하는 기능은 아니다. 모델 학습·성능 측정·
-final 소비는 하지 않았고 기존 실패 폴더를 수정하지 않았다. pytest 임시 산출물 회수는
-#54B로 남기며 #54 전체를 완료 처리하지 않는다.
+final 소비는 하지 않았고 기존 실패 폴더를 수정하지 않았다. A 완료 시점에는 pytest 임시
+산출물 회수를 #54B로 남겨 이슈를 종료하지 않았으며, 후속 결과는 아래 §10에 기록한다.
+
+## 10. Windows pytest 임시 산출물 회수 — #54B
+
+**문제와 근거:** 입력 탐색이 복구돼도 sandbox가 만든 private pytest 폴더를 host가
+회수하지 못하면 candidate 완료가 막힌다. 설치 pytest 소스는 `0700`으로 임시 폴더를
+만들고 지정 basetemp도 삭제 후 다시 생성한다. 따라서 host 사전 생성이나 TEMP 위치
+변경만으로 파일을 만든 사용자와 회수하는 사용자의 권한 차이가 없어지지 않는다.
+
+**선택과 트레이드오프:** 같은 sandbox 주체의 고정 helper가 등록된 temp만 회수하고
+host가 실제 부재를 확인하는 접근을 선택했다. 공식 CLI의 읽기 전용 실행으로 해당 주체를
+확인했다. 전역 설정·ACL·owner를 바꾸지 않으며, 등록 root 밖의 arbitrary private
+산출물이나 host 강제 종료까지 지원하는 완전한 회수 시스템은 이번 MVP 범위가 아니다.
+
+**독립 리뷰로 보완한 순서:** agent의 finally에서 즉시 temp를 회수하면 실패 시 candidate
+patch 보존 전에 빠져나갈 수 있다. 이를 피하기 위해 증거 보존 뒤에 회수를 배치하는
+작은 호출 수명 관리 interface를 사용한다. 회수 실패는 계속 실패이며 후보를 Controller에
+전달하지 않는다. 추가 리뷰에서는 `.git` 확인의 무제한 읽기를 16 KiB로 제한하고,
+helper 중단 직후 로그 저장까지 실패해도 원 중단과 부분 회수 개수를 보존하도록 보완했다.
+AI assistant의 구현을 독립 agent가 검토하고 실패 주입 테스트로 확인한 과정이다.
+
+**구현:** 큰 범용 cleanup framework 대신 작은 stdlib helper와 호출자의 `ExitStack`을
+사용했다. Windows coding prepare에만 등록 temp를 만들고 Codex가 실행하는 명령의 임시
+환경을 지정한다. Codex host 자체의 TEMP는 그대로 유지한다. helper는 고정 anchor의
+자식만 전체 사전 검증 후 삭제하고 host가 실제 비어 있음을 다시 검사한다. 로그·회수
+receipt는 작업 공간 밖 attempt에 남으며 후보 evidence와 최종 REPORT의 digest 대상이다.
+
+**실제 검증 결과:** 설치된 Windows/Python 3.12/CLI 조합에서 새 합성 workspace로
+작은 `tmp_path` 테스트를 실행했다. 아래 두 호출은 mock이 아닌 실제 sandbox 실행이다.
+
+| 합성 시나리오 | pytest 종료 코드 | 등록 temp 회수 | 회수 helper 시간 | 새 workspace 회수 |
+| --- | ---: | ---: | ---: | --- |
+| 정상 테스트 | 0 | 4/4개 | 968 ms | 성공 |
+| 파일 생성 후 의도적 assertion 실패 | 1 | 4/4개 | 1,156 ms | 성공 |
+
+두 경우 모두 child의 TEMP/TMP/TMPDIR/PYTEST_DEBUG_TEMPROOT와 실제 `tmp_path`가
+등록 경로를 사용하는 것을 테스트 안에서 확인했다. 회수 후 anchor는 유지되고 자식은
+없었으며, 입력 내용·소유자·anchor 밖 sentinel·회수 전후 점검 대상 ACL·상위 ACL이
+보존됐다. tracked 코드 변경도 없었다. 실패 테스트를 고쳐 성공한 것으로 바꾸지 않고
+pytest 종료 코드 1과 helper 종료 코드 0을 분리해서 기록했다.
+
+리뷰 수정 뒤 추가 정상 호출에서는 **회수 전 host의 private 파일 읽기가 실제
+PermissionError로 거부됨**까지 확인했다. 이후 같은 생성 주체의 helper가 4개를
+969 ms에 회수하고 host empty 검증과 worktree 회수를 통과했다. 따라서 이번 검증은
+권한 문제가 없는 폴더만 지운 결과가 아니다. 이 호출의 agent 시간은 13,906 ms,
+usage는 input 36,844 / cached input 18,048 / output 307 / reasoning output 31이었다.
+
+첫 정상 호출의 agent 시간은 17,109 ms, usage는 input 38,101 / cached input 18,688 /
+output 334 / reasoning output 94 tokens였다. 실패 테스트 호출은 15,358 ms,
+input 38,385 / cached input 18,688 / output 317 / reasoning output 82 tokens였다.
+cached·reasoning은 각각 하위 관측치이며 합산하지 않는다. 이는 해당 호출 관측값이지
+전체 개발 비용이 아니며 단가를 적용하지 않아 달러 비용은 `null`이다.
+
+**코드 검증:** 최종 helper·coding agent 테스트 74개가 19.87초에 통과했다. 원 예외와
+부분 회수 개수를 유지하는 로그 저장 실패, 경로 교체·hardlink·초과 크기 입력 거부,
+실제 owned fake process의 attach 실패·timeout·leak 및 호출 수명 관리 경로를 포함한다.
+이 회귀는 실제 sandbox/ACL 호출과 분리했다. 전체 Ruff와 `git diff --check`도 통과했다.
+관련 helper·coding agent·local trial 통합 회귀 94개도 178.04초에 통과했고, 이 실행 이후
+추가된 중단/로그 실패 2개는 앞의 최신 74개 재실행에 포함됐다. 독립 reviewer는 별도
+회귀와 세 native 증거, 코드·문서 계약을 대조해 차단 사항 없음을 확인했다.
+
+**검증의 한계:** 이번 작업은 ML 품질 개선이나 전체 E2E 재실험이 아니다. 학습·final
+평가는 0회이며, 기존 실패 폴더와 #60 원본 실험을 수정하지 않았다. 기본 pytest/temp를
+지원하며, 별도 경로의 private 산출물·host 강제 종료·다른 Windows/CLI 조합까지 회수
+성공을 보장하지 않는다. 등록 범위 밖은 기존 workspace fail-closed를 유지한다.

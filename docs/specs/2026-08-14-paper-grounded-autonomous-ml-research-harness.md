@@ -659,7 +659,7 @@ JSON 이벤트와 구조화된 최종 응답을 사용한다. 이 옵션은 저�
 OS 실행에 필요한 환경과 Codex 로그인 위치만 전달하고 GitHub/GCP/API key 환경은 전달하지
 않는다. 이는 동일 OS 사용자에 대한 보안 sandbox를 보장하는 설계가 아니다.
 
-**Windows 입력 공개·회수 후속 설계 (#54A 승인, #54B 별도):**
+**Windows 입력 공개·회수 후속 설계 (#54A/B 별도 변경):**
 현재 candidate view는 검증한 private staging을 rename하여 `harness_in`으로 게시한다.
 내용·identity 검증 성공과 별도 sandbox 사용자의 실제 읽기 가능 여부는 다른 계약이다.
 원래 실패 작업 공간의 입력 디렉터리는 후속 읽기 전용 점검 시 남아 있지 않아, 당시
@@ -679,8 +679,8 @@ OS 실행에 필요한 환경과 Codex 로그인 위치만 전달하고 GitHub/G
   실패 비용을 보존하며, 기존 실패 폴더를 강제 삭제하거나 소유권을 탈취하지 않는다.
   기존 cleanup은 일부 파일을 지운 뒤 실패할 수 있으므로 workspace 전체 보존이 아닌
   잔여 workspace 보존과 외부 attempt 증거 보존을 구분한다.
-  새 산출물 소유권·회수 방법은 별도 승인 후 검증한다. 현재 cleanup 실패를 성공으로
-  바꾸거나 Controller에 후보를 자동 전달하는 변경은 승인된 것이 아니다.
+  B 진행 요청에 따른 회수 방법은 아래 계약으로 제한한다. 소유권 변경은 허용하지 않으며,
+  cleanup 실패를 성공으로 바꾸거나 Controller에 실패 후보를 전달하지 않는다.
 
 [OpenAI Windows sandbox 문서](https://learn.chatgpt.com/docs/windows/windows-sandbox)는
 별도 저권한 사용자와 파일 권한 경계를 설명하고, 세션의 특정 디렉터리 읽기 허용 기능을
@@ -718,6 +718,44 @@ volume64/file-ID128을 구분하며, 상위 비트를 잘라 비교하지 않는
 실패와 부분 적용은 별도 입력 접근 evidence 및 기존 agent receipt로 남기고 CLI를 시작하지
 않는다. 입력에 읽기 권한을 추가했다는 결과와 실제 sandbox 읽기 성공은 별개로 기록한다.
 실패한 권한 작업을 감추거나 쓰기 허용·상위 폴더 ACL 확장으로 자동 재시도하지 않는다.
+
+**#54B 구현 계약 — 등록된 Windows coding temp의 creator-side 회수:**
+2026-09-03 사용자의 B 진행 요청에 따라 새 candidate prepare의 임시 산출물만 다룬다.
+기존 실패 workspace, Judge/final/prediction, host 소유권 탈취와 ACL 추가는 비대상이다.
+설치 CLI의 `sandbox --permission-profile :read-only --include-managed-config` 읽기 전용
+점검에서 기존 sandbox 사용자가 실행됨을 확인했다. 실제 회수는 builtin `:workspace`와
+elevated 구현·managed constraints를 유지하며 새 profile이나 전역 설정을 만들지 않는다.
+공식 문서의 플랫폼 예시와 달리 현재 설치 CLI는 `sandbox` 뒤에 `windows` 없이 명령을
+받는다. 이 실행 경로가 거부되면 다른 shell·권한으로 재시도하지 않는다.
+
+- 적용은 Windows의 candidate 입력 identity가 있는 coding prepare뿐이다. Host가 새
+  `harness_out/.agent-tmp` anchor를 만들고 cwd·`.git`·output·anchor identity를 등록한다.
+  Codex 자체의 host 임시 환경은 유지하고, 명령 child의 TEMP/TMP/TMPDIR 및
+  PYTEST_DEBUG_TEMPROOT만 등록 root로 지정한다. agent에 이 경로를 안내한다.
+  이는 [공식 shell environment 설정](https://learn.chatgpt.com/docs/config-file/config-reference)의
+  `shell_environment_policy.set` 호출별 override를 사용하며 전역 설정은 수정하지 않는다.
+- 작은 호출 수명 관리 interface로 temp 회수를 candidate 증거 게시 뒤로 미룬다.
+  정상 순서는 agent process tree 회수 → 응답·변경 검증 → candidate commit/patch/receipt
+  보존 → temp 회수 → 기존 workspace 회수 → PreparedCandidate 반환이다.
+  process tree 회수가 확인되지 않으면 temp helper를 시작하지 않는다.
+- 회수 helper는 candidate가 아닌 Harness 소유 절대 script를 격리된 Python(`-I -S`)으로
+  같은 sandbox 주체에서 실행한다. 기존 process owner/gate 패턴, 별도 timeout 및 bounded
+  stdout/stderr를 사용한다. helper가 받을 수 있는 삭제 대상은 고정 anchor의 자식뿐이며
+  anchor 자체·입력·코드·`.git`·상위 폴더를 삭제하지 않는다.
+- 전체 대상은 삭제 전 identity·타입·alias를 확인한다. symlink/junction/reparse,
+  hardlink, anchor 교체·경로 이탈·확인 불가 상태에서는 실패한다. 동일 OS 주체의 악의적
+  동시 변경까지 격리하는 새로운 보안 sandbox를 제공하는 것은 아니다.
+- helper 응답과 실제 회수는 구분한다. Host가 anchor identity와 자식 부재를 다시 확인하고
+  기존 worktree identity/등록 해제 검사까지 통과해야 성공이다. 별도 temp cleanup sidecar에
+  정상·실패·부분 회수·중단/미실행을 기록하고 외부 attempt 증거에 포함한다.
+  기존 오류가 진행 중이면 그 오류를 보존하며 cleanup 오류는 추가 증거로 기록한다.
+- 기본 pytest/temp 사용이 지원 범위다. 별도 `--basetemp`나 직접 만든 private 폴더가
+  등록 root 밖에 있으면 자동으로 찾아 삭제하지 않는다. 기존 worktree fail-closed를
+  유지한다. Host 강제 종료로 finally가 실행되지 않은 상황까지 회수를 보장하지 않는다.
+
+pytest의 `0700` 생성과 지정 basetemp 재생성 때문에 경로 이동·host 사전 생성·retention
+설정만으로는 해결되지 않는다. 실제 검증은 새 합성 workspace에서 정상/실패 pytest와
+회수, 원본·sentinel 보존을 확인하고 mock 결과와 구분한다. 학습·final 재평가는 하지 않는다.
 
 agent는 initial card와 validation feedback만 받아 현재 champion에서 한 가설을 구현한다.
 채점 규칙·정답·final 결과·grant·Judge 경로는 prompt/context에 넣지 않는다. 저장소 내부

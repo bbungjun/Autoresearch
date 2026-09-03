@@ -7,6 +7,7 @@
 모델·receipt 보존을 조립한다. Agent의 개선 주장은 수치 판정과 분리한다.
 Coding prepare에만 validation 입력 identity를 전달하며 실제 Windows Codex adapter가
 입력 READ 접근을 준비한다. Host prediction과 final 실행에는 이 권한 요청을 전달하지 않는다.
+Coding temp 회수는 candidate commit/patch 증거를 게시한 뒤 수행하고 실패 후보는 반환하지 않는다.
 
 [비책임] LLM 프로세스 실행은 coding_agent, 학습 프로세스 회수는 runner, 수치 판정은
 domain, final 권한 발급·재개 정책은 Controller, immutable run 입력은 run_inputs가 소유한다.
@@ -14,6 +15,7 @@ domain, final 권한 발급·재개 정책은 Controller, immutable run 입력�
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import asdict
 from hashlib import sha256
 import json
@@ -122,7 +124,7 @@ class LocalResearchTrialRunner:
             with open_candidate_workspace(
                 self._workspace_request(request.champion_sha), source=self._source,
                 metadata=self._validation_metadata,
-            ) as workspace:
+            ) as workspace, ExitStack() as cleanup_stack:
                 if os.path.lexists(workspace.root / "harness_config.json"):
                     raise TrialExecutionError("prepare", "candidate_runtime_config")
                 response = self._agent.run(CodingAgentRequest(
@@ -130,6 +132,7 @@ class LocalResearchTrialRunner:
                     output_schema=AgentExperimentResponse.model_json_schema(),
                     artifact_root=attempt / "agent", mode="workspace-write",
                     candidate_inputs=CandidateInputIdentity(workspace.candidate_view_sha256, workspace.evaluation_id),
+                    cleanup_stack=cleanup_stack,
                 ))
                 evidence.extend(response.artifacts)
                 explanation = AgentExperimentResponse.model_validate(response.response)
@@ -153,6 +156,10 @@ class LocalResearchTrialRunner:
                         "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens",
                     )},
                 }))
+            for name in ("temp-cleanup.json", "temp-cleanup.stdout.log", "temp-cleanup.stderr.log"):
+                cleanup_artifact = attempt / "agent" / name
+                if cleanup_artifact.exists():
+                    evidence.append(_file_evidence(cleanup_artifact))
             return PreparedCandidate(request.trial_id, request.card, request.champion_sha,
                                      candidate_sha, fingerprint, tuple(evidence))
         except (CodingAgentError, WorkspaceError, RunnerError, JudgeError,
