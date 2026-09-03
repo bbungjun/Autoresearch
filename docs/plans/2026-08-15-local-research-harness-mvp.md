@@ -2068,7 +2068,12 @@ Final은 기존 5-seed paired batch이며 판정 정책이나 baseline을 성공
 다른 6개 지표의 σ는 유효하며 raw 값·평균·σ는 별도 calibration 원본에 보존했다.
 평균·σ와 문제 해석은 [포트폴리오 §12](../reports/2026-09-03-local-autonomous-experiment-e2e.md#12-실패한-코드를-고쳤는가-정상-코드에서-다시-시작했는가--69)에 기록했다.
 σ를 그대로 유지하고 기존 `inconclusive / insufficient_baseline_noise` 경로로 복구 실증과
-품질 채택을 분리할 수 있지만, 사전 실행 조건 변경은 사용자 결정 전까지 적용하지 않는다.
+품질 채택을 분리할 수 있다. 이후 사용자가 이 방향의 계속 진행을 승인했다.
+**실행 조건 확정:** 측정된 σ=0과 기존 판정 기준을 유지한다. 복구 여부는 실패 코드·
+agent 수정·재학습·채점의 증거로 판단하고, final 성능 판정은
+`inconclusive / insufficient_baseline_noise`가 나와도 그대로 기록한다.
+기존 runtime의 새 final 5-seed paired batch(10 fit)와 기록 Judge 1회는 수행한다.
+새 모드·임계값 변경·seed 재탐색은 하지 않으며 추가 수정 기회나 재실행도 허용하지 않는다.
 
 **자율성 관측:** 사전 가설·예산·오류 주입·실행 입력 준비는 운영자의 설정이다. 한 번의
 실증 호출 시작부터 REPORT 또는 실패 종료까지의 사람 승인·코드 수정·수동 복구를 별도로

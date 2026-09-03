@@ -579,7 +579,8 @@ baseline·E5-small·LightGBM, 별도 5-seed calibration을 사용한다. 첫 후
 
 사전에 고정한 조건을 따라 실제 agent 복구 호출 전에 이 제약을 보고했다. σ에 epsilon을
 대입하거나 통과하는 fixture seed를 탐색하지 않았다. 복구 능력 측정과 성능 채택을 분리해
-진행할지 판단 중이며, 실제 agent 복구·final·기록 Judge 호출은 아직 0회다.
+진행할지 사용자에게 확인했고, σ=0과 판정 기준을 유지한 채 복구 실증을 계속하도록 승인받았다.
+실행 전 기준으로 실제 agent 복구·final·기록 Judge 호출은 0회이며, 이후 관측을 별도로 기록한다.
 기존 #60의 관측 대상 208개 파일은 이전 hash와 모두 일치했고 final marker도 동일했다.
 새 fixture의 final 평가 ID는 기존과 다르며 기존 raw 기록·판정 기준은 수정하지 않았다.
 
