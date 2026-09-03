@@ -1890,7 +1890,7 @@ A의 새 candidate-safe 입력 한정 읽기 공개·합성 검증을 사용자�
 - [x] 설치된 CLI의 지원 방식 확인, 새 합성 입력으로 재현·계약 테스트 작성
 - [x] 최소 구현 및 새 합성 입력 Windows native 읽기·권한 보존 검증
 - [x] 최종 관련 회귀 122개 통과 및 독립 코드·문서·native 증거 리뷰
-- [ ] B의 새 임시 산출물 소유권·회수 계약을 별도로 확정
+- [x] B의 새 등록 temp를 같은 sandbox 주체로 회수하는 계약 확정(소유권·ACL 변경 없음)
 
 **승인 전 조사:** source에서 private staging rename은 확인했다. 보존된 실패
 workspace에는 `harness_in`이 없어 당시 입력 ACL은 확정하지 못했다. 기존 폴더·권한·
@@ -1913,7 +1913,30 @@ Judge에는 적용하지 않는다. 부분 권한 실패에서는 CLI 미실행�
 관련 문제 해결·검증·한계는 E2E 포트폴리오 보고서 §9에 함께 기록했다.
 최신 helper·coding agent·local trial·report 통합 회귀는 122 passed(194.84초),
 전체 Ruff·diff 검사도 통과했다. Linux 전체 CI와 최종 merge 상태는 #54에 연결된
-부분 PR의 checks/merge 기록을 정본으로 한다. B가 남아 있어 #54를 자동 종료하지 않는다.
+부분 PR의 checks/merge 기록을 정본으로 한다. A merge 시점에는 B가 남아 #54를 열어 두었다.
+
+**B 실행 계획 (2026-09-03):** A의 PR #65 merge 이후 #54의 새 연결 브랜치에서 진행한다.
+pytest 소스에서 `0700` 및 지정 basetemp 재생성을 확인했고, 공식 sandbox CLI의 읽기 전용
+실행에서 기존 sandbox 주체를 확인했다. 독립 설계 리뷰의 핵심은 **증거 보존 뒤 회수**와
+원래 agent·회수 helper 두 process tree의 종료 검증이다.
+
+- [x] 기존 실패 기록·pytest/회수 소스·공식 CLI 지원 조사, issue 연결 브랜치 생성
+- [x] spec의 B 계약·권한 유지·지원 범위·독립 리뷰 반영
+- [x] candidate 증거 보존 뒤 cleanup 실패/후보 미반환 회귀부터 RED
+- [x] 등록 temp·child 환경·deferred cleanup과 bounded same-sandbox helper 최소 구현
+- [x] identity 교체·alias·거짓 성공·timeout·interrupt·process leak·Judge/타 플랫폼 회귀
+- [x] 새 합성 공간에서 정상/실패 pytest·실제 회수 및 sentinel/입력/기존 증거 보존 검증
+- [x] 관련 통합 회귀·독립 코드/문서/native 증거 리뷰
+
+B 검증은 통합 회귀 94개와 이후 추가 중단/로그 실패를 포함한 최신 helper·coding agent
+74개 재실행으로 확인했다. 실제 정상/실패 pytest 각각 4개 temp를 회수했고, 최신 정상
+호출은 host 읽기 거부 → 같은 주체 회수 → host empty → worktree 회수까지 확인했다.
+측정값과 한계는 E2E 포트폴리오 보고서 §10에 기록한다. 전체 CI·PR·merge의 최종 상태는
+이 브랜치에 연결된 PR의 checks/merge 기록을 정본으로 하며, CI 통과와 독립 리뷰 승인
+확인 후 사용자 기존 지시에 따라 squash merge한다.
+
+기존 실패 폴더, 상위 폴더 권한, 전역 Codex 설정, Judge/final, 학습 실험은 변경하지 않는다.
+실제 회수 경로가 정책에 거부되거나 새 권한이 필요하면 구현을 우회하지 않고 중단한다.
 
 ### Task 7 전체 완료 체크리스트
 
