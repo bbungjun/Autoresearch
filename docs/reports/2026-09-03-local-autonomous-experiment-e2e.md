@@ -333,3 +333,36 @@ Prediction 설정에는 명시된 embedding 값만 넣어 agent가 바꾼 학습
 
 설계·측정 원본의 정본은 [Research Harness spec](../specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md)과
 [Task 7 구현·실측 기록](../plans/2026-08-15-local-research-harness-mvp.md)입니다.
+
+## 8. 실험에서 발견한 설명 문제를 제품 개선으로 연결하기 — #62
+
+**문제:** 새 문맥 Judge가 지적한 것은 모델 성능 문제가 아니라 연구 기록의 설명 방식이었다.
+하나의 trial에서 단일 seed 점수와 5-seed 평균 개선폭을 같은 범위로 표시하면, 정확한 값도
+불일치처럼 보인다. 이는 agent에게 원본 숫자만 전달하는 것으로는 충분하지 않다는 사례다.
+
+**해결:** 새로운 v2 기록에서 지표별 관측 범위·seed·집계 방법을
+분리하고, 사전에 고정한 판정 규칙과 threshold를 같이 전달하도록 구현했다. 기존 module의
+projection을 사용해 Judge 입력과 사람이 읽는 Markdown이 같은 설명을 소비하게 한다.
+공개 interface를 추가하거나 수치 Judge를 바꾸는 대신 설명 책임을 기존 report module
+안에 유지했다. 기존 v1 기록을 덮어쓰는 방식은 원본 prompt/응답/digest의 연속성을 깨므로
+선택하지 않았다. 완전한 근거가 없으면 수치를 보존하되 범위는 unknown으로 표시한다.
+
+**결과:** 기존 구현에서 새 계약 테스트의 RED를 확인한 후 구현했다. 독립 reviewer가
+보고서 관련 테스트 **63개 통과**를 재확인했고 차단 발견 사항은 없었다. 검증에는 서로
+다른 screening/confirmation 값, 실제 수치 Judge의 threshold 경계, 부분·중복·미연결 근거,
+null 값과 원본 불일치, 기록 유실 및 내용 변조, v1 게시 중단 복구를 포함한다. 수정 전
+구현에서 고정한 v1 record·prompt·Markdown 해시 3개도 모두 일치한다.
+
+실제 #60 기록의 연결된 **12쌍**을 읽기 전용으로 메모리에 투영해 세 trial의 범위와 원래
+수치를 대조했다. NDCG@10 기준으로 Trial 2의 screening 점수 **0.7850671701**과 confirmation 평균 delta
+**0.0369729649**는 서로 다른 범위로 분리됐다. Final 평균 delta **0.0252086224**가
+threshold **0.0252896838**에 못 미친다는 기존 판정도 그대로 설명된다. 이 수치는 표시용
+반올림이며 실제 비교는 원래 정밀도로 확인했다. 기존 완료 관측 파일 **208개**의 해시가
+전부 같았고 final 소비 marker도 보존됐다. 전체 Ruff와 diff 검사도 통과했다.
+추가 전체 회귀·CI 및 병합 결과는 [#62](https://github.com/bbungjun/Autoresearch/issues/62)에
+연결된 PR의 검증 기록을 정본으로 확인한다.
+
+**한계:** 개선된 설명을 실제 fresh-context LLM이 어떻게 평가하는지는 다시 측정하지
+않았다. 테스트와 읽기 전용 대조로 projection을 검증했으며, Judge 정확도 향상이나 모델
+성능 향상을 이번 변경의 성과로 주장하지 않는다. 이전 실험 원본을 다시 게시하거나
+새 runtime으로 재실행하지 않았으며 v1 호환성은 기존 입력 계약의 report 게시에 한정한다.

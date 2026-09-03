@@ -1835,6 +1835,42 @@ validation promote·무변경·주입 중단 복구를 구분한다. 이번 후�
 통과했다. 독립 reviewer가 최종 코드·문서·실측 원본의 일치를 확인했고 차단 발견 사항은 없다.
 PR CI 및 병합 상태는 #60에 연결된 GitHub PR을 정본으로 확인한다.
 
+### 연구 기록의 지표 범위·판정 기준 설명 개선 — #62
+
+**문제:** #60의 fresh-context Judge가 screening 절대값과 confirmation 평균 delta를
+같은 비교의 값으로 읽을 수 있는 설명 불일치를 발견했다. 원본 수치는 정확했고 sigma도
+있었지만, 집계 범위와 판정 규칙이 자기완결적으로 설명되지 않았다.
+
+**해결 방향:** spec §10.1.2에 따라 기존 report module 내부 projection만 보완한다.
+새 추상화나 수치 판정 변경 대신 새 기록의 metric group과 policy 설명을 함께 만든다.
+기존 v1 기록은 다시 쓰지 않고 버전에 맞게 검증·재개하여 실험 증거의 연속성을 지킨다.
+
+- [x] 기존 이슈·원본 근거·수치 Judge·보고서 lifecycle 검토 및 이슈 연결 브랜치
+- [x] 기존 spec에 범위 분리·정책 설명·v1 보존 계약 추가
+- [x] 서로 다른 screening/confirmation golden 및 v1 호환 RED
+- [x] report projection·Judge 입력·Markdown 최소 수정 및 GREEN
+- [x] 집중·공유 동작 회귀, 독립 리뷰, 원본 불변 확인
+- [x] 포트폴리오 문제·해결·결과 기록과 문서 독립 대조
+
+CI·PR·merge는 #62에 연결된 GitHub PR의 최신 head 검증 결과를 확인한 뒤 진행한다.
+최종 상태와 추가 전체 회귀 결과는 해당 PR을 정본으로 확인한다.
+
+**기록 원칙:** 기존 #60 성과와 Judge 지적을 역사적 사실로 유지한다. 이번에는 학습이나
+실제 LLM을 다시 실행하지 않으며, “새 Judge가 더 정확해졌다”는 실측 성과를 주장하지 않는다.
+진행 중 설계와 테스트 결과는 이 절과 기존 실측·포트폴리오 보고서에 함께 갱신한다.
+
+**선행 검증:** 새 범위 분리·정책·버전 선택 회귀에서 기존 구현의 RED를 확인했다.
+v1 호환 golden은 수정 전 `5025926` 구현으로 record/prompt/Markdown의 hash를 계산해
+고정했다. #60의 완료 관측 파일 208개를 읽기 전용으로 대조했으며 모두 기존 hash와 같았다.
+독립 설계 리뷰에서 새 코드의 전체 runtime 재실행과 report interface의 v1 재사용을
+구분했고, record 유실 뒤 후속 산출물이 남은 경우 새 게시를 막는 조건을 추가했다.
+
+**구현·집중 검증:** worker의 report/context/runtime 및 마지막 보강 회귀 총 87개가
+통과했고, 독립 reviewer가 report/context 63개 통과를 별도로 확인했다. 차단 발견 사항은
+없다. 기존 v1 record·prompt·Markdown golden 해시 3개가 일치하고, 원본 완료 관측 파일
+208개도 변경되지 않았다. 실제 기록의 연결된 12쌍을 파일 게시 없이 메모리에 투영해
+세 trial의 scope와 원래 수치를 확인했다. 전체 Ruff와 `git diff --check`도 통과했다.
+
 ### Task 7 전체 완료 체크리스트
 
 - [x] **지표별 baseline σ 측정** (D5) — validation slate에서 Task 6의 Harness baseline 설정을 seed

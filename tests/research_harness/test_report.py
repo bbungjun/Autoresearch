@@ -185,7 +185,7 @@ def test_orphan_attempt_costs_use_one_duration_and_one_token_receipt(finished):
     assert record["attempts"][0]["linked_to_trial"] is False
 
 
-def final_case(finished, *, count=5, wrong_role=False, champion=None, candidate_value=0.5, feedback=()):
+def final_case(finished, *, count=5, wrong_role=False, champion=None, candidate_value=0.5, feedback=(), deltas=()):
     root, contract, _, parent = finished
     champion = champion or contract.baseline_sha
     lineage = (contract.baseline_sha,) if champion == contract.baseline_sha else (contract.baseline_sha, champion)
@@ -202,8 +202,8 @@ def final_case(finished, *, count=5, wrong_role=False, champion=None, candidate_
                         champion if champion != contract.baseline_sha else None,
                         "sha256:" + "d" * 64 if champion != contract.baseline_sha else None,
                         str(contract.handoff.final_holdout_id), 1,
-                        _ledger_metrics(_feedback_metrics(_score_for(candidate_value, contract.handoff.final_holdout_id), ())) if count == 5 else (),
-                        "discard" if count == 5 else "inconclusive", "primary_not_improved" if count == 5 else "prediction_failed",
+                        _ledger_metrics(_feedback_metrics(_score_for(candidate_value, contract.handoff.final_holdout_id), deltas)) if count == 5 else (),
+                        "discard" if count == 5 else "inconclusive", "primary_threshold_not_met" if count == 5 else "prediction_failed",
                         100, None if count == 5 else "prediction_failed", tuple(artifacts), lineage, marker,
                         failure_stage=None if count == 5 else "pair")
     ledger = open_trial_ledger(root / "experiment-ledger.jsonl")
@@ -212,7 +212,7 @@ def final_case(finished, *, count=5, wrong_role=False, champion=None, candidate_
                                   datetime.now(UTC), tuple(artifacts), marker))
     result = ControllerRunResult(ControllerConclusion.NO_IMPROVEMENT if count == 5 else ControllerConclusion.INCONCLUSIVE,
                                  champion, len(feedback), feedback, JudgeDecision.DISCARD if count == 5 else None,
-                                 "primary_not_improved" if count == 5 else "prediction_failed", marker)
+                                 "primary_threshold_not_met" if count == 5 else "prediction_failed", marker)
     return root, contract, result, parent
 
 

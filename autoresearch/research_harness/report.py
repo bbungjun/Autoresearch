@@ -3,7 +3,8 @@
 [파이프라인] Controller의 validation/final 수치 판정이 끝난 뒤 사람에게 근거를
 전달하는 마지막 구간이다. 기록 Judge는 새 read-only context에서 설명만 검토한다.
 [기능] immutable 입력·ledger·attempt를 대조해 사실과 자기 주장을 분리하고, 단일
-Judge 호출 intent·복구·관측 비용·안전한 Markdown을 write-once 게시한다.
+Judge 호출 intent·복구·관측 비용·안전한 Markdown을 write-once 게시한다. v2는
+지표별 관측 범위와 기존 판정 정책을 설명하며 이미 게시된 v1 바이트는 보존한다.
 [비책임] 모델 채점·승격·final 소비·feedback 추가는 수행하지 않는다. 동일 OS의
 적대적 탐색을 완전히 차단하는 격리나 미관측 비용 추정도 제공하지 않는다.
 """
@@ -177,7 +178,85 @@ def _training_summary(value: dict | None) -> dict | None:
     return summary
 
 
-def _collect_record(root: Path, contract: RunInputContract, result: ControllerRunResult) -> dict:
+def _metric_groups(trial: dict, pairs: list[dict], contract: RunInputContract) -> dict:
+    """Ledger 값은 바꾸지 않고 완전히 연결된 pair 집합에만 범위를 부여한다."""
+    own = [pair for pair in pairs if pair["trial_id"] == trial["trial_id"]]
+    screening = [pair for pair in own if pair["seed"] == contract.screening_seed]
+    confirmation = [pair for pair in own if pair["seed"] in contract.confirmation_seeds]
+    confirmed = (len(confirmation) == 5 and {pair["seed"] for pair in confirmation} == set(contract.confirmation_seeds))
+    screened = len(screening) == 1 and trial["seed"] == contract.screening_seed
+    final = trial["split"] == "final_holdout"
+    values = trial["observed_metrics"]
+    groups = {}
+    for name in ("candidate_absolute", "decision_delta"):
+        delta = name == "decision_delta"
+        metrics = {key.removeprefix("delta__") if delta else key: value for key, value in values.items()
+                   if key.startswith("delta__") == delta}
+        confirmation_reason = trial["reason_code"] in {"promotion_threshold_met", "primary_threshold_not_met", "guardrail_regression"}
+        use_confirmation = final or (delta and confirmation_reason)
+        selected = confirmation if use_confirmation else screening
+        known = (confirmed if use_confirmation else screened) and bool(metrics)
+        if delta:
+            known = known and (confirmation_reason if use_confirmation else trial["reason_code"] == "primary_not_improved")
+        if trial["failure_reason_code"] is not None:
+            known = False
+        if known:
+            for metric, observed in metrics.items():
+                samples = []
+                for pair in selected:
+                    baseline = pair["metrics"]["baseline"].get(metric)
+                    candidate = pair["metrics"]["candidate"].get(metric)
+                    samples.append((baseline - candidate if metric in {"log_loss", "brier"} else candidate - baseline)
+                                   if delta and baseline is not None and candidate is not None else None if delta else candidate)
+                expected = math.fsum(samples) / len(samples) if all(value is not None for value in samples) else None
+                # Source arithmetic consistency only, never a tolerance for Judge threshold comparisons.
+                if (expected is None or observed is None
+                        or not math.isclose(expected, observed, rel_tol=1e-12, abs_tol=1e-12)):
+                    known = False
+                    break
+        scope = "final_confirmation" if final else "validation_confirmation" if use_confirmation else "validation_screening"
+        aggregation = ("mean_of_paired_direction_normalized_deltas" if use_confirmation else "single_pair_direction_normalized_delta") if delta else (
+            "arithmetic_mean" if final else "single_value")
+        groups[name] = {"status": "available" if known else "not_available", "scope": scope if known else "unknown",
+                        "seeds": sorted(pair["seed"] for pair in selected) if known else [],
+                        "aggregation": aggregation if known else "unknown", "metrics": metrics,
+                        "evidence_refs": [pair["evidence"] for pair in selected]}
+    return groups
+
+
+def _decision_policy(sigmas: dict[str, float]) -> dict:
+    """현재 수치 Judge의 gate를 설명할 뿐 기존 decision을 다시 계산하지 않는다."""
+    thresholds = {}
+    for metric in JudgeMetric:
+        sigma = sigmas.get(metric.value)
+        valid = type(sigma) in (int, float) and math.isfinite(sigma) and sigma > 1e-6
+        factor = 2.0 if metric is JudgeMetric.NDCG_AT_10 else -1.0
+        threshold = factor * sigma if valid else None
+        valid = valid and math.isfinite(threshold)
+        thresholds[metric.value] = {
+            "sigma": sigma, "factor": factor, "operator": ">=", "threshold": threshold if valid else None,
+            "status": "available" if valid else "not_available",
+            "direction": "baseline_minus_candidate" if metric in (JudgeMetric.LOG_LOSS, JudgeMetric.BRIER) else "candidate_minus_baseline",
+        }
+    return {
+        "authority": "explanation_only_not_rescoring",
+        "screening": {"metric": "ndcg_at_10", "operator": ">", "threshold": 0.0},
+        "confirmation": {"required_pairs": 5, "aggregation": "mean_of_paired_direction_normalized_deltas",
+                         "thresholds": thresholds, "comparison_tolerance": 0.0,
+                         "decision_order": "primary below threshold: discard; else any guardrail below threshold: revise; else promote"},
+        "validity": {"sigma": {"operator": ">", "threshold": 1e-6}, "coverage": "max(30, ceil(total * 0.20))",
+                     "coverage_applies_to": ["each ranking scored_slates / total_slates", "grouped ROC-AUC scored_groups / total_groups"],
+                     "score_requirements": "All seven metrics and global ROC-AUC must be finite; global ROC-AUC is not a promotion guardrail. "
+                     "Paired roles must share evaluation_id and positive row_count. Grouped null_key_rows must be zero; "
+                     "probability row_count must match; positive_count and negative_count must both be positive and sum to row_count."},
+        "interpretation": "Compare unrounded values using exact > or >=, with no tolerance. This is a sigma-based gate, not a p-value significance test.",
+    }
+
+
+def _collect_record(root: Path, contract: RunInputContract, result: ControllerRunResult,
+                    *, version: str = "research-record-v2") -> dict:
+    if version not in {"research-record-v1", "research-record-v2"}:
+        raise ReportError("record_version")
     frozen, state, ledger_digest = terminal_context(root, contract)
     linked: dict[str, tuple[str, str]] = {}
     for trial in state.trials:
@@ -193,7 +272,7 @@ def _collect_record(root: Path, contract: RunInputContract, result: ControllerRu
                "experiment-ledger.jsonl": ledger_digest,
                "controller-result.json": sha256(read_file(root / "controller-result.json")).hexdigest(),
                "controller-result-binding.json": sha256(read_file(root / "controller-result-binding.json")).hexdigest()}
-    attempts, final_pairs, durations = [], [], []
+    attempts, final_pairs, durations, linked_pairs = [], [], [], []
     token_values: dict[str, list[int | None]] = {name: [] for name in _TOKEN_NAMES}
     attempt_root = root / "attempts"
     if os.path.lexists(attempt_root):
@@ -283,6 +362,14 @@ def _collect_record(root: Path, contract: RunInputContract, result: ControllerRu
                         raise ReportError("pair_code_identity")
                 projected["observed_pair"] = {"baseline": _metrics(pair["baseline"], split_id),
                                                "candidate": _metrics(pair["candidate"], split_id)}
+                pair_path = f"attempts/{directory.name}/pair.json"
+                if version == "research-record-v2" and pair_path in linked:
+                    if (trial.evaluation_id != split_id
+                            or metadata["stage"] != ("final" if trial.split == "final_holdout" else "validation")):
+                        raise ReportError("pair_scope_identity")
+                    if failure is None:
+                        linked_pairs.append({"trial_id": trial.trial_id, "seed": metadata["seed"], "metrics": projected["observed_pair"],
+                                             "evidence": {"attempt_id": projected["id"], "path": pair_path, "sha256": sources[pair_path]}})
                 if metadata["stage"] == "final" and f"attempts/{directory.name}/pair.json" in linked:
                     if (metadata["trial_id"] != "final-holdout" or pair.get("baseline_sha") != contract.baseline_sha
                             or pair.get("candidate_sha") != result.champion_sha):
@@ -314,7 +401,7 @@ def _collect_record(root: Path, contract: RunInputContract, result: ControllerRu
                "failure_reason_code": trial.failure_reason_code, "champion_lineage": list(trial.champion_lineage)}
               for trial in state.trials]
     record = {
-        "version": "research-record-v1", "id": "run:terminal",
+        "version": version, "id": "run:terminal",
         "semantics": {
             "evaluation_id": "Identifies the shared evaluation snapshot/split, not a model run. Both roles of a paired comparison MUST share it.",
             "paired_roles": "Role (baseline/candidate), code SHA and seed distinguish runs within the same evaluation_id.",
@@ -340,6 +427,11 @@ def _collect_record(root: Path, contract: RunInputContract, result: ControllerRu
                                   "ledger and attempt durations overlap; only attempt durations are summed", "dollars/human interventions are unmeasured"]},
         "sources": sources,
     }
+    if version == "research-record-v2":
+        for trial in trials:
+            trial["metric_groups"] = _metric_groups(trial, linked_pairs, contract)
+            del trial["observed_metrics"], trial["metric_scope"]
+        record["run"]["decision_policy"] = _decision_policy(dict(contract.baseline_sigmas))
     return _redact(record, _private_strings(root, contract))
 
 
@@ -361,6 +453,13 @@ def _judge_prompt(record: dict) -> str:
         "The validation champion is not final adoption; only the final numeric decision determines baseline retention. "
         "Identify uncertainty. Every finding must reference existing "
         "record ids (run:terminal, trial:..., attempt:...). Return only the required strict JSON, in Korean.\n"
+        + ("metric_groups separate candidate absolute values from decision deltas. Validation absolute values are single-seed screening, "
+           "while confirmation deltas are mean_of_paired_direction_normalized_deltas across five paired seeds. "
+           "Do not subtract values from different scopes or mistake a screening absolute value for a confirmation mean. "
+           "Use each group's scope, seeds, aggregation and evidence_refs; unknown means the source is not established. "
+           "run.decision_policy explains existing numeric thresholds and directions, not a new judgment. "
+           "Preserve the recorded decision even if all metric means improve; promotion also requires the sigma thresholds.\n"
+           if record["version"] == "research-record-v2" else "")
         + json_bytes(record).decode("ascii")
     )
 
@@ -517,17 +616,41 @@ def _render_report(record: dict, review: dict) -> bytes:
         for metric in JudgeMetric:
             lines.append(f"| {_safe_text(metric.value)} | {_safe_text(means['baseline'][metric.value])} | {_safe_text(means['candidate'][metric.value])} |")
         lines.append("")
+    if record["version"] == "research-record-v2":
+        policy = record["run"]["decision_policy"]
+        lines += ["## 기존 수치 Judge 정책 (설명이며 재채점 아님)", "",
+                  "- 유효한 screening NDCG@10 delta > 0일 때만 confirmation을 진행합니다.",
+                  "- Confirmation/final은 서로 다른 5개 seed의 paired 방향 정규화 delta 평균입니다.",
+                  "- Primary delta >= 2σ, 여섯 guardrail 각각 delta >= -σ: primary 미달은 discard, 이후 guardrail 미달은 revise, 모두 통과하면 promote입니다.",
+                  "- 큰 값이 좋은 지표는 candidate−baseline, LogLoss/Brier는 baseline−candidate입니다.",
+                  "- 반올림 전 수치를 > 또는 >=로 비교하며 비교 tolerance는 0입니다. p-value 유의성 검정이 아닙니다.",
+                  "- 각 sigma > 1e-6가 필요하며 누락·무효 sigma의 threshold는 None으로 보존합니다.",
+                  f"- Coverage: {_safe_text(policy['validity']['coverage'])}; {_safe_text(policy['validity']['coverage_applies_to'])}",
+                  f"- Score validity: {_safe_text(policy['validity']['score_requirements'])}", "",
+                  "| 지표 | sigma | 배수 | 비교 | threshold | 방향 | 상태 |", "| --- | ---: | ---: | --- | ---: | --- | --- |"]
+        for name, item in policy["confirmation"]["thresholds"].items():
+            lines.append("| " + " | ".join(_safe_text(value) for value in (
+                name, item["sigma"], item["factor"], item["operator"], item["threshold"], item["direction"], item["status"])) + " |")
+        lines.append("")
     lines += ["## 가설과 실행 근거", "", _safe_text(record["run"]["card"]["hypothesis"]), ""]
     for trial in record["trials"]:
         lines += [f"### {_safe_text(trial['trial_id'])} / {_safe_text(trial['split'])}", "",
                   f"- 기준 SHA: {_safe_text(trial['base_sha'])}",
                   f"- Candidate SHA / diff: {_safe_text(trial['candidate_sha'])} / {_safe_text(trial['diff_fingerprint'])}",
                   f"- 판정 / 이유: {_safe_text(trial['decision'])} / {_safe_text(trial['reason_code'])}",
-                  f"- Evaluation / seed: {_safe_text(trial['evaluation_id'])} / {_safe_text(trial['seed'])}",
-                  f"- 관측 지표 범위: {_safe_text(trial['metric_scope'])}", "",
-                  "| 관측 지표 | 값 |", "| --- | ---: |"]
-        lines.extend(f"| {_safe_text(name)} | {_safe_text(value)} |" for name, value in trial["observed_metrics"].items())
-        lines.append("")
+                  f"- Evaluation / seed: {_safe_text(trial['evaluation_id'])} / {_safe_text(trial['seed'])}"]
+        if record["version"] == "research-record-v1":
+            lines += [f"- 관측 지표 범위: {_safe_text(trial['metric_scope'])}", "", "| 관측 지표 | 값 |", "| --- | ---: |"]
+            lines.extend(f"| {_safe_text(name)} | {_safe_text(value)} |" for name, value in trial["observed_metrics"].items())
+            lines.append("")
+        else:
+            for name, group in trial["metric_groups"].items():
+                lines += ["", f"#### {_safe_text(name)}", "",
+                          f"- 범위 / 상태: {_safe_text(group['scope'])} / {_safe_text(group['status'])}",
+                          f"- Seeds / 집계: {_safe_text(group['seeds'])} / {_safe_text(group['aggregation'])}",
+                          f"- 근거: {_safe_text(group['evidence_refs'])}", "", "| 관측 지표 | 값 (원래 ledger) |", "| --- | ---: |"]
+                lines.extend(f"| {_safe_text(metric)} | {_safe_text(value)} |" for metric, value in group["metrics"].items())
+                lines.append("")
     for attempt in record["attempts"]:
         lines += [f"- {_safe_text(attempt['id'])}: {_safe_text(attempt['stage'])}, seed={_safe_text(attempt['seed'])}"]
         if attempt["agent_claims"] is not None:
@@ -593,8 +716,23 @@ def publish_research_report(
             if _load_terminal(run_root, contract) != result:
                 raise ReportError("report_terminal_result")
             _validate_judge_parent(run_root, contract, judge_workspace_parent)
-            record = _collect_record(run_root, contract, result)
+            record_path = run_root / "research-record.json"
+            existing_record = read_file(record_path) if os.path.lexists(record_path) else None
+            if existing_record is None:
+                if any(os.path.lexists(run_root / name) for name in (
+                    "research-judge-intent.json", "research-judge-attempt", "research-judge.json",
+                    "research-report.md", "research-report-manifest.json", "research-judge-workspace-failure.json",
+                )):
+                    raise ReportError("record_missing")
+                version = "research-record-v2"
+            else:
+                version = read_json(record_path).get("version")
+                if version not in {"research-record-v1", "research-record-v2"}:
+                    raise ReportError("record_version")
+            record = _collect_record(run_root, contract, result, version=version)
             record_bytes = json_bytes(record)
+            if existing_record is not None and existing_record != record_bytes:
+                raise ReportError("record_projection_changed")
             manifest_path = run_root / "research-report-manifest.json"
             if os.path.lexists(manifest_path):
                 manifest = read_json(manifest_path)
