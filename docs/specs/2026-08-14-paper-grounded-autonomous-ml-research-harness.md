@@ -783,6 +783,67 @@ peak working set 25,493,504byte·peak commit 13,754,368byte를 관측했다.
 한 번씩 측정 결과이며 다른 하드웨어·동시 부하의 성능 보장은 아니다. 세 입력 모두
 현행 시간·메모리 안에서 처리돼 외부 행/파일 한도를 낮추지는 않는다.
 
+### 4.11 실제 Controller E2E 측정 (#60)
+
+§4.10의 baseline SHA·fixture·metadata·embedding model/revision·raw sigma와 seed
+42/101~105를 재사용한다. trusted Harness는 #58 수정 뒤 고정하며 학습 설정을 바꾸지 않은
+parser 보정 때문에 calibration을 반복하지 않는다. `max_trials=2`,
+`max_duration_seconds=3600`을 최초부터 고정한다. prediction에는 명시된 embedding
+설정만 넣어 candidate가 변경한 학습 기본값을 runtime 설정으로 덮어쓰지 않는다.
+
+실제 fixture의 registry 부재와 이전 실행 receipt의 final 미소비 기록을 함께 확인한다.
+승인된 실험 준비에서 정확한 fixture 아래 빈 `final-holdout-consumed` 디렉터리를 최초
+한 번 준비하고 별도 receipt를 남긴다. 부재만으로 과거 미소비를 단정하지 않으며 기존
+소비 evidence가 있으면 재생성하지 않는다. runtime/측정 도구에 자동 초기화·reset·marker
+삭제 기능을 추가하지 않는다. 상태 루트 전체가 삭제된 이력을 탐지하는 보장은 하지 않는다.
+
+수동 `measure_e2e`는 기존 `run_local_research`만 호출하고 새로운 Controller/재개 엔진을
+만들지 않는다. 매 호출의 config/script identity·실행 구간 시간·전후 관측·결과를 run
+산출물 밖의 새 측정 출력에 보존한다. 기존 출력은 거부하며 실패를 자동 재실행하지 않는다.
+측정 출력은 fixture/workspace/model/cache/run 산출물과 겹치지 않아야 한다.
+
+첫 호출은 첫 validation 완료 checkpoint 직후 명시적으로 `KeyboardInterrupt`를 주입한다.
+조건은 대상 `ledger.path`, `CheckpointRecord`,
+`checkpoint_id=trial-0001:validation-recorded`, `stage=validation_recorded`, 원래
+`append`의 `receipt.created=True`가 모두 일치하는 경우다. `append`의 fsync·lock 해제
+뒤에만 중단하며 `finally`에서 원래 메서드를 복원한다. 이미 checkpoint가 있거나 ledger
+상태를 확인할 수 없으면 중단 모드 실행을 거부한다. 이 증거는 **측정 경계에 주입한 중단**이며
+순정 CLI에 대한 외부 프로세스 종료 실험으로 부르지 않는다.
+
+관측은 일반 파일 bytes/JSON 읽기와 스트리밍 hash만 사용한다.
+`open_trial_ledger`, `read_state`, `load_terminal_result`, report 게시 API는 생성·복구를
+수행할 수 있어 관측에 사용하지 않는다. 누락·파손·미완성 마지막 행은 unavailable/partial로
+남기고 원본 tail을 수정하지 않는다. candidate/pair/execution receipt, ledger,
+terminal 결과·binding, 연구 기록·REPORT·manifest, 기록 Judge intent/attempt 원본,
+정확한 final marker의 존재와 hash를 포함한다. 단순 디렉터리 개수를 성공 호출 수로 부르지 않는다.
+
+같은 config의 두 번째 호출은 첫 trial의 candidate/receipt를 유지하고 그 trial의 agent·학습을
+반복하지 않아야 한다. 정상적인 두 번째 trial 및 종료 연구 기록 Judge 호출은 추가된다.
+세 번째 종료 재호출은 전체 agent/학습/final 반복 없이 기존 결과와 보고서를 재사용하는지
+원본 hash와 구현 회귀를 함께 확인한다. final은 한 marker 아래 5-seed paired 10 fit이다.
+
+실제 가설은 class weighting과 트리 복잡도 조절의 확률 보정·ranking 균형이다. 첫 trial은
+`scale_pos_weight=1.0`, 두 번째는 validation feedback에 근거해 같은 범위에서 agent가
+최소 수정한다. evaluator/label/split/metric/임계값은 변경하지 않는다. Windows의 알려진
+제약 때문에 coding 단계는 설치된 Python과 임시 데이터 없는 설정 테스트를 사용하고
+학습은 Harness가 맡는다. 새 설치·모델 다운로드·유료 API·GitHub 작업이나 접근 거부 우회는 하지 않는다.
+
+실제 무변경 paired receipt의 판정 재생, 실제 feedback/복구 실행, controlled golden의
+판정 분기 증거는 구분한다. 사용자가 승인한 Goal에서 성능 향상은 보장 조건이 아니다.
+실제 promote가 없으면 그 사실과 미검증 범위를 남기며 threshold나 원본을 바꿔 승격을
+만들지 않는다. 대표 품질 수치는 final 결과이며 시간·token의 관측 범위와 비용 null을 유지한다.
+
+2026-09-03 실측은 validation promote 뒤 final `discard / primary_threshold_not_met`로
+정상 종료했다. Final NDCG 개선폭 0.02520862238046171은 2σ=0.025289683785820496보다
+작았다. 이 결과를 근거로 임계값을 바꾸거나 final을 재소비하지 않는다. 세 번째 종료 재호출의
+관측 파일 208개는 모두 동일했다. 원본 증거·전체 지표·측정 범위는
+[실측 기록](../reports/2026-09-03-local-autonomous-experiment-e2e.md)을 따른다.
+
+새 문맥 Judge가 발견한 screening 절대값/confirmation delta의 설명 혼재와 판정 규칙
+설명 부족은 [#62](https://github.com/bbungjun/Autoresearch/issues/62)로 분리한다.
+sigma 값 자체는 이미 연구 기록에 존재하며, 실제 수치 계산 오류는 아니다. 현재 원본을
+재게시하지 않고 후속 보고 projection 계약에서 개선한다.
+
 ## 5. 목표 아키텍처
 
 아래는 MVP 이후 논문 계층까지 포함한 최종 구조다. MVP에서는 사람이 준 가설과
