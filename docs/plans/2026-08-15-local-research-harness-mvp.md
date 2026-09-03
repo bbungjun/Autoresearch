@@ -2208,12 +2208,36 @@ CI·merge 상태의 정본은 [PR #78](https://github.com/bbungjun/Autoresearch/
 새 final 소비는 이번 범위에 포함하지 않는다. 긴 경로 생성 성공과 sandbox/피처 실증
 성공은 분리해 기록한다.
 
+### Task 7E: Stage C 오류 전달 계약 보완 — #76 (구현·로컬 검증 완료)
+
+사용자가 #76 수정을 승인했다. `StageCError`의 frozen dataclass와 contextlib의 traceback
+대입 충돌을 해결하되, 공개 오류 종류·생성자 필드·안전한 문자열·식별자 축약은 유지한다.
+Python 예외의 traceback/context/cause 동작과 구조화 필드의 일반 대입·삭제 불변성을
+구분하는 최소 구현을 우선한다. 다른 예외 클래스를 일괄 변경하거나 #77의 경로 소비 문제를
+함께 수정하지 않는다.
+
+- [x] 실제 with/contextmanager·pytest 경계에서 원래 예외 객체·code·stage 보존 RED 작성
+- [x] 기존 사용처·필드 불변성 요구 확인 후 최소 수정 및 추적/연쇄·안전 메시지 회귀 검증
+- [x] fixture와 candidate 소비 회귀, 독립 수정 전 대조 (131 passed/2 skipped, RED10 failed/18 passed)
+- [x] spec·plan·포트폴리오 갱신; 타 예외 재현은 #79로 분리
+
+추가 metadata·final candidate view·입력 게시·workspace 회귀는 265 passed/1 skipped였다.
+skip은 기존 POSIX 실행 권한 전용 테스트이며 전체 Ruff·diff 및 로컬 문서 링크135개를 확인했다.
+
+CI·PR·merge 상태는 [#76의 연결 PR](https://github.com/bbungjun/Autoresearch/issues/76)을
+정본으로 확인한다. 사용자의 사전 승인에 따라 독립 리뷰·CI 통과 후 squash merge한다.
+
+기존 #60/#69/#71 증거와 final marker·실패 workspace를 보존한다. 실제 LLM coding·새 품질
+실험·final 소비는 수행하지 않는다. 오류 전달 수정으로 실패 작업 자체가 성공한 것으로
+기록하지 않는다.
+
 ### 잔여 검증 우선순위 — 2026-09-03 권고
 
 아래는 #68 문서 갱신 당시의 권고안이며 당시에는 실험 실행 승인이 포함되지 않았다.
 이후 첫 권고는 위 Task 7R (#69)에서 승인·실측했고, 코드 반영·CI·merge 상태는 PR #70을 따른다.
 현재 2번 피처 추가는 #71에서 시도했으나 회수 실패로 미완료다. #73의 테스트 수명 보완과
-#74의 중첩 경로 fixture 생성 수정에 이어 #76의 예외 전달과 #77의 candidate 입력 소비를 검증한 뒤
+#74의 중첩 경로 fixture 생성과 #76의 예외 전달 보완에 이어 #77의 candidate 입력 소비 및
+#79의 다른 예외 전달 계약을 검증한 뒤
 새 피처 실험과 3번 정책 수용 판단으로 돌아간다.
 실행 전 별도 이슈에서 실패 주입 위치·관측 범위·예산·종료 조건을 고정한다.
 

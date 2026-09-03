@@ -608,7 +608,7 @@ materialize_candidate_data_view(
 ) -> CandidateDataViewReceipt
 ```
 
-모든 dataclass는 `frozen=True, slots=True`, JSON model은 `extra="forbid", frozen=True`다.
+아래 값 객체 dataclass는 `frozen=True, slots=True`, JSON model은 `extra="forbid", frozen=True`다.
 `Path`가 포함된 receipt는 trusted Harness 프로세스 내부 값이며 candidate로 직렬화하지 않는다.
 
 | Type | Exact fields |
@@ -816,6 +816,15 @@ temp path를 그대로 보고하면 독립 run의 ID가 달라지는 것이 정�
 예상 가능한 producer, filesystem, Arrow, Pydantic 또는 domain 오류를 typed `StageCError`로
 번역할 때는 exception chaining도 억제한다. 따라서 `traceback.format_exception`을 포함한
 호출자 관찰 surface에도 원래 예외의 경로·입력 원문이 남지 않는다.
+
+**#76 오류 객체와 값 객체의 구분:** `StageCError`는 생성자 필드와 필드 기반 equality/hash를
+유지하는 slotted dataclass이며, code·stage·dt·count·identifier_prefix는 초기화 후 일반
+대입·삭제를 거부한다. 예외 객체 전체에 `frozen=True`를 적용하지 않으며 traceback·context·
+cause·suppress_context 등 Python 런타임 메타데이터는 기본 Exception 동작에 위임한다.
+with/contextmanager·pytest 경계에서 원래 예외 객체와 code/stage를 보존해야 한다.
+`raise ... from None`의 formatted traceback 억제를 유지하되 디버깅용 `__context__`를
+지우지는 않는다. 식별자는 UTF-8 16바이트 이내로 축약하고 `str`에는 그 존재 여부만 표시한다.
+다른 snapshot/Judge 예외의 동일 전달 충돌은 #79에서 별도로 검증하며 이번에 일괄 변경하지 않는다.
 
 ## 15. 구현 단계
 

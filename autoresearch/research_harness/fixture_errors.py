@@ -4,13 +4,14 @@
 fixture 입력·상태와 handoff 검증 실패를 안전한 reason code로 전달한다.
 
 [기능] Stage C 실패 code와 원문 식별자·경로를 메시지에 포함하지 않는 typed
-exception을 제공한다.
+exception을 제공한다. 구조화 필드는 생성 후 변경을 막되 traceback·cause 등
+Python 예외 전달 메타데이터는 기본 Exception 동작을 유지한다.
 
 [비책임] 일일 producer 실행, snapshot 생성, candidate view 게시와 재시도 정책은
 후속 Stage C orchestration 모듈이 담당한다.
 """
 
-from dataclasses import dataclass
+from dataclasses import FrozenInstanceError, dataclass
 from datetime import date
 from enum import StrEnum, unique
 
@@ -25,13 +26,24 @@ class StageCErrorCode(StrEnum):
     FIXTURE_REPRODUCIBILITY_MISMATCH = "fixture_reproducibility_mismatch"
 
 
-@dataclass(frozen=True, slots=True)
+# 구조 필드의 불변성을 아래 가드가 보장하므로 기존 필드 기반 hash를 유지한다.
+@dataclass(slots=True, unsafe_hash=True)
 class StageCError(Exception):
     code: StageCErrorCode
     stage: str
     dt: date | None = None
     count: int | None = None
     identifier_prefix: str | None = None
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name in self.__dataclass_fields__ and hasattr(self, name):
+            raise FrozenInstanceError(f"cannot assign to field {name!r}")
+        Exception.__setattr__(self, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if name in self.__dataclass_fields__:
+            raise FrozenInstanceError(f"cannot delete field {name!r}")
+        Exception.__delattr__(self, name)
 
     def __post_init__(self) -> None:
         if self.identifier_prefix is not None:

@@ -903,3 +903,52 @@ UNC/device 경로, 실제 sandbox 전체 동작은 보장하지 않는다. 실�
 #69의128개, #71의112개 관측과 각 final marker의 reference hash가 그대로임을 확인했다.
 실패 workspace와 원본 로그를 보존했다. AI assistant의 단계별 RED/GREEN·내용 동일성
 대조·독립 리뷰를 문제 해결 근거로 삼으며 생성 성공을 모델 성능 개선으로 표현하지 않는다.
+
+## 16. 실패 원인을 전달하는 과정의 2차 오류 제거 — #76
+
+**문제:** #71의 fixture 실패 뒤 `TypeError`가 덧붙어 원래 실패를 가렸다. #74에서는
+파일 I/O 없이도 StageCError를 contextlib 경계로 전달할 때 같은 충돌을 재현했다. 이는
+fixture 생성 실패와 별개인 오류 전달 결함이다. 에이전트가 실패 종류·단계를 해석하는
+입력의 신뢰성을 떨어뜨리지만 실제 복구율이나 비용 손실은 측정하지 않았다.
+
+**원인과 대안:** StageCError에 적용된 `frozen=True, slots=True`는 구조화 필드뿐 아니라
+contextlib가 수행하는 traceback 대입까지 막았다. Python의
+[예외 계약](https://docs.python.org/3/library/exceptions.html#BaseException.__traceback__)은
+traceback을 쓰기 가능한 필드로 정의한다. frozen 옵션만 제거하면 오류 종류·실패 단계도
+변경 가능해지므로 채택하지 않았다. contextlib를 우회하거나 TypeError를 삼키는 방법도
+원본 오류 전달 계약을 복구하지 않는다.
+
+StageCError 한 클래스에서 구조화 필드의 초기화 이후 일반 대입·삭제만 차단하고, 나머지는
+Exception의 기본 동작으로 전달하도록 했다. slotted dataclass의 생성자·필드 기반 동등성과
+hash·replace 동작은 유지했다. traceback·context·cause·suppression·notes는 Python 런타임
+동작을 따르며 잘못된 타입을 대입했을 때의 기본 거부도 유지한다. 오류 문자열과 UTF-8
+16바이트 식별자 축약은 바꾸지 않았다. 이는 일반 필드 불변성 계약이지 Python 내부 접근을
+통한 적대적 변조까지 막는 보안 장치가 아니다.
+
+**검증:** 구현 전 신규 회귀 24건은 10 failed, 14 passed / 1.20초였다. 실제 with와 중첩
+contextmanager·pytest 경계의 원본 전달, 런타임 메타데이터 갱신·원인 연쇄가 실패했고 기존
+필드 보호·메시지 계약은 통과했다. 수정 후 신규28건과 기존 모델28건은 56 passed / 0.35초였다.
+모든6개 오류 code에 대해 동일 객체와 code/stage 보존을 검사한다. 명시적 원인 연쇄는
+유지하고, `from None`이면 formatted traceback에도 하위 오류 sentinel이 노출되지 않는지
+확인한다. 숨긴 context를 삭제하거나 실패를 성공으로 바꾸지는 않는다.
+
+구현 비참여 reviewer의 오류·모델·fixture·candidate 회귀는 131 passed, 2 skipped /
+17.89초였다. skip은 기존 Windows symlink 생성 제한과 FIFO 미지원이며 신규 오류28건은
+모두 실행했다. 수정 전 클래스를 워크트리 변경 없이 메모리에서만 로드한 독립 대조는
+10 failed, 18 passed / 0.13초였다. 코드·문서 차단 발견은 없었다. 로컬 Python3.12 결과와
+Python3.11/3.12 원격 CI는 구분하며, CI·merge 상태는
+[#76의 연결 PR](https://github.com/bbungjun/Autoresearch/issues/76)을 정본으로 확인한다.
+
+추가 metadata·final candidate view·입력 게시·workspace 및 신규 오류 회귀 8파일은
+265 passed, 1 skipped / 118.44초였다. skip은 기존 POSIX 실행 권한 전용 테스트다.
+전체 Ruff·diff 검사와 문서 로컬 링크135개 검증이 통과했다. 기존 #60의208개, #69의128개,
+#71의112개 관측 및 각 final marker를 reference hash와 대조해 변경 없음을 확인했다.
+
+**범위와 후속:** 영향 조사에서 EvaluationSnapshotError와 JudgeError도 같은 최소
+contextlib 호출로 TypeError가 발생했다. 이는 직접 전달 충돌의 재현이지 모든 실제 E2E
+경로의 장애를 확인한 것은 아니다. 각 오류의 별도 계약을 검토하도록
+[#79](https://github.com/bbungjun/Autoresearch/issues/79)로 분리했고 이번에 일괄 수정하지 않았다.
+#77의 긴 경로 candidate 입력 소비는 그대로 남는다. 기존 raw 기록·final marker와 실패
+workspace를 보존하고 실제 LLM coding·추가 품질 실험·final 소비는 수행하지 않는다.
+AI assistant의 원인 재현·최소 수정·구현 비참여 검토를 기록하되, 오류 전달 개선을 모델
+품질이나 자율 복구 성공률 향상으로 표현하지 않는다.
