@@ -1194,8 +1194,8 @@ final metadata·권한 연결, checkpoint 영속화, 피처/임베딩·학습은
 | 1 (#44) | 로컬 21개 피처, 최소 embedding interface, 손 계산 및 시간 경계 테스트 | #45 CI 통과·머지 완료 |
 | 2 (#46) | 실제 로컬 GPU adapter, 모델 고정 revision/파일 해시, 캐시 분리, CUDA 추론·OOM 검증 | #47 CI 통과·머지 완료 |
 | 3 (#48) | 재학습 CLI, seed별 학습·예측, 입력 무결성과 완전 라벨 기간 검증 | #50 CI 통과·머지 완료 |
-| 4 | final 권한/metadata, checkpoint identity, 실제 coding agent·독립 Judge·REPORT 연결 (필요하면 여러 PR) | #51·#53 머지 완료, #55 기록 Judge/REPORT 진행 중 |
-| 5 | 5회 독립 재학습 calibration, E2E·복구·판정 시나리오와 품질/자율성/비용 실측 | 대기 |
+| 4 | final 권한/metadata, checkpoint identity, 실제 coding agent·독립 Judge·REPORT 연결 (필요하면 여러 PR) | #51·#53·#56 CI 통과·머지 완료 |
+| 5 | 5회 독립 재학습 calibration, E2E·복구·판정 시나리오와 품질/자율성/비용 실측 | #57 baseline/parser 실측 준비 |
 
 완료는 테스트 adapter의 성공이 아니라 실제 로컬 모델·agent의 완주와 증거 보존, 모든
 관련 PR의 main 머지다. 성능 개선은 성공 조건으로 강제하지 않는다. 합성 환경 결과를
@@ -1594,7 +1594,7 @@ spec §10.1.1이 정본이며 별도 framework나 LLM feedback loop는 추가하
 - [x] 단일 read-only Judge, intent crash/timeout/cleanup/잘못된 응답·동시 재개의 호출 횟수를 검증한다.
 - [x] 모든 attempt 시간·token coverage, private 경로 정제·Markdown 안전성·digest drift를 검증한다.
 - [x] 기존 harness-run 종료 단계에 연결하고 README/책임 지도/docstring을 갱신한다.
-- [ ] 독립 구현 리뷰·전체 Harness 회귀·CI·PR·squash merge와 검증 근거를 기록한다.
+- [x] 독립 구현 리뷰·전체 Harness 회귀·CI·PR·squash merge와 검증 근거를 기록한다.
 
 **결과:** report module과 내부 terminal/file helper, runtime 배선을 구현했다. 최초 RED는
 모듈 부재였으며 자격 증명 형태 텍스트 누출과 Judge cwd 회수 실패의 RED도 수정했다.
@@ -1607,7 +1607,8 @@ cleanup 실패 재개 문제를 발견·보완했다. 실제 `predictions.traini
 회귀는 84 passed(38.56초)였다. 전체 Harness 회귀는 추가 테스트 확장 전 수집 기준
 975 passed, 13 skipped(330.95초)였고 이후 새 테스트는 위 집중 회귀에 포함했다.
 경고 2개는 기존 MLflow/Pydantic deprecation이며 전체 Ruff와 diff 검사는 통과했다.
-현재 미해결 리뷰 차단 사항은 없으며 CI/PR/merge는 이어서 확인한다.
+현재 미해결 리뷰 차단 사항은 없다. #56은 head `9df55a08`의 Python 3.11/3.12,
+Feast/Postgres/lock/Ruff/이미지 CI 통과 후 `8dd67038`로 squash merge되었다.
 실제 5-seed 품질/자율성/비용은 다음 Task 7에서 측정하며 이 PR의 golden fixture 수치를
 실측 개선으로 표현하지 않는다. Windows 입력/pytest 회수 제약은 #54에서 계속 추적한다.
 
@@ -1629,10 +1630,81 @@ Judge는 확률 지표 개선과 ranking 악화를 구분했지만, **공유 eva
 앞선 Task가 전부 머지된 뒤에만 가능하다. σ 측정에 `harness-predict`(Task 6)와
 slate(Task 1)가 모두 필요하기 때문이다.
 
-- [ ] **지표별 baseline σ 측정** (D5) — validation slate에서 Task 6의 Harness baseline 설정을 seed
+### 첫 실측 PR — #57
+
+**문제:** 실제 단일 seed 학습·검토 호출은 확인했지만 7개 지표의 baseline 변동량과
+대용량 parser 자원 가정은 미측정이다. 기존 Recall@10 단일 관측이 1.0이므로 sigma
+퇴화 가능성도 있으며 이를 양수로 꾸며 판정을 열 수 없다.
+
+**해결:** spec §4.10에 따라 고정 baseline `8dd67038d98817b3b4a5f33a4d9dd5009c2ce9fd`를
+5회 독립 single-fit하고 평균/표본 표준편차를 원본 evidence와 함께 보존한다. 별도
+Controller/agent/final 실행 없이 수동 script만 조립한다. parser는 실제 ingestion과
+worker 자원 관측을 구분한다. 독립 설계 리뷰에서 유효 표본 5개 조건, exit 1의 원인
+불확실성, 합성 parser 입력과 실제 품질의 구분을 보완했다.
+
+- [x] 집계 golden test와 기존 실행 seam 기반 작은 calibration/benchmark script
+- [x] baseline 5회 독립 fit·raw metrics·sigma·모델/입력/seed identity·calibration ledger
+- [x] 최대 길이/escaping 및 상한 초과 입력의 parser wall time·메모리·결과 측정
+- [x] 실제 관측과 계산상 추정 구분, 문제/해결/결과 및 남은 gate 기록
+- [ ] 독립 리뷰·CI·PR·merge
+
+**결과(2026-09-03):** seed 101~105의 실제 새 학습·예측·workspace 회수·trusted validation
+채점을 각각 한 번 완료했다. 각 측정 구간은 23.164/22.343/21.590/21.891/21.048초였다.
+이는 입력 준비를 제외한 seed별 구간이며 전체 실행 시간으로 부르지 않는다. CPU LightGBM
+학습과 RTX 3070 Ti의 CUDA embedding 환경을 구분한다. agent 호출·final 호출은 모두 0회,
+달러 비용은 null이다. calibration ledger는 판정 없이 checkpoint만 기록한다.
+
+평균/σ 정본은 spec §4.10의 표이며, 다음 raw 값은 seed 101~105 순서다.
+
+| metric | seed 101 | seed 102 | seed 103 | seed 104 | seed 105 |
+|---|---:|---:|---:|---:|---:|
+| NDCG@10 | 0.7899734881782898 | 0.7623291746882846 | 0.7667907612828515 | 0.7594751443599095 | 0.7608938019522362 |
+| Recall@10 | 1.0 | 1.0 | 1.0 | 0.975 | 0.9875 |
+| NDCG@24 | 0.7899734881782898 | 0.7623291746882846 | 0.7667907612828515 | 0.7660869311805485 | 0.7642369330176171 |
+| grouped ROC-AUC | 0.8891304347826088 | 0.8826086956521738 | 0.8828804347826088 | 0.871195652173913 | 0.8766304347826088 |
+| PR-AUC | 0.4926719440965531 | 0.42213237704080014 | 0.4469881094813416 | 0.45680984833753735 | 0.3980600240817929 |
+| LogLoss | 0.1512527052763147 | 0.1571698395192578 | 0.1610946753466593 | 0.16664094026585577 | 0.15334836250286277 |
+| Brier | 0.03646694347932936 | 0.03683792545512561 | 0.03614668825484991 | 0.03640061090308878 | 0.03641856430190429 |
+
+원본 `calibration.json`의 SHA256은
+`c17e637b4e9b8f5595b95d7e732adcffbac243253cf2ab086991a73de0830123`이다.
+원본 모델/CSV/receipt와 ledger는 로컬 실험 산출물로 보존하며 커밋하지 않는다.
+기존 fixture의 학습 히스토리는 2일이고 validation은 160 slate인 합성 테스트베드다.
+실제 사용자 성능 또는 30일 운영 품질의 증거로 해석하지 않는다.
+
+**parser 관측:** Python 3.12.13/Windows에서 최대 길이 226byte × 300,000행,
+총 67,800,039byte의 두 유효 입력을 측정했다. 일반 문자 입력은 실제 ingestion
+3.998초·성공, 별도 worker 관측 3.694초·성공이었다. 관측 worker의 peak working set은
+25,337,856byte, peak commit은 13,586,432byte였다. 이 메모리는 같은 parser의 별도
+관측 프로세스 값이며 ingestion 부모를 포함한 전체 메모리로 표시하지 않는다.
+
+backslash-heavy 입력은 ingestion 3.356초에 `invalid_predictions`/`parser_subprocess`로
+실패했다. 별도 관측도 3.292초/exit 1이었고 peak working set 25,513,984byte,
+peak commit 13,783,040byte, 부분 출력 251,155행·83,885,770byte를 남겼다.
+worker의 종료 코드는 원인을 구분하지 못하므로 receipt의 cause는 `unknown`을 유지한다.
+코드와 부분 출력을 대조하면 JSON escaping으로 한 행이 334byte가 되고, 다음 행을
+더하면 83,886,104byte로 현행 80MiB(83,886,080byte)를 넘는다는 설명과 일치한다.
+완전한 예상 JSONL은 100,200,000byte다. 이 계산과 실패 관측을 근거로 별도 수정한다.
+
+300,001행/227byte 물리 행/65MiB+1byte 음성 입력은 모두 거부됐다.
+원본 `benchmark.json` SHA256은
+`ba60b89101595e02a915d0d3679f1e827fbc1f47b60e395480010760df035104`이다.
+현재 script/집중 테스트는 독립 리뷰에서 18 passed(1.87초), Ruff·diff check를 통과했다.
+발견했던 불완전 telemetry JSON 회수 오류는 관측 불가/null과 기존 실패 증거를 보존하도록
+RED→GREEN으로 보완했다. 실제 parser 상한 변경은 이 측정 PR에 섞지 않는다.
+σ 임계값을 임의로 조정할 필요는 현재 없지만 `2σ/-1σ` 실용성과 E2E는 아직 미검증이다.
+#57만으로 Goal 5 전체를 완료 처리하지 않는다.
+
+실제 evidence 독립 감사에서 checkpoint 12개·artifact hash 54건, 7개 지표 재계산,
+서로 다른 학습 split/모델 hash 5개와 benchmark 파일 hash 7건이 일치했다.
+parser 상한 보정은 [#58](https://github.com/bbungjun/Autoresearch/issues/58)로 분리했다.
+
+### Task 7 전체 완료 체크리스트
+
+- [x] **지표별 baseline σ 측정** (D5) — validation slate에서 Task 6의 Harness baseline 설정을 seed
       5개로 **5회 독립 재학습**한 뒤 같은 slate를 점수화해 primary와 모든 guardrail의
       표준편차를 각각 구하고 ledger에 기록한다. 측정 전에는 `compare()`가 판정할 수 없다
-- [ ] 측정된 지표별 σ map과 baseline 지표 절대값을 이 plan과 spec에 기록한다 — 이후
+- [x] 측정된 지표별 σ map과 baseline 지표 절대값을 이 plan과 spec에 기록한다 — 이후
       실험의 기준선이다
 - [ ] 5-seed 실측 분포와 의도된 개선·무변경 candidate 경로를 보고 `2σ/-1σ`,
       `σ > 1e-6`, 지표별 20%·30개 coverage 하한이 실용적인지 재조정한다. 변경이 필요하면

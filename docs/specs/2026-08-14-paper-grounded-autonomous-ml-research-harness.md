@@ -692,6 +692,74 @@ coding agent가 feedback을 읽어 구현을 조정하며, 별도 LLM planner fr
 않는다. 후속 #55의 context-free 연구 기록 Judge·REPORT는 §10.1.1을 따르며,
 실제 5-seed calibration은 Task 7에서 측정한다.
 
+### 4.10 Task 7 baseline·parser 실측 계약 (#57)
+
+수동 calibration은 기존 validation fixture와 고정 baseline code SHA에서 seed
+101, 102, 103, 104, 105로 각각 한 번 새 학습을 실행한다. screening seed 42와 분리한다.
+Workspace/LocalRunner/Domain과 기존 prediction 설정을 재사용하고 agent·Controller·
+final grant·registry 초기화·새 원격 API를 호출하지 않는다. 같은 모델의 반복 점수화나
+baseline/candidate가 같은 paired 10회 학습으로 5회 독립 fit을 대체하지 않는다.
+
+실행 전에 baseline SHA·fixture/metadata identity·prediction 설정·모델 파일 identity·
+seed 순서를 고정한다. 각 seed마다 새 workspace에서 기존 harness-predict를 한 번
+실행하고 CSV/모델/training receipt/execution evidence를 보존한 뒤 workspace를 회수한다.
+그 뒤 trusted domain으로 validation prediction을 봉인·채점한다.
+
+7개 필수 metric의 raw float를 반올림하지 않고 남긴다. 지표별 유한한 값 5개가 모두
+있을 때만 평균과 표본 표준편차(`statistics.stdev`, ddof=1)를 계산한다. 미달이면 유효
+표본 수와 null을 기록한다. 관측된 0은 0.0이며 epsilon을 더하지 않는다. 측정 완료와
+현행 sigma/coverage 판정 gate 통과는 별개다. 이 script는 승격 판정을 하지 않는다.
+
+별도 calibration output root의 TrialLedger checkpoint에 입력·seed intent·seed 완료·
+전체 완료 및 원본 metric/요약/산출물 digest를 기록한다. Controller ledger와 섞거나
+promote/discard 판정을 만들지 않는다. 실패/중단의 원본과 관측 비용은 남기고 같은
+output root에서 자동 재학습하지 않는다. MVP는 one-shot 측정을 우선하며 별도의
+재개 엔진을 추가하지 않는다. 실제 원본 데이터/모델/private 경로는 커밋하지 않는다.
+
+parser 실측은 실제 `seal_prediction_copy`의 성공/실패와 전체 봉인 wall time, 같은
+parser worker의 별도 관측 실행(시작~종료 시간·메모리 종류)을 구분한다. 파일 생성과
+최종 scoring 시간은 parser 시간에 합치지 않는다. 현재 300k행·65MiB·10초·256MiB 및
+parsed JSONL 80MiB 상한은 그대로 적용한다. 긴 alphanumeric 식별자와 backslash-heavy
+유효 식별자를 별개로 측정하고, 초과 행/물리 행/파일 byte 제한의 음성 케이스도 확인한다.
+
+backslash의 JSON escaping으로 내부 출력 상한과 충돌할 가능성도 측정한다.
+worker의 exit 1은 여러 원인이 합쳐진 결과이므로 직접 확인한 원인만 확정하며
+근거가 없으면 unknown으로 남긴다. 예상 크기 계산과 실측 실패를 구분한다. 메모리
+관측이 불가능하면 null이며 sampled peak를 OS 보장 peak로 표현하지 않는다. 합성
+300k CSV는 parser 자원 검증이지 실제 평가 fixture의 품질/coverage 증거가 아니다.
+Windows 관측은 `PROCESS_MEMORY_COUNTERS`의 PeakWorkingSetSize와 PeakPagefileUsage를
+분리하며 후자는 process commit의 생애 최대값이다(둘 다 bytes).
+정의는 [Microsoft 공식 문서](https://learn.microsoft.com/en-us/windows/win32/api/psapi/ns-psapi-process_memory_counters)를 따른다.
+
+실측이 초기 sigma/coverage/parser 가정과 다르면 원인과 대안을 spec/plan에서 먼저
+검토하고 필요한 정책 수정은 별도 이슈/PR로 분리한다. 수치 조작 없이 그 다음에
+Controller E2E·checkpoint 재개·무변경/승격 시나리오·단일 final·REPORT를 실측한다.
+
+**2026-09-03 기준선 실측:** baseline `8dd67038d98817b3b4a5f33a4d9dd5009c2ce9fd`,
+seed 101~105의 새 fit 5회, validation 3,840행·160 slate를 사용했다. snapshot fingerprint는
+`1d81f2037c65b928cf83139242333cc87498951236569dc192fe1a1fc86c1bd4`이며,
+`intfloat/multilingual-e5-small` revision `614241f622f53c4eeff9890bdc4f31cfecc418b3`
+(384차원, CUDA embedding)과 CPU LightGBM 학습을 사용했다. 모두 유효 표본 5개이며
+아래 σ는 보정하지 않은 ddof=1 표본 표준편차다. 이 fixture/code/config에 한정된
+기준선이며 다른 데이터나 모델의 노이즈로 일반화하지 않는다.
+
+| metric | baseline 평균 | σ |
+|---|---:|---:|
+| ndcg_at_10 | 0.7678924740923143 | 0.012644841892910248 |
+| recall_at_10 | 0.9925 | 0.011180339887498952 |
+| ndcg_at_24 | 0.7698834576695183 | 0.011363737745236012 |
+| grouped_roc_auc | 0.8804891304347826 | 0.006821680591097526 |
+| pr_auc | 0.443332460607605 | 0.035806512787097684 |
+| log_loss | 0.15790130458219007 | 0.006165367875655428 |
+| brier | 0.03645414647885959 | 0.0002480487726970229 |
+
+모든 σ가 현행 `> 1e-6` 조건을 충족했다. seed 42에서 Recall@10이 1.0이었다는
+단일 관측만으로 σ=0이라고 추정하지 않고 실제 5회 결과로 확인했다. 아직 candidate
+승격 또는 final 개선은 측정하지 않았다. parser의 일반 문자 300k행은 봉인 3.998초에
+성공했지만 backslash-heavy 300k행은 3.356초에 거부됐다. 따라서 parser 최대 입력
+지원은 아직 완료가 아니며 별도 수정이 필요하다. 상세 raw 값·자원 측정·한계는
+[Task 7 실측 기록](../plans/2026-08-15-local-research-harness-mvp.md#첫-실측-pr--57)에 남긴다.
+
 ## 5. 목표 아키텍처
 
 아래는 MVP 이후 논문 계층까지 포함한 최종 구조다. MVP에서는 사람이 준 가설과
