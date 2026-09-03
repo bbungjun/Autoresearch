@@ -5,6 +5,7 @@
 
 [기능] trial/time budget, ledger-first feedback, promote-only champion 전이, typed 실패 후
 자동 계속, checkpoint 재생과 final 단일 소비를 하나의 ``run`` interface로 제공한다.
+직전 실패 trial의 candidate만 수정 출발점으로 전달하며 비교 champion은 유지한다.
 
 [비책임] candidate 코드 작성·workspace 생성·LocalRunner 조립·prediction 봉인과 metric
 구현은 ResearchTrialRunner adapter와 ResearchDomain이 담당하며 REPORT·CLI는 후속 Task다.
@@ -110,6 +111,7 @@ class PrepareCandidateRequest:
     card: ExperimentCard
     champion_sha: str
     feedback_history: tuple[FeedbackPayload, ...]
+    repair_candidate_sha: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,6 +228,14 @@ class ControllerRunResult:
     final_consumption: FinalConsumptionEvidence | None
 
 
+def _repair_candidate_sha(record: TrialRecord | None, champion_sha: str) -> str | None:
+    """Select only the immediate failed validation candidate, without promoting it."""
+    if (record is not None and record.split == "validation" and record.decision == "failed"
+            and record.candidate_sha is not None and record.base_sha == champion_sha):
+        return record.candidate_sha
+    return None
+
+
 class ResearchController:
     """예산·판정·복구 정책을 하나의 run interface 뒤에 숨기는 deep module."""
 
@@ -310,8 +320,10 @@ class ResearchController:
                 lineage,
                 feedback,
                 sigmas,
+                validation_records[-1] if validation_records else None,
             )
             _append_with_checkpoint(request.ledger, record)
+            validation_records.append(record)
             feedback.append(payload)
             recorded_seconds += record.duration_ms / 1000.0
             if record.decision == JudgeDecision.PROMOTE.value:
@@ -334,12 +346,14 @@ class ResearchController:
         lineage: tuple[str, ...],
         feedback: list[FeedbackPayload],
         sigmas: Mapping[str, float],
+        previous_record: TrialRecord | None,
     ) -> tuple[TrialRecord, FeedbackPayload]:
         candidate: PreparedCandidate | None = None
         receipts: list[PairedRunReceipt] = []
         try:
             candidate = self._runner.prepare_candidate(
-                PrepareCandidateRequest(trial_id, card, champion_sha, tuple(feedback))
+                PrepareCandidateRequest(trial_id, card, champion_sha, tuple(feedback),
+                                        _repair_candidate_sha(previous_record, champion_sha))
             )
             _validate_candidate(candidate, trial_id, card, champion_sha)
             screening_receipt = self._runner.run_validation(

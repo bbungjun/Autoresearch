@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Never, cast
@@ -333,6 +333,57 @@ def test_controller_records_failure_feedback_and_continues(
     assert failure.reason_code == "candidate_generation_failed"
     assert failure.stderr_tail == "compiler error"
     assert runner.preparations[1].feedback_history[0].failure == failure
+    assert runner.preparations[1].repair_candidate_sha is None
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_controller_passes_only_last_failed_candidate_for_repair(tmp_path, monkeypatch, resume) -> None:
+    _install_final_claim(monkeypatch, tmp_path)
+    request = _request(tmp_path)
+
+    class FailedCandidateRunner(FakeRunner):
+        def prepare_candidate(self, candidate_request):
+            if resume and candidate_request.trial_id == "trial-0002":
+                raise KeyboardInterrupt
+            return super().prepare_candidate(candidate_request)
+
+        def run_validation(self, pair_request, domain):
+            if pair_request.candidate.trial_id == "trial-0001":
+                raise TrialExecutionError("pair", "candidate_crashed")
+            return super().run_validation(pair_request, domain)
+
+    runner = FailedCandidateRunner()
+    controller = ResearchController(FakeDomain(), SequencePlanner((_card("card-1"), _card("card-2")), []), runner)
+    if resume:
+        with pytest.raises(KeyboardInterrupt):
+            controller.run(request)
+        runner = FakeRunner()
+        controller = ResearchController(FakeDomain(), SequencePlanner((_card("card-1"), _card("card-2")), []), runner)
+    controller.run(request)
+    repair = runner.preparations[-1]
+    assert repair.repair_candidate_sha == _CANDIDATE_ONE
+    assert repair.champion_sha == _BASE_SHA
+    if not resume:
+        assert runner.preparations[0].repair_candidate_sha is None
+
+
+def test_controller_does_not_repair_discarded_candidate(tmp_path, monkeypatch) -> None:
+    _install_final_claim(monkeypatch, tmp_path)
+    runner = FakeRunner()
+    ResearchController(FakeDomain(), SequencePlanner((_card("card-1"), _card("card-2")), []), runner).run(_request(tmp_path))
+    assert [item.repair_candidate_sha for item in runner.preparations] == [None, None]
+
+
+def test_repair_selection_rejects_other_champion_and_nonfailure_records(tmp_path, monkeypatch) -> None:
+    _install_final_claim(monkeypatch, tmp_path)
+    request = _request(tmp_path, max_trials=1)
+    ResearchController(FakeDomain(), SequencePlanner((_card("card-2"),), []), ConfirmationFailureRunner()).run(request)
+    record = request.ledger.read_state().trials[0]
+    assert controller_module._repair_candidate_sha(record, _BASE_SHA) == _CANDIDATE_TWO
+    assert controller_module._repair_candidate_sha(record, _CANDIDATE_ONE) is None
+    for decision in ("discard", "promote", "revise", "invalid"):
+        assert controller_module._repair_candidate_sha(replace(record, decision=decision), _BASE_SHA) is None
+    assert controller_module._repair_candidate_sha(replace(record, candidate_sha=None), _BASE_SHA) is None
 
 
 def test_controller_preserves_completed_work_when_confirmation_fails(

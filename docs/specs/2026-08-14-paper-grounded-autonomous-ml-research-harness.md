@@ -1573,6 +1573,34 @@ planner를 같은 feedback history로 재생하고 완료 checkpoint의 trial은
 checkpoint 계약이며, planner 내부 상태 snapshot은 실제 agent adapter를 연결할 때 별도
 artifact로 추가한다.
 
+### 7.4 직전 실패 후보의 수정 출발점 (#69)
+
+실패 feedback만으로 정상 champion에서 다시 구현하는 것과 실패 코드 자체의 수정을
+구분한다. `PrepareCandidateRequest.repair_candidate_sha`는 기본 `None`인 선택 입력이며,
+Controller가 직전 validation ledger record의 `decision == "failed"`, candidate SHA 존재,
+`base_sha == 현재 champion` 조건을 모두 만족할 때만 전달한다. 오래된 실패를 검색하지
+않고 prepare 실패처럼 candidate가 없는 경우는 기존 champion 출발을 유지한다.
+신규 실행과 checkpoint 재개는 같은 직전 record 선택 규칙을 사용한다.
+
+Runner는 champion으로 만든 새 coding workspace에 실패 후보의 diff를 적용한 뒤 agent를
+호출한다. full 40-hex commit과 champion을 유일한 parent로 둔 계보를 검증한다. 실패
+후보가 champion과 같은 no-change SHA인 경우에는 빈 diff를 허용한다. 적용 전 diff 검사와
+적용 후 기존 변경 위생 검사를 수행하며 HEAD는 champion으로 유지한다. 부정확한 SHA,
+다른 parent, merge commit 또는 안전하지 않은 변경은 agent 호출 전에 거부한다.
+
+Agent prompt는 수정 출발 코드와 비교 baseline을 구분한다. `candidate.json`과 구조화
+research record의 candidate projection에 `repair_candidate_sha`를 보존한다. 기존 자료의
+필드 부재는 의미상 `None`으로 취급하되 projection에 새 키를 삽입하지 않아 legacy byte
+재생 검증을 유지하며 원본 자료를 덮어쓰지 않는다. 이는 실패 후보를 champion으로
+승격하는 기능이 아니며, paired baseline·최종 candidate diff/commit의 parent·수치 Judge·
+final 단일 소비·trial 예산은 기존 계약을 유지한다. 실패 stage가 pair일 수 있으므로 실제
+candidate 고장 여부는 baseline 성공 receipt와 candidate 실패 receipt를 함께 대조한다.
+
+실제 실증은 사전 주입 결함 한 건과 실제 coding agent의 수정 한 번으로 제한한다.
+최초 결함이 agent의 자연 발생 오류였다고 주장하지 않는다. 성공은 오류·feedback·복원된
+실패 코드·수정 patch·실제 학습·채점·REPORT가 연결되는 것이며 promote를 요구하지 않는다.
+고정 판정 기준과 새 평가 대상의 final 소비 경계를 지키고 기존 #60 기록은 변경하지 않는다.
+
 ## 8. YouTube 리랭킹 Domain Adapter
 
 P0-1의 `slate_id` 생성식, 시간·click 귀속 경계, validation/final split, artifact schema,

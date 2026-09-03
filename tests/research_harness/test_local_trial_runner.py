@@ -144,6 +144,74 @@ def test_no_change_keeps_champion_sha(repository, final_case, tmp_path: Path) ->
     assert result.candidate_sha == repository[1]
 
 
+def test_repair_restores_failed_diff_before_agent_and_keeps_champion(repository, final_case, tmp_path) -> None:
+    first = _prepare(_adapter(repository, final_case, tmp_path), repository)
+
+    class RepairAgent(Agent):
+        def run(self, request):
+            assert _git(request.cwd, "rev-parse", "HEAD") == repository[1]
+            assert (request.cwd / "new.py").read_text() == "VALUE = 2\n"
+            assert first.candidate_sha in request.prompt
+            assert repository[1] in request.prompt
+            (request.cwd / "new.py").write_text("VALUE = 3\n")
+            return super().run(request)
+
+    agent = RepairAgent("none")
+    adapter = _adapter(repository, final_case, tmp_path, agent=agent)
+    repaired = adapter.prepare_candidate(PrepareCandidateRequest("trial-0002", CARD, repository[1], (), first.candidate_sha))
+    assert repaired.base_sha == repository[1]
+    assert _git(repository[0], "show", "-s", "--format=%P", repaired.candidate_sha) == repository[1]
+    assert _git(repository[0], "show", f"{repaired.candidate_sha}:new.py") == "VALUE = 3"
+    receipts = [json.loads(path.read_bytes()) for path in (tmp_path / "attempts").glob("*/candidate.json")]
+    assert next(item for item in receipts if item["trial_id"] == "trial-0002")["repair_candidate_sha"] == first.candidate_sha
+
+
+@pytest.mark.parametrize("bad_sha", ["HEAD", "a" * 39, "g" * 40, "0" * 40])
+def test_repair_rejects_invalid_sha_before_agent(repository, final_case, tmp_path, bad_sha) -> None:
+    agent = Agent("none")
+    adapter = _adapter(repository, final_case, tmp_path, agent=agent)
+    with pytest.raises(TrialExecutionError):
+        adapter.prepare_candidate(PrepareCandidateRequest("trial-0002", CARD, repository[1], (), bad_sha))
+    assert not agent.requests
+
+
+def test_repair_no_change_allows_champion_sha(repository, final_case, tmp_path) -> None:
+    adapter = _adapter(repository, final_case, tmp_path, agent=Agent("none"))
+    candidate = adapter.prepare_candidate(PrepareCandidateRequest("trial-0002", CARD, repository[1], (), repository[1]))
+    assert candidate.candidate_sha == repository[1]
+
+
+@pytest.mark.parametrize("kind", ["wrong_parent", "merge", "credential", "binary"])
+def test_repair_checks_lineage_and_restored_content_before_agent(repository, final_case, tmp_path, kind) -> None:
+    root, champion = repository
+    (root / "new.bin").write_bytes(b"\x00\x01\x02" if kind == "binary" else b"ordinary code")
+    if kind == "credential":
+        (root / "new.bin").write_bytes(("AKIA" + "A" * 16).encode())
+    _git(root, "add", "new.bin")
+    tree = _git(root, "write-tree")
+    parent = _git(root, "commit-tree", tree, "-p", champion, "-m", "intermediate")
+    parents = ["-p", parent] if kind == "wrong_parent" else ["-p", champion, "-p", parent] if kind == "merge" else ["-p", champion]
+    candidate = _git(root, "commit-tree", tree, *parents, "-m", "failed candidate")
+
+    class ObserveAgent(Agent):
+        def run(self, request):
+            assert (request.cwd / "new.bin").read_bytes() == b"\x00\x01\x02"
+            return super().run(request)
+
+    agent = ObserveAgent("none")
+    adapter = _adapter(repository, final_case, tmp_path, agent=agent)
+    request = PrepareCandidateRequest("trial-0002", CARD, champion, (), candidate)
+    if kind == "binary":
+        result = adapter.prepare_candidate(request)
+        assert result.base_sha == champion
+        assert len(agent.requests) == 1
+    else:
+        reason = "workspace_credential_detected" if kind == "credential" else "repair_candidate_lineage"
+        with pytest.raises(TrialExecutionError, match=reason):
+            adapter.prepare_candidate(request)
+        assert not agent.requests
+
+
 def test_temp_cleanup_failure_preserves_candidate_before_rejecting_return(repository, final_case, tmp_path: Path) -> None:
     class CleanupFailureAgent(Agent):
         def run(self, request):

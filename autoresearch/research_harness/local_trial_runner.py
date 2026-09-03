@@ -8,6 +8,7 @@
 Coding prepare에만 validation 입력 identity를 전달하며 실제 Windows Codex adapter가
 입력 READ 접근을 준비한다. Host prediction과 final 실행에는 이 권한 요청을 전달하지 않는다.
 Coding temp 회수는 candidate commit/patch 증거를 게시한 뒤 수행하고 실패 후보는 반환하지 않는다.
+직전 실패 후보의 검증된 diff를 champion checkout에 복원하여 agent의 수정 출발점으로 제공한다.
 
 [비책임] LLM 프로세스 실행은 coding_agent, 학습 프로세스 회수는 runner, 수치 판정은
 domain, final 권한 발급·재개 정책은 Controller, immutable run 입력은 run_inputs가 소유한다.
@@ -22,6 +23,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import time
@@ -125,6 +127,7 @@ class LocalResearchTrialRunner:
                 self._workspace_request(request.champion_sha), source=self._source,
                 metadata=self._validation_metadata,
             ) as workspace, ExitStack() as cleanup_stack:
+                _restore_repair_candidate(workspace, request.repair_candidate_sha)
                 if os.path.lexists(workspace.root / "harness_config.json"):
                     raise TrialExecutionError("prepare", "candidate_runtime_config")
                 response = self._agent.run(CodingAgentRequest(
@@ -149,6 +152,7 @@ class LocalResearchTrialRunner:
                 evidence.append(_write_json(attempt / "candidate.json", {
                     "trial_id": request.trial_id, "card": json.loads(request.card.canonical_summary()),
                     "base_sha": request.champion_sha, "candidate_sha": candidate_sha,
+                    "repair_candidate_sha": request.repair_candidate_sha,
                     "diff_fingerprint": fingerprint, "changed_paths": list(paths),
                     "agent_duration_ms": response.duration_ms,
                     "duration_ms": _duration(started), "cost_usd": None,
@@ -302,10 +306,36 @@ def _prompt(request: PrepareCandidateRequest) -> str:
         "If execution policy blocks a needed action, do not try alternate shells or guessed patch paths "
         "to bypass it; stop and return blocked with the reason. "
         "Return the required JSON explanation.\n"
+        "When repair_candidate_sha is non-null, its failed code changes are already restored in this checkout. "
+        "Repair those changes using the failure feedback. HEAD and the paired comparison baseline remain "
+        "champion_sha; the failed candidate is not a promoted baseline.\n"
         + json.dumps({"card": json.loads(request.card.canonical_summary()),
+                      "champion_sha": request.champion_sha,
+                      "repair_candidate_sha": request.repair_candidate_sha,
                       "validation_feedback": [asdict(item) for item in request.feedback_history]},
                      ensure_ascii=True, sort_keys=True)
     )
+
+
+def _restore_repair_candidate(workspace: CandidateWorkspace, candidate_sha: str | None) -> None:
+    """Restore a direct child diff without changing HEAD or the comparison baseline."""
+    if candidate_sha is None:
+        return
+    if not isinstance(candidate_sha, str) or re.fullmatch(r"[0-9a-f]{40}", candidate_sha) is None:
+        raise TrialExecutionError("prepare", "repair_candidate_invalid")
+    try:
+        identity = _git(workspace.root, "rev-parse", "--verify", candidate_sha + "^{commit}").decode().strip()
+        parents = _git(workspace.root, "show", "-s", "--format=%P", candidate_sha).decode().split()
+        if identity != candidate_sha or (candidate_sha != workspace.base_sha and parents != [workspace.base_sha]):
+            raise TrialExecutionError("prepare", "repair_candidate_lineage")
+        diff = _git(workspace.root, "diff", "--binary", "--full-index", "--no-renames",
+                    "--no-ext-diff", "--no-textconv", workspace.base_sha, candidate_sha, "--")
+        if diff:
+            _git(workspace.root, "apply", "--check", "--binary", "-", input_bytes=diff)
+            _git(workspace.root, "apply", "--binary", "-", input_bytes=diff)
+    except subprocess.SubprocessError:
+        raise TrialExecutionError("prepare", "repair_candidate_invalid") from None
+    workspace.inspect_changes()
 
 
 def _commit_candidate(workspace: CandidateWorkspace, attempt_id: str) -> tuple[str, str, tuple[str, ...], bytes]:
@@ -333,9 +363,9 @@ def _commit_candidate(workspace: CandidateWorkspace, attempt_id: str) -> tuple[s
     return candidate, fingerprint, paths, diff
 
 
-def _git(root: Path, *args: str) -> bytes:
+def _git(root: Path, *args: str, input_bytes: bytes | None = None) -> bytes:
     return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True,
-                          timeout=60).stdout
+                          input=input_bytes, timeout=60).stdout
 
 
 def _copy_outputs(predictions: Path, destination: Path, *, require_all: bool) -> tuple[LedgerArtifactEvidence, ...]:

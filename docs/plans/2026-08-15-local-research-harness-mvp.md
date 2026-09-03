@@ -2034,9 +2034,53 @@ B 검증은 통합 회귀 94개와 이후 추가 중단/로그 실패를 포함�
 - [ ] 의도적으로 깨진 candidate의 실제 자동 수정·복구와 사람의 중간 승인 없는 완주를
       증명한다 — spec §12의 남은 두 의무이며 위 Task 7에서 추적한다
 
+### Task 7R: 실제 실패 후보 단일 수정 실증 — #69 (진행 중)
+
+사용자가 2026-09-03 첫 권고 실행을 승인했다. 실행 전 고정하는 조건이며 결과는 아직 없다.
+조사 결과 기존 feedback에는 오류 로그가 있으나 다음 trial은 정상 champion에서 시작한다.
+이를 실제 failed candidate repair로 과장하지 않도록 spec §7.4의 최소 연결을 먼저 구현한다.
+
+- [x] RED: 직전 실패 candidate 전달·prepare 실패 제외·성공/discard 제외·재개 동일성
+- [x] RED: agent 전에 실패 diff 복원·champion HEAD 유지·잘못된 계보 거부·report 출처 보존
+- [x] GREEN: Controller의 선택 입력과 runner의 검증된 diff 복원, 기록 projection 최소 구현
+- [x] 독립 사전 리뷰 후 네트워크 없는 측정 wrapper 테스트
+- [x] 새 synthetic fixture seed `6901`, 평가 시작일 `2026-09-01`로 독립 snapshot 준비
+- [x] baseline `8dd67038d98817b3b4a5f33a4d9dd5009c2ce9fd`, E5-small 기존 모델/revision,
+      CPU LightGBM 21개 피처를 유지하고 새 데이터에서 seed 101~105로 calibration 5 fit
+- [ ] 첫 prepare는 측정용 deterministic CodingAgent 대역이 `local_training.py`의
+      `prediction.features.to_pandas()`를 속성 오타로 바꾼다. 외부 agent 호출이 아니며,
+      실제 baseline 성공·candidate 실행 실패·오류 feedback을 보존한다
+- [ ] 둘째 prepare는 정식 repair context 경로로 실패 코드를 복원하고 실제 새 coding agent를
+      한 번 호출한다. 측정 wrapper는 정답 patch를 적용하지 않고 이후 코드를 수동 수정하지 않는다
+- [ ] 두 validation trial 뒤 기존 Controller로 새 final 1회·기록 Judge 1회·REPORT까지 실행한다
+- [ ] 실패/복구 SHA·patch·실제 재학습 receipt·지표·등록 temp 회수·원본 hash를 독립 검증한다
+- [ ] 문제·대안·구현·실측·실패·한계를 포트폴리오와 spec 상태에 반영하고 CI·PR·merge한다
+
+**예산:** calibration 5 fit + validation 최대 2 trial(첫 오류 주입, 둘째 실제 수정 기회 1회),
+prediction 호출별 300초, coding agent 420초, 새 trial 시작 예산 3600초. 정상 복원만 되면
+baseline과 같은 모델이므로 일반적으로 confirmation 없이 종료하지만 실제 판정을 따른다.
+Final은 기존 5-seed paired batch이며 판정 정책이나 baseline을 성공 유도 목적으로 바꾸지 않는다.
+새 calibration이 기존 σ/coverage 계약을 만족하지 않으면 임계값을 낮추거나 seed를 탐색하지
+않고 그 제약을 보고한다. 측정 코드는 실패 후 자동 재실행을 제공하지 않는다.
+
+**사전 측정 중간 결과:** 5 fit은 완료했으나 Recall@10이 5회 모두 1.0으로 σ=0이다.
+현재 positive-noise gate를 만족하지 않으므로 실제 agent·final 실행 전에 제약을 보고했다.
+다른 6개 지표의 σ는 유효하며 raw 값·평균·σ는 별도 calibration 원본에 보존했다.
+평균·σ와 문제 해석은 [포트폴리오 §12](../reports/2026-09-03-local-autonomous-experiment-e2e.md#12-실패한-코드를-고쳤는가-정상-코드에서-다시-시작했는가--69)에 기록했다.
+σ를 그대로 유지하고 기존 `inconclusive / insufficient_baseline_noise` 경로로 복구 실증과
+품질 채택을 분리할 수 있지만, 사전 실행 조건 변경은 사용자 결정 전까지 적용하지 않는다.
+
+**자율성 관측:** 사전 가설·예산·오류 주입·실행 입력 준비는 운영자의 설정이다. 한 번의
+실증 호출 시작부터 REPORT 또는 실패 종료까지의 사람 승인·코드 수정·수동 복구를 별도로
+기록한다. 실제 agent의 명령 수행과 Harness 자동 처리는 사람 개입으로 세지 않으며,
+보고서 자체의 미계측 human 값은 꾸며 채우지 않고 측정 sidecar의 관측 범위를 명시한다.
+시간·token·실제 호출 수를 기록하고 확인되지 않은 달러 비용은 `null`을 유지한다.
+원본 #60/기존 소비 marker/기존 실패 workspace를 변경하지 않는다.
+
 ### 잔여 검증 우선순위 — 2026-09-03 권고
 
-아래는 다음 작업의 권고안이며 이번 문서 갱신에 실험 실행 승인은 포함되지 않는다.
+아래는 #68 문서 갱신 당시의 권고안이며 당시에는 실험 실행 승인이 포함되지 않았다.
+이후 첫 권고의 실행 승인은 위 Task 7R (#69)에 기록했다. 나머지 권고는 별도 후속 범위다.
 실행 전 별도 이슈에서 실패 주입 위치·관측 범위·예산·종료 조건을 고정한다.
 
 1. **최소 자동 복구 시나리오:** 새 disposable candidate에 원인이 명확한 실패 하나를

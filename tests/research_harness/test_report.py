@@ -184,6 +184,53 @@ def test_orphan_attempt_costs_use_one_duration_and_one_token_receipt(finished):
     assert record["cost"]["tokens"]["input_tokens"]["observed_sum"] == 100
     assert record["cost"]["tokens"]["reasoning_output_tokens"]["observed_sum"] is None
     assert record["attempts"][0]["linked_to_trial"] is False
+    assert "repair_candidate_sha" not in record["attempts"][0]["candidate"]
+    before = (root / "research-record.json").read_bytes()
+    publish(finished)
+    assert (root / "research-record.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("repair_sha", [None, "a" * 40])
+def test_report_preserves_optional_repair_provenance(finished, repair_sha) -> None:
+    root = finished[0]
+    attempt = root / "attempts" / ("a" * 32)
+    write_json(attempt / "attempt.json", {"stage": "prepare", "trial_id": "trial-0002", "seed": None, "started_at_unix_ns": 1})
+    write_json(attempt / "candidate.json", {"duration_ms": 1, "repair_candidate_sha": repair_sha})
+    publish(finished)
+    record = json.loads((root / "research-record.json").read_bytes())
+    assert record["attempts"][0]["candidate"]["repair_candidate_sha"] == repair_sha
+
+
+@pytest.mark.parametrize("repair_sha", ["b" * 40, "c" * 40, None])
+def test_report_checks_repair_against_previous_failed_ledger_trial(finished, repair_sha) -> None:
+    root, contract, result, parent = finished
+    ledger = open_trial_ledger(root / "experiment-ledger.jsonl")
+    feedback = []
+    for number in (1, 2):
+        trial_id = f"trial-{number:04d}"
+        artifacts = ()
+        if number == 2:
+            attempt = root / "attempts" / ("a" * 32)
+            write_json(attempt / "attempt.json", {"stage": "prepare", "trial_id": trial_id, "seed": None, "started_at_unix_ns": 1})
+            write_json(attempt / "candidate.json", {"trial_id": trial_id, "base_sha": contract.baseline_sha,
+                       "candidate_sha": "b" * 40, "diff_fingerprint": "sha256:" + "d" * 64,
+                       "repair_candidate_sha": repair_sha, "duration_ms": 1})
+            artifacts = (evidence(attempt / "candidate.json"),)
+        trial = TrialRecord(trial_id, "validation", contract.baseline_sha, "b" * 40,
+                            "sha256:" + "d" * 64, str(contract.handoff.validation_id), contract.screening_seed,
+                            (), "failed", "candidate_crashed", 1, "candidate_crashed", artifacts,
+                            (contract.baseline_sha,), None, contract.initial_card.canonical_summary(),
+                            failure_stage="pair")
+        ledger.append(trial)
+        ledger.append(CheckpointRecord(trial_id + ":validation-recorded", "validation_recorded", trial_id,
+                                      datetime.now(UTC), artifacts, None))
+        feedback.append(_feedback_from_record(contract.initial_card, contract.initial_card, trial, feedback))
+    finished = root, contract, replace(result, validation_trials=2, feedback_history=tuple(feedback)), parent
+    if repair_sha == "b" * 40:
+        publish(finished)
+    else:
+        with pytest.raises(module().ReportError, match="candidate_repair_identity"):
+            publish(finished)
 
 
 def final_case(finished, *, count=5, wrong_role=False, champion=None, candidate_value=0.5, feedback=(), deltas=()):

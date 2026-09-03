@@ -5,6 +5,7 @@
 [기능] immutable 입력·ledger·attempt를 대조해 사실과 자기 주장을 분리하고, 단일
 Judge 호출 intent·복구·관측 비용·안전한 Markdown을 write-once 게시한다. v2는
 지표별 관측 범위와 기존 판정 정책을 설명하며 이미 게시된 v1 바이트는 보존한다.
+선택적 실패 후보 복원 출처는 ledger와 대조하고, 필드가 없던 기존 기록은 그대로 보존한다.
 [비책임] 모델 채점·승격·final 소비·feedback 추가는 수행하지 않는다. 동일 OS의
 적대적 탐색을 완전히 차단하는 격리나 미관측 비용 추정도 제공하지 않는다.
 """
@@ -32,7 +33,7 @@ from autoresearch.research_harness._report_state import (
     read_file, read_json, report_lock, seal_terminal_result, terminal_context,
 )
 from autoresearch.research_harness.coding_agent import CodingAgent, CodingAgentError, CodingAgentRequest
-from autoresearch.research_harness.controller import ControllerRunResult
+from autoresearch.research_harness.controller import ControllerRunResult, _repair_candidate_sha
 from autoresearch.research_harness.fixture_errors import StageCError
 from autoresearch.research_harness.judge_decision import JudgeDecision, JudgeMetric
 from autoresearch.research_harness.ledger import LedgerError
@@ -323,12 +324,24 @@ def _collect_record(root: Path, contract: RunInputContract, result: ControllerRu
             if own_links and own_links != {metadata["trial_id"]}:
                 raise ReportError("attempt_trial")
             failure, candidate, pair = files.get("failure.json"), files.get("candidate.json"), files.get("pair.json")
+            if candidate is not None and candidate.get("repair_candidate_sha") is not None:
+                repair_sha = candidate["repair_candidate_sha"]
+                if not isinstance(repair_sha, str) or re.fullmatch(r"[0-9a-f]{40}", repair_sha) is None:
+                    raise ReportError("candidate_repair_identity")
             if candidate is not None and f"attempts/{directory.name}/candidate.json" in linked:
                 trial = next(trial for trial in state.trials if trial.trial_id == metadata["trial_id"])
                 if (metadata["stage"] != "prepare" or candidate.get("trial_id") != trial.trial_id
                         or candidate.get("base_sha") != trial.base_sha or candidate.get("candidate_sha") != trial.candidate_sha
                         or candidate.get("diff_fingerprint") != trial.diff_fingerprint):
                     raise ReportError("candidate_trial_identity")
+                if "repair_candidate_sha" in candidate:
+                    if trial.split != "validation":
+                        raise ReportError("candidate_repair_identity")
+                    validations = [item for item in state.trials if item.split == "validation"]
+                    index = validations.index(trial)
+                    previous = validations[index - 1] if index else None
+                    if candidate["repair_candidate_sha"] != _repair_candidate_sha(previous, trial.base_sha):
+                        raise ReportError("candidate_repair_identity")
             duration_source = failure if failure is not None else candidate if metadata["stage"] == "prepare" else pair
             duration = _nonnegative(duration_source.get("duration_ms")) if duration_source is not None else None
             durations.append(duration)
@@ -351,6 +364,8 @@ def _collect_record(root: Path, contract: RunInputContract, result: ControllerRu
                 "partial_artifacts": [{"path": path, "sha256": digest} for path, digest in sources.items()
                                       if path.startswith(f"attempts/{directory.name}/")],
             }
+            if candidate is not None and "repair_candidate_sha" in candidate:
+                projected["candidate"]["repair_candidate_sha"] = candidate["repair_candidate_sha"]
             if pair is not None:
                 split_id = str(contract.handoff.final_holdout_id if metadata["stage"] == "final" else contract.handoff.validation_id)
                 if pair.get("seed") != metadata["seed"]:
