@@ -842,6 +842,15 @@ pytest의 `0700` 생성과 지정 basetemp 재생성 때문에 경로 이동·ho
 설정만으로는 해결되지 않는다. 실제 검증은 새 합성 workspace에서 정상/실패 pytest와
 회수, 원본·sentinel 보존을 확인하고 mock 결과와 구분한다. 학습·final 재평가는 하지 않는다.
 
+**#73 테스트 산출물 수명 보완:** 보안 검증용으로 만든 하드링크도 회수 helper에는
+거부 대상이다. local training 입력 거부 테스트와 temp preflight 거부 테스트는 자신이
+성공적으로 만든 alias 하나를 finally에서 해제한다. 기대한 거부가 일어나지 않거나
+검증 중 예외가 나더라도 동일하며 원본 거부 assertion은 유지한다. 회귀는 기존 테스트를
+등록 anchor 아래에서 직접 실행하고, 원본 내용 보존을 확인한 뒤 외부 temp 회수·경계
+sentinel 보존을 검증한다. 제품 helper의 hardlink/reparse/identity 정책은 변경하지 않는다.
+이는 새 로컬 테스트의 수명 보완이지 기존 sandbox 실패 폴더의 강제 회수나 실제 피처
+재실험 성공을 뜻하지 않는다. 별도로 재현한 중첩 경로의 fixture_build 실패는 #74를 따른다.
+
 agent는 initial card와 validation feedback만 받아 현재 champion에서 한 가설을 구현한다.
 채점 규칙·정답·final 결과·grant·Judge 경로는 prompt/context에 넣지 않는다. 저장소 내부
 수정 경로 allowlist는 추가하지 않으며, 외부 trusted Judge가 수치 판정을 소유한다.
