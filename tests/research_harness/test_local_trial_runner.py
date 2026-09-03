@@ -37,6 +37,9 @@ class Agent:
     def run(self, request):
         self.requests.append(request)
         assert not (request.cwd / "harness_config.json").exists()
+        manifest = request.cwd / "harness_in/candidate-view.json"
+        assert request.candidate_inputs.manifest_sha256 == sha256(manifest.read_bytes()).hexdigest()
+        assert request.candidate_inputs.evaluation_id == json.loads(manifest.read_bytes())["evaluation_id"]
         if self.behavior == "change":
             (request.cwd / "README.md").write_text("candidate\n", encoding="utf-8")
             (request.cwd / "new.py").write_text("VALUE = 2\n", encoding="utf-8")

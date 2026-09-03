@@ -5,6 +5,8 @@
 
 [기능] 일회성 workspace, 로컬 candidate commit, append-only attempt 증거, paired 예측과
 모델·receipt 보존을 조립한다. Agent의 개선 주장은 수치 판정과 분리한다.
+Coding prepare에만 validation 입력 identity를 전달하며 실제 Windows Codex adapter가
+입력 READ 접근을 준비한다. Host prediction과 final 실행에는 이 권한 요청을 전달하지 않는다.
 
 [비책임] LLM 프로세스 실행은 coding_agent, 학습 프로세스 회수는 runner, 수치 판정은
 domain, final 권한 발급·재개 정책은 Controller, immutable run 입력은 run_inputs가 소유한다.
@@ -28,7 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from applications.experiment_platform.executor.safety import contains_credential_value
 from autoresearch.research_harness.coding_agent import (
-    CodingAgent, CodingAgentError, CodingAgentRequest,
+    CandidateInputIdentity, CodingAgent, CodingAgentError, CodingAgentRequest,
 )
 from autoresearch.research_harness.consumption_registry import FinalConsumptionGrant
 from autoresearch.research_harness.controller import (
@@ -127,6 +129,7 @@ class LocalResearchTrialRunner:
                     cwd=workspace.root, prompt=_prompt(request),
                     output_schema=AgentExperimentResponse.model_json_schema(),
                     artifact_root=attempt / "agent", mode="workspace-write",
+                    candidate_inputs=CandidateInputIdentity(workspace.candidate_view_sha256, workspace.evaluation_id),
                 ))
                 evidence.extend(response.artifacts)
                 explanation = AgentExperimentResponse.model_validate(response.response)

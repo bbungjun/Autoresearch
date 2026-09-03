@@ -366,3 +366,78 @@ threshold **0.0252896838**에 못 미친다는 기존 판정도 그대로 설명
 않았다. 테스트와 읽기 전용 대조로 projection을 검증했으며, Judge 정확도 향상이나 모델
 성능 향상을 이번 변경의 성과로 주장하지 않는다. 이전 실험 원본을 다시 게시하거나
 새 runtime으로 재실행하지 않았으며 v1 호환성은 기존 입력 계약의 report 게시에 한정한다.
+
+## 9. Agent 입력 탐색 정상화와 남은 테스트 회수 제약 — #54A
+
+**문제:** E2E는 완주했지만, 일반적인 pytest 임시 파일을 만드는 agent 작업은 Windows
+sandbox와 host의 파일 소유권 차이 때문에 회수가 실패한 이력이 있다. candidate-safe
+입력 읽기 거부도 별도로 관측됐다. 따라서 현재 성과를 범용 데이터 탐색·테스트 자율성까지
+확대해 설명해서는 안 된다.
+
+**접근:** 입력 읽기 정상화와 임시 파일 회수를 나눴다. source에서 private
+staging rename 게시를 확인했지만 당시 입력 ACL 자체는 보존된 workspace에서 확인할 수
+없어 원인 가설로 남겼다. 전체 접근 전환과 강제 삭제 대신, 검증된 입력에 한정한 읽기
+공개와 실패 증거 보존을 구현했다. 사용자가 승인한 A 범위는 새 검증 입력의 읽기 공개와
+합성 검증뿐이며, B의 소유권 변경·기존 실패 폴더 삭제는 포함하지 않는다.
+
+**재현 결과:** CLI 0.153.0-alpha.5의 실제 coding-agent 경로에서 새 v2 입력을 읽는
+PowerShell 명령이 `System.UnauthorizedAccessException`, HResult `0x80070005`로 실패했다.
+Agent의 최종 응답은 `blocked`였고 31.594초가 걸렸다. 종료 코드 0만으로 입력 접근 성공을
+판정하지 않았다. 적용 전 입력은 protected DACL이었고 sandbox 그룹의 읽기 ACE가 없었다.
+입력 내용·소유자·부모 ACL은 전후 동일했고, 이 새 작업 공간은 정상 회수됐다.
+
+앞선 43.031초 관측은 agent가 예외 원인을 숨긴 채 blocked만 반환했으므로 ACL 오류 확정
+근거로 쓰지 않았다. 보조 `codex sandbox` 호출도 permission profile 인자 부족으로 명령
+실행 전 종료됐으므로 sandbox 읽기 실패 재현과 구분했다. 전역 profile을 추가하지 않고
+실제 adapter 경로로 대조한 이유다.
+
+**구현 중 발견한 문제:** 첫 native 권한 준비는 `handle_identity` 단계에서 중단됐다.
+적용된 ACL은 0개이고 CLI도 실행되지 않았다. 별도 읽기 전용 점검에서 Python의
+64비트 `st_dev`와 legacy Win32 API의 32비트 볼륨 번호를 비교한 것이 원인으로 확인됐다.
+Mock은 두 값을 같은 형식으로 돌려주어 이 플랫폼 차이를 잡지 못했다. 하위 비트만 잘라
+통과시키지 않고 Python 버전에 맞는 파일 identity 형식과 native API layout을 검증했다.
+이는 원래의 sandbox 읽기 거부와 구별되는, 수정 코드의 플랫폼 호환성 문제다.
+
+다음 native 시도는 첫 객체에 READ ACE를 추가한 뒤 readback에서 중단됐다. 실패 receipt의
+`applied_count=1`, CLI 미실행을 보존했고 이를 앞선 0개 적용 실패와 구분했다. 새 합성
+공간에서 비교한 결과 owner·group·기존 ACE는 같았지만 Windows가 input root와 자식의
+`SE_DACL_AUTO_INHERITED` 비트를 추가했다. 따라서 권한 검사를 통째로 생략하지 않고,
+그 비트의 0→1만 허용하며 전후 값을 기록했다. 보호 비트 제거·다른 control 변경·기존 ACE
+변경은 계속 실패하고, 전체 적용 뒤 모든 handle을 재확인한다. 이 두 문제에 대해 재현
+테스트가 먼저 실패하는 것을 확인한 뒤 수정을 적용했다.
+
+**최종 native 결과:** 동일한 합성 candidate view로 만든 새 작업 공간에서 실제 agent가
+입력 파일 6개(manifest·slate·history 2개·metadata 2개)를 모두 읽고 SHA256을 계산했다.
+응답은 `readable`이며 manifest SHA가 host의 사전 검증 값과 일치했다. 실제 PowerShell
+명령의 종료 코드·출력도 확인했다. 32.045초는 한 번의 agent 호출 시간이며, 앞선
+31.594초 실패와 비교해 처리 속도 개선을 주장하지 않는다.
+
+- 권한 준비 12/12 객체 완료. 추가 ACE는 정확히 `0x120089` READ, 비상속이다.
+- CLI 시작 전 별도 PowerShell ACL 대조로 기존 ACE 바이트·순서와 소유자 보존을 확인했다.
+  입력 밖의 workspace root·부모·`harness_out` SDDL은 변경되지 않았다.
+- agent 실행 후에도 모든 입력 내용·소유자·부모 ACL이 같고, 새 disposable workspace는
+  정상 회수됐다. 이 결과는 일반적인 pytest 산출물 회수 성공을 의미하지 않는다.
+- 기존 E2E 증거·final marker를 포함한 208개 SHA256 대조에서 변경은 0개다.
+- 최종 성공 호출의 usage는 input 38,619 / cached input 18,560 / output 1,174 /
+  reasoning output 450 tokens다. cached·reasoning은 각각 해당 token 수의 하위 관측치이며
+  합산하지 않는다. 단가 근거가 없으므로 달러 비용은 `null`이다. 앞선 실패 호출까지
+  포함한 전체 작업 비용으로 제시하지 않는다.
+
+**포트폴리오에서 설명할 역량:** AI assistant가 구현하고 독립 agent가 검토하되,
+mock 통과를 실제 실행 성공으로 오인하지 않고 OS 경계에서 실패를 재현·분리했다.
+에이전트가 실험 재료를 탐색할 수 있도록 권한 준비를 작은 내부 모듈로 분리하면서
+평가 정답과 host prediction 경로에는 적용하지 않았다. 성공뿐 아니라 잘못된 가정,
+차단된 실행과 부분 적용 증거를 남긴 것이 이번 문제 해결의 핵심이다.
+
+**코드 검증:** 최종 helper·coding agent·local trial·report 통합 테스트 122개가
+194.84초에 모두 통과했다. 이 회귀에서는 실제 ACL·LLM·학습을 호출하지 않았다.
+독립 reviewer는 별도 회귀와 보존된 native 전후 증거를 대조해 코드·문서의 차단 사항이
+없음을 확인했다. 전체 Ruff·diff 검사도 통과했다. Linux 전체 CI 및 merge의 최종 상태는
+#54에 연결된 부분 PR 기록에서 확인한다.
+
+**남은 한계:** 실제 OS 검증은 Windows/Python 3.12의 현재 설치된 CLI 한 조합이다.
+Python 3.11 identity와 타 플랫폼 무동작은 회귀 테스트로 검증하며, 다른 Windows/CLI
+버전의 실제 동작까지 보장하지 않는다. 추가 권한만 READ이며 기존 effective 권한을
+회수하거나 입력을 보안상 read-only로 강제하는 기능은 아니다. 모델 학습·성능 측정·
+final 소비는 하지 않았고 기존 실패 폴더를 수정하지 않았다. pytest 임시 산출물 회수는
+#54B로 남기며 #54 전체를 완료 처리하지 않는다.

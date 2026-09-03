@@ -659,6 +659,66 @@ JSON 이벤트와 구조화된 최종 응답을 사용한다. 이 옵션은 저�
 OS 실행에 필요한 환경과 Codex 로그인 위치만 전달하고 GitHub/GCP/API key 환경은 전달하지
 않는다. 이는 동일 OS 사용자에 대한 보안 sandbox를 보장하는 설계가 아니다.
 
+**Windows 입력 공개·회수 후속 설계 (#54A 승인, #54B 별도):**
+현재 candidate view는 검증한 private staging을 rename하여 `harness_in`으로 게시한다.
+내용·identity 검증 성공과 별도 sandbox 사용자의 실제 읽기 가능 여부는 다른 계약이다.
+원래 실패 작업 공간의 입력 디렉터리는 후속 읽기 전용 점검 시 남아 있지 않아, 당시
+입력 ACL을 현재 상태만으로 확정하지 않는다. pytest 임시 폴더의 AccessDenied 관측과
+삭제 정책 거부는 기존 실측 기록으로 보존한다.
+
+- A: 먼저 합성 입력을 사용하는 새 disposable workspace에서 읽기 재현을 분리한다.
+  추가 읽기 공개가 필요하면 사용자가 승인한 candidate-safe `harness_in`만 대상으로 한다.
+  전체 workspace, 사용자 홈, Judge snapshot/label/final state는 권한 추가 대상이 아니다.
+  읽기 공개는 쓰기·삭제 권한이나 sandbox mode 변경을 허용하지 않는다. OS 권한 처리는
+  candidate manifest의 의미와 분리하고 실제 Windows coding prepare 직전의 좁은 seam에
+  둔다. final/host 학습도 소비하는 공용 materializer의 기본 동작으로 권한을 추가하지
+  않는다. principal을 확인하지 못하거나 상위 경로 권한이 필요하면 중단한다. 기존
+  소유자·권한 항목은 보존한다. 적용 방식은 아래의 handle 기반 계약으로 제한한다.
+- B: 임시 산출물 회수는 별도 변경으로 다룬다. identity가 다르거나 접근이 거부된
+  workspace를 성공적으로 정리했다고 기록하지 않는다. candidate commit/patch/receipt와
+  실패 비용을 보존하며, 기존 실패 폴더를 강제 삭제하거나 소유권을 탈취하지 않는다.
+  기존 cleanup은 일부 파일을 지운 뒤 실패할 수 있으므로 workspace 전체 보존이 아닌
+  잔여 workspace 보존과 외부 attempt 증거 보존을 구분한다.
+  새 산출물 소유권·회수 방법은 별도 승인 후 검증한다. 현재 cleanup 실패를 성공으로
+  바꾸거나 Controller에 후보를 자동 전달하는 변경은 승인된 것이 아니다.
+
+[OpenAI Windows sandbox 문서](https://learn.chatgpt.com/docs/windows/windows-sandbox)는
+별도 저권한 사용자와 파일 권한 경계를 설명하고, 세션의 특정 디렉터리 읽기 허용 기능을
+안내한다(2026-09-03 확인). 이 일반 설명만으로 현재 비대화형 CLI의 지원 여부나 실제
+접근 성공을 단정하지 않는다. 자동 ACL 확대·전체 접근·sandbox 약화는 대안에서 제외한다.
+2026-09-03 사용자가 새 실험 공간의 검증된 `harness_in`에만 sandbox 읽기를 추가하고
+새 합성 입력으로 검증하는 A 범위를 승인했다. B의 소유권 변경·기존 실패 폴더 정리는
+승인 범위가 아니다.
+
+A의 구현 계약은 `CodingAgentRequest`의 선택적 `candidate_inputs`에 manifest SHA와
+evaluation identity만 전달하는 것이다. 경로는 호출자의 별도 문자열이 아니라 검증된
+`cwd/harness_in`으로 고정한다. `LocalResearchTrialRunner.prepare_candidate`만 이 값을
+설정하고, 실제 Windows Codex의 workspace-write 호출만 소비한다. read-only Judge,
+prediction, 다른 플랫폼에는 ACL 작업을 하지 않는다.
+
+처리는 기존 agent evidence 디렉터리 준비 뒤, CLI/process 시작 전에 수행한다. Canonical
+manifest·모델·evaluation ID·exact tree·파일 digest·single-link regular file·reparse 여부를
+검증하고, 설치된 local `CodexSandboxUsers`를 SID로 확인한다. SID를 소스에 고정하지 않는다.
+검증한 객체 handle을 독점 공유 모드로 유지해 경로 교체와 자동 ACE 상속 전파를 제한하고,
+각 객체에 비상속 읽기 ACE만 추가한다. owner·기존 ACE·상위 ACL과 파일 내용은 보존한다.
+null DACL, 확인할 수 없는 principal/identity, 예상하지 못한 readback 차이는 실패다.
+이 방식은 [SetSecurityInfo의 handle 및 상속 계약](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo)을
+따르며 실제 Windows 전후 대조가 통과해야 검증 완료로 본다.
+
+파일 identity는 Python 3.11의 volume32/file-index64와 3.12 이상의
+volume64/file-ID128을 구분하며, 상위 비트를 잘라 비교하지 않는다.
+[Python 3.12 변경](https://docs.python.org/3.12/whatsnew/3.12.html)과
+[FILE_ID_INFO](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_id_info)의
+구조를 대조한다. ACL readback은 owner·group·기존 ACE 바이트 및 순서·보호 비트를
+보존하고, Windows가 설정하는 `SE_DACL_AUTO_INHERITED`의 0→1 변화만 별도로 허용한다.
+이는 추가 접근 권한이 아닌 [상속 상태 control 비트](https://learn.microsoft.com/en-us/windows/win32/secauthz/security-descriptor-control)이며,
+다른 비트 변경이나 해당 비트의 제거는 실패다. control 전후 값은 evidence에 기록하고
+전체 적용 뒤 모든 대상 handle을 다시 검증한다. 상위 폴더의 control은 예외 없이 보존한다.
+
+실패와 부분 적용은 별도 입력 접근 evidence 및 기존 agent receipt로 남기고 CLI를 시작하지
+않는다. 입력에 읽기 권한을 추가했다는 결과와 실제 sandbox 읽기 성공은 별개로 기록한다.
+실패한 권한 작업을 감추거나 쓰기 허용·상위 폴더 ACL 확장으로 자동 재시도하지 않는다.
+
 agent는 initial card와 validation feedback만 받아 현재 champion에서 한 가설을 구현한다.
 채점 규칙·정답·final 결과·grant·Judge 경로는 prompt/context에 넣지 않는다. 저장소 내부
 수정 경로 allowlist는 추가하지 않으며, 외부 trusted Judge가 수치 판정을 소유한다.
