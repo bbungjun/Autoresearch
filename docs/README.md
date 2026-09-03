@@ -94,9 +94,9 @@
 - [Spec — Agent Orchestration `/chat` API 계약](specs/2026-08-01-agent-orchestration-chat-api-contract.md) — 내부 호출 서비스의 요청·응답·오류·저장 의미 정본
 - [Spec — 가설 수신부터 `[AR]` 이슈 발행까지](specs/2026-08-04-hypothesis-to-auto-research-issue.md) — 필드 소유권 3분할, 시드 고정, `gh` 발행 경계, 멱등성 (#516)
 - [Plan — 가설 수신부터 `[AR]` 이슈 발행까지 구현](plans/2026-08-04-hypothesis-to-auto-research-issue.md) (#516)
-- [Spec — 자율 ML 연구 Harness 기반 MVP와 논문 로드맵](specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md) — 저장소 전체 수정·외부 Sealed Judge·σ 기반 판정·local-first 반복 연구 계약 (#769)
-- [Plan — 로컬 Research Harness MVP](plans/2026-08-15-local-research-harness-mvp.md) — 현행 executor와 분리된 로컬 경로에서 사람이 준 가설·ExperimentCard부터 Sealed Judge·반복 실행·ledger·REPORT까지의 구현 순서 (#769). Task 1/P0-1은 완료됐지만 Task 2+와 전체 MVP가 진행 중이므로 archive하지 않는다.
-- [실측·포트폴리오 기록 — 로컬 자율 ML 실험 E2E](reports/2026-09-03-local-autonomous-experiment-e2e.md) — 실제 agent 피드백 수정, 독립 재학습, 중단 복구와 final/REPORT의 근거 및 한계 (#60), 설명 문제 개선·원본 보존 (#62), Windows 입력 읽기 복구와 creator-side 임시 산출물 회수의 트러블슈팅·증거 보존·native 검증 (#54A/B).
+- [Spec — 자율 ML 연구 Harness 기반 MVP와 논문 로드맵](specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md) — 저장소 전체 수정·외부 Sealed Judge·σ 기반 판정·local-first 반복 연구 계약과 §12의 구현/회귀·실측·수용 판단 구분 (#17; 최초 설계는 이전 조직 #769). 현재 유효 계약이므로 유지한다.
+- [Plan — 로컬 Research Harness MVP](plans/2026-08-15-local-research-harness-mvp.md) — Task 1~6 핵심 구현과 Task 7 주요 실측 완료. 실제 실패 candidate 자동 수정, 피처 추가 실증, 사람 개입 계측과 기준 수용 판단이 남아 archive하지 않는다 (#17, 2026-09-03 갱신).
+- [실측·포트폴리오 기록 — 로컬 자율 ML 실험 E2E](reports/2026-09-03-local-autonomous-experiment-e2e.md) — 실제 agent 피드백 수정, 독립 재학습, 중단 복구와 final/REPORT의 근거 및 한계 (#60), 설명 개선·원본 보존 (#62), Windows 입력 읽기·등록 temp 회수 native 검증 (#54A/B), 중간점검·문서 동기화와 다음 검증 과제 (§11, #67).
 - [Spec — Research Harness P0-1 평가 snapshot](specs/2026-08-31-research-harness-evaluation-snapshot.md) — 완료된 P0-1 구현의 현재 유효 계약: `slate_id`, 평가 기간·click 귀속, label 봉인, split·fingerprint, 독립 재생성과 candidate-safe data view (#17, #22). 후속 Judge/Controller가 계속 소비하는 정본이므로 archive하지 않는다.
 - `applications/experiment_platform/` (FastAPI + Codex CLI/OpenAI + PostgreSQL 실험 API)
 - [Spec — Agent Orchestration GKE 내부 배포](specs/2026-07-30-agent-orchestration-gke-internal-deployment.md)
@@ -166,13 +166,13 @@
   Issue Form 18필드의 LLM/사용자/서버 소유권 분할, `POLICY_SEEDS` 고정, `gh` 발행 경계와 멱등성 3중 방어
 - [자율 ML 연구 Harness 기반 MVP와 논문 로드맵](specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md) —
   저장소 전체 수정, 예측 점수 artifact 기반 Sealed Judge, baseline seed 노이즈 상대 판정,
-  local-first 반복 연구 계약 (#769)
+  local-first 반복 연구 계약과 §12의 증거 수준별 현황 (#17; 이전 조직 #769의 후속)
 - [Research Harness P0-1 평가 snapshot](specs/2026-08-31-research-harness-evaluation-snapshot.md) —
   원천 `slate_id`, multi-day click 귀속, validation/final 분리, label 봉인과
   content-addressed write-once snapshot, 독립 두 root 재생성과 candidate-safe data view 계약 (#17, #22; P0-1 완료, 현재 유효 계약)
 - [로컬 Research Harness MVP 구현 계획](plans/2026-08-15-local-research-harness-mvp.md) —
   사람이 준 가설·ExperimentCard부터 봉인 평가·반복 실행·ledger·REPORT까지의 구현 순서
-  (#769, Task 1/P0-1 완료·Task 2+와 전체 MVP 진행 중이라 archive하지 않음)
+  (#17, Task 1~6 핵심 구현·Task 7 주요 실측 완료. 잔여 자동 복구·자율성 실증과 수용 판단을 추적하므로 archive하지 않음)
 
 ## 가이드
 

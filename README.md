@@ -27,8 +27,12 @@ Autoresearch의 최종 목표는 ML 리서처·엔지니어를 위한 **자율 �
 에이전트가 raw 데이터로 피처를 재조립·가공하고, 모델·임베딩 방식을 선택해
 학습한 뒤, origin(champion) 모델과의 비교·A/B 테스트까지 스스로 판단해
 수행합니다. 구현된 일일 폐루프는 이 에이전트가 실험을 돌리기 위한
-기반 테스트베드이며, MVP(폐루프 완주) → 최적화 → 기술 고도화 → 에이전트
-자율 실험 순서로 나아갑니다.
+기반 테스트베드입니다. 현재는 사람이 준비한 가설·데이터·예산으로 동작하는 로컬
+Research Harness의 핵심 구현과 제한된 실제 E2E를 완료했습니다. 깨진 candidate의
+자동 수정·복구, 더 넓은 피처/모델 선택과 자율성·비용의 추가 실증은 남아 있습니다.
+논문 자동 발견·가설 변환·웹 제품 연결은 MVP 이후 로드맵입니다.
+최신 상태와 근거는 [MVP 완료 조건](docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md#12-mvp-완료-조건)과
+[실측·포트폴리오 기록](docs/reports/2026-09-03-local-autonomous-experiment-e2e.md)을 따릅니다.
 
 전체 파이프라인 (일일 폐루프):
 
@@ -53,7 +57,7 @@ autoresearch/        # 폐루프 파이프라인 — 단계마다 한 패키지
 ├── data_collection/      # YouTube 트렌딩 수집 (fetch/transform/load/backfill + 복원력 레이어)
 ├── virtual_user_generation/  # LLM 기반 가상 유저(페르소나) 생성 + 파이프라인 어댑터
 ├── action_log_generation/    # action log 생성·shard·merge·품질 계약
-├── research_harness/  # 재현 가능한 평가 snapshot: label-free slate·봉인 label·split·local write-once
+├── research_harness/  # 로컬 자율 실험: snapshot·Sealed Judge·재학습·Controller·ledger·REPORT
 ├── feature_engineering/  # 피처 조립·임베딩·Feast 조회
 ├── model_training/       # 모델 정의, 학습, 학습 데이터셋, provenance, 스냅샷
 ├── model_evaluation/     # 평가, 열화 측정, paired 비교, seed sweep, 승격 근거
@@ -170,9 +174,13 @@ baseline/champion SHA, 초기 card, budget, screening seed와 서로 다른 conf
 Codex 모델과 reasoning effort는 명시하며 새 API key나 유료 클라우드 자원을 요구하지 않습니다.
 agent 호출은 개인 config를 읽지 않고 승인 정책 `never`와 요청 sandbox 범위를 명시합니다.
 native Windows는 기존에 설치된 `elevated` sandbox를 선택하며 전체 접근으로 우회하지 않습니다.
-Windows MVP에서는 agent의 임시 데이터 없는 설정 테스트와 Harness의 실제 학습 검증을
-분리합니다. 범용 sandbox pytest 임시 폴더 회수와 candidate 입력 읽기 제약은
-[#54](https://github.com/bbungjun/Autoresearch/issues/54)에서 추적합니다.
+Windows coding prepare에서는 검증된 candidate 입력에 한정한 추가 읽기 권한과
+등록된 `harness_out/.agent-tmp`의 creator-side 회수를 구현했습니다
+([#54](https://github.com/bbungjun/Autoresearch/issues/54), PR #65·#66).
+후보 commit·patch·기록을 먼저 보존하고 같은 sandbox 주체의 helper 회수, host의 비어 있음
+검사와 기존 worktree 회수까지 성공해야 후보를 반환합니다. 등록 경로 밖의 private 산출물과
+host 강제 종료까지 자동 회수하지 않으며 기존 실패 폴더의 소유권·권한도 바꾸지 않습니다.
+agent의 코드·테스트 실행과 Harness의 공식 재학습·수치 판정은 계속 분리합니다.
 run 설정과 산출물은 Judge-owned 로컬 파일이며 저장소에 커밋하거나 candidate에 주지 않습니다.
 
 같은 명령은 `run-inputs`의 고정 metadata·설정·모델 파일·trusted Harness 코드와 ledger를
@@ -192,9 +200,12 @@ validation attempt는 재시작할 수 있어 LLM 호출 exactly-once는 보장�
 실패는 자동 재호출하지 않고 검토 unavailable로 기록합니다. 시간·token은 관측 coverage와
 함께 표시하고, 달러 비용·사람 개입 횟수는 측정되지 않았다면 null입니다.
 
-final은 기존 단일 소비 계약을 유지합니다. baseline 5-seed calibration은 실측했으며,
-Controller 전체 품질·자율성·비용 검증은 계속 진행 중입니다. 이 실행 명령이나 baseline
-변동량 측정만으로 candidate의 성능 개선이 증명되는 것은 아닙니다.
+final은 기존 단일 소비 계약을 유지합니다. 별도 baseline 5-seed calibration과 실제
+2-trial feedback·checkpoint 재개·final·REPORT·새 문맥 Judge 검토를 실측했습니다.
+해당 합성 실험에서는 validation 승격 후 final의 사전 채택 기준에 미달해 baseline을
+유지했습니다. 시간·토큰은 관측했지만 달러 비용·사람 개입 횟수는 미측정입니다.
+실패 candidate의 실제 자동 복구, 피처/임베딩 모델 교체 실증과 최신 #62/#54 변경을 모두
+반영한 새 통합 E2E는 남아 있습니다. 개별 검증을 새 통합 완주로 합산하지 않습니다.
 자세한 계약은 [Harness spec §4.9·§10.1.1](docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md)를 따릅니다.
 
 사전 수동 측정 도구는 `python -m scripts.research_harness.calibrate_baseline --help`와

@@ -1,6 +1,6 @@
 # Agent Project Reference
 
-> Last Updated: 2026-07-24
+> Last Updated: 2026-09-03 (Research Harness 구현·실측 상태 동기화)
 
 폴더별 책임과 저장소·모듈 경계를 찾기 위한 문서입니다. "새 코드를 어디에
 두는가?", "Y는 어느 코드·저장소에서 담당하는가?" 질문에 답합니다. 디렉토리
@@ -43,7 +43,7 @@ docs/
 | **Agent Orchestration** | FastAPI 채팅 저장 API, Codex CLI/OpenAI 호출, PostgreSQL 저장 | `applications/experiment_platform/` |
 | **Reranking Serving** | 리랭킹 API | `applications/reranking_api/` |
 | **Recommendation** | 정책 라운드, 일일 추천 폐루프 | `autoresearch/recommendation/` |
-| **Research Harness snapshot·fixture foundation (Stage B/C)** | action log 평가 snapshot 조립·게시, Stage C fixture/candidate handoff 계약과 결정적 입력 기반 | `autoresearch/research_harness/` |
+| **Research Harness** | 평가 snapshot·안전한 candidate 입력·봉인 채점·로컬 재학습·feedback Controller·ledger·REPORT | `autoresearch/research_harness/` |
 
 ## Responsibility Boundaries
 
@@ -88,7 +88,7 @@ docs/
 - **게시 경계:** local content-addressed target은 같은 lock protocol을 따르는 cooperating
   publisher에게만 write-once 의미를 보장합니다. 완성·동일 target만 재사용하며 부분 target이나
   manifest/artifact digest 불일치는 `snapshot_write_conflict`로 거부하고 덮어쓰지 않습니다.
-- **후속 구현:** fixture/snapshot 게시, candidate view·workspace, Sealed Judge·지표,
+- **현재 구현:** fixture/snapshot 게시, candidate view·workspace, Sealed Judge·지표,
   ledger·Controller와 metadata v2를 구현했다. `local_features.py`는 후보 입력에서
   KST/as-of 기반 21개 피처를 조립한다. `embedding.py`의 작은 TextEmbedder interface를
   `local_embedding.py`가 local-files-only SentenceTransformer와 identity별 캐시로 구현한다.
@@ -107,16 +107,23 @@ docs/
   실행·봉인·artifact 보존을 맡는다. 설정 정본은 `HarnessRunConfig`이며 절대 로컬 경로와
   사전 실측 sigma를 요구한다. runtime은 모델 다운로드나 registry 초기화를 하지 않는다.
   Codex 호출은 승인 정책 never 및 Windows-only elevated 구현을 명시하되 요청한
-  read-only/workspace-write 범위를 유지한다. Windows sandbox의 범용 pytest 임시 폴더
-  회수·candidate 입력 읽기 제약은 #54에서 별도로 추적한다.
+  read-only/workspace-write 범위를 유지한다. Windows coding prepare의 검증된 입력 읽기와
+  등록 temp 회수는 #54A/B(PR #65·#66)에서 구현·native 검증했다.
+  `_windows_sandbox_inputs.py`는 새 candidate 입력에 한정한 READ 준비를,
+  `_agent_temp.py`는 고정 temp anchor의 자식 회수만 맡는다. candidate 증거 보존 후 회수하며
+  host empty 검증·기존 workspace 회수에 실패하면 후보를 반환하지 않는다.
+  임의 private 경로·기존 실패 workspace·소유권 변경·host 강제 종료 후 회수는 지원하지 않는다.
   `report.py`는 종료 후 immutable input·typed ledger·attempt 증거를 구조화하고,
   별도 빈 workspace의 새 read-only CodingAgent 검토를 한 번 요청하여 advisory 결과와
   Markdown REPORT를 게시한다. private 경로/raw log/정답을 검토 prompt에 전달하지 않는다.
   runtime은 종료 결과를 입력/ledger와 결속하고 REPORT 재개에서 Controller를 재실행하지
   않는다. 수치 판정은 여전히 Sealed Judge 소유이며 기록 Judge는 이를 변경하지 않는다.
+- **실측과 남은 검증:** 별도 5-seed calibration, 실제 두 trial·feedback 수정·checkpoint 재개·
+  단일 final·새 기록 Judge·REPORT까지 관측했다. 실패 candidate 자동 수정의 실제 완주,
+  피처/모델 교체와 사람 개입·달러 비용 계측, 최신 변경의 새 통합 E2E는 미완료다.
+  자세한 상태·근거는 상위 spec §12와 plan의 최신 현황, E2E 포트폴리오 기록을 따른다.
 - **비책임:** GCP 자원 생성·운영 Vertex AI 경로 교체·시스템 드라이버 관리·임베딩 파인튜닝은
-  이 로컬 adapter의 책임이 아니다. 5-seed calibration과 실제 완주 성과는
-  Task 7 후속 범위다. 위 Stage B/C facade 목록은 최초 단계의 계약 설명이며 전체
+  이 로컬 adapter의 책임이 아니다. 위 Stage B/C facade 목록은 최초 단계의 계약 설명이며 전체
   패키지 export 현황은 `__init__.py`를 따른다.
 
 ### `autoresearch/`의 학습·평가 단계 패키지
