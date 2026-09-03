@@ -295,10 +295,28 @@ MLflow 재실행은 설치 레이어를 재사용했고 cache export가 0.5초�
 
 문서 전용 변경은 [후속 PR #84](https://github.com/bbungjun/Autoresearch/pull/84)
 에서 검증한다. [최초 문서 PR 실행](https://github.com/bbungjun/Autoresearch/actions/runs/33779198508)에서
-Docker 하위 job 6개가 모두 skipped이고 집계 job은 success인 것을 확인했다. 수동 `workflow_dispatch` 전체 실행과
-새 커밋에 의한 이전 PR 실행 취소는 로컬 설정 검사 범위이며, 이 측정만으로
-원격 실증까지 완료했다고 주장하지 않는다. 문서 PR의 새 커밋으로 이전
-실행 취소를 확인한 경우에는 해당 취소 실행과 최종 성공 실행을 함께 확인한다.
+Docker 하위 job 6개가 모두 skipped이고 집계 job은 success인 것을 확인했다. 수동 `workflow_dispatch` 전체 실행은 이 측정만으로 원격 실증까지 완료했다고 주장하지 않는다.
+PR #84에 새 커밋을 push한 뒤 이전 실행 `33779198508`이 `cancelled`로
+종료되고 새 실행 `33779610877`이 시작되는 것을 확인했다. 수동 cancel
+명령을 호출하지 않았으므로 PR concurrency 설정의 실제 동작 근거다.
+
+### 캐시 저장량 관측
+
+전체 main 첫 실행과 PR 재사용 실행이 끝난 뒤 Actions cache 목록을
+모든 페이지에 걸쳐 조회했다. 2026-09-04 관측값은 총 277개 항목,
+7,728,185,759 bytes(약 7.73GB, 십진 단위)였다.
+
+| ref | 관측 저장량 |
+| --- | ---: |
+| main | 3,864,051,323 bytes |
+| PR #82 merge ref | 3,864,128,228 bytes |
+| 기존 PR #47 merge ref | 6,208 bytes |
+
+빌드 캐시 외 항목을 포함한 목록의 합계이며, 빌드 artifact 저장량이나
+청구 금액을 뜻하지 않는다. 이미지 scope가 분리돼도 PR과 main의 ref별
+저장량이 별도로 발생한다는 운영 비용을 확인했다. 캐시 용량·과금 설정은
+변경하지 않았다. 이후 다른 PR의 캐시가 쌓일 때는 이 관측값이 유지된다고
+가정하지 말고 총량·eviction·export 오류를 함께 확인한다.
 
 ## 포트폴리오 서술 초안
 
