@@ -3,7 +3,9 @@
 [파이프라인] Controller가 가설을 선택한 뒤 candidate 코드 작성과 실험 기록 검토를
 수행하는 외부 CLI 호출 구간이다. 학습·수치 판정은 LocalRunner/Domain 소유다.
 [기능] 명시적 Codex 설정, 최소 인증 환경, owned process tree, bounded JSON/log/usage와
-실패 evidence를 제공한다. 반환 JSON의 업무 스키마 검증은 호출자가 담당한다.
+실패 evidence를 제공한다. 승인 정책은 never로 고정하고 Windows에서는 elevated
+sandbox 구현을 명시하되 요청의 read-only/workspace-write 범위는 유지한다.
+반환 JSON의 업무 스키마 검증은 호출자가 담당한다.
 [비책임] Git 변경·commit, final grant·정답, Controller 재개와 REPORT는 각각 workspace,
 local trial adapter와 Controller가 소유한다. 동일 OS 사용자에 대한 보안 격리는 아니다.
 """
@@ -185,6 +187,8 @@ def _codex_argv(config: CodexAgentConfig, request: CodingAgentRequest) -> tuple[
         "--output-schema", str(request.artifact_root / "schema.json"),
         "-o", str(request.artifact_root / "response.json"), "-m", config.model,
         "-c", "model_reasoning_effort=" + json.dumps(config.reasoning_effort),
+        "-c", 'approval_policy="never"',
+        *(("-c", 'windows.sandbox="elevated"') if os.name == "nt" else ()),
         "-C", str(request.cwd), "-",
     )
 
@@ -387,6 +391,8 @@ def _run(config: CodexAgentConfig, request: CodingAgentRequest) -> CodingAgentRe
                 _write(root / "receipt.json", _json_bytes({
                     "model": config.model, "reasoning_effort": config.reasoning_effort,
                     "mode": request.mode, "duration_ms": duration_ms,
+                    "approval_policy": "never",
+                    "windows_sandbox": "elevated" if os.name == "nt" else None,
                     "exit_code": process.returncode if process is not None else None,
                     "usage": asdict(stdout.usage), "cost_usd": None,
                     "stdout_truncated": stdout.total > _LIMIT,

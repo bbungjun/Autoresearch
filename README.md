@@ -168,6 +168,11 @@ baseline/champion SHA, 초기 card, budget, screening seed와 서로 다른 conf
 모델/캐시·run root·별도 workspace parent를 먼저 준비하고 fixture의 소비 registry도
 기존 계약에 따라 준비해야 합니다. 이 명령은 registry를 생성하거나 초기화하지 않습니다.
 Codex 모델과 reasoning effort는 명시하며 새 API key나 유료 클라우드 자원을 요구하지 않습니다.
+agent 호출은 개인 config를 읽지 않고 승인 정책 `never`와 요청 sandbox 범위를 명시합니다.
+native Windows는 기존에 설치된 `elevated` sandbox를 선택하며 전체 접근으로 우회하지 않습니다.
+Windows MVP에서는 agent의 임시 데이터 없는 설정 테스트와 Harness의 실제 학습 검증을
+분리합니다. 범용 sandbox pytest 임시 폴더 회수와 candidate 입력 읽기 제약은
+[#54](https://github.com/bbungjun/Autoresearch/issues/54)에서 추적합니다.
 run 설정과 산출물은 Judge-owned 로컬 파일이며 저장소에 커밋하거나 candidate에 주지 않습니다.
 
 같은 명령은 `run-inputs`의 고정 metadata·설정·모델 파일·trusted Harness 코드와 ledger를

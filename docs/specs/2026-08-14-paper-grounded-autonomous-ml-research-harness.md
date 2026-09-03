@@ -648,6 +648,12 @@ checkpoint만 보완한다. Controller의 ledger schema는 확장하지 않는�
 실제 coding agent는 기존 ChatGPT 로그인으로 Codex CLI의 새 ephemeral 실행을 사용한다.
 명시적 model/effort와 `--ignore-user-config`로 실행 설정을 고정하고 workspace-write,
 JSON 이벤트와 구조화된 최종 응답을 사용한다. 이 옵션은 저장 로그인 자체를 제거하지 않는다.
+비대화형 호출의 approval policy는 `never`로 명시한다. native Windows에서는
+`windows.sandbox="elevated"`를 호출 인자로 명시하여 개인 설정을 읽지 않아도 기존에
+설치된 Windows sandbox를 선택한다. 다른 플랫폼에는 Windows 설정을 전달하지 않는다.
+코드 작성은 workspace-write, 독립 기록 검토는 read-only이며 전역 설정·전체 접근 전환·
+규칙 무시·실패 후 자동 sandbox 약화는 하지 않는다. sandbox 설치/정책 문제가 있으면
+실패를 보존하고 실행 환경을 해결한 뒤 별도 attempt로 재개한다.
 기존 executor의 Linux 전용 프로세스 처리를 그대로 가져오지 않는다. timeout과 프로세스
 트리 회수는 Harness의 Windows Job Object/POSIX process group 패턴을 따른다.
 OS 실행에 필요한 환경과 Codex 로그인 위치만 전달하고 GitHub/GCP/API key 환경은 전달하지

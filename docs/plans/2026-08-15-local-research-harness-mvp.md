@@ -1467,11 +1467,11 @@ Controller 정책을 한 run에서 실행·재개할 수 없었다. Codex CLI �
 조립한다. immutable run-input 게시와 actual agent launcher는 작은 module로 분리한다.
 원천 재조회 대신 저장 metadata bytes를 재개하며 final registry는 기존 위치·권한을 유지한다.
 
-- [ ] run-input 고정/복구/drift/부분 게시 테스트부터 구현
-- [ ] Codex CLI structured response·usage·timeout·tree 회수 테스트와 adapter
-- [ ] 실제 trial runner의 candidate commit·seed paired 실행·봉인/평가 연결
-- [ ] local 실행 설정과 checkpoint 결속·재개 CLI 및 README/reference 갱신
-- [ ] 실제 agent 코드 변경/실제 학습 연결 smoke (5-seed calibration과 구분)
+- [x] run-input 고정/복구/drift/부분 게시 테스트부터 구현
+- [x] Codex CLI structured response·usage·timeout·tree 회수 테스트와 adapter
+- [x] 실제 trial runner의 candidate commit·seed paired 실행·봉인/평가 연결
+- [x] local 실행 설정과 checkpoint 결속·재개 CLI 및 README/reference 갱신
+- [x] 실제 agent 코드 변경/실제 학습 연결 smoke (5-seed calibration과 구분)
 - [ ] 독립 리뷰·회귀·CI·PR·merge, 문제/해결/결과 기록
 
 **한계:** 새 실행의 LLM 호출 횟수는 exactly-once가 아니다. 중단된 validation attempt는
@@ -1516,6 +1516,56 @@ calibration이 아니다. final은 소비하지 않았다. HOME/USERNAME 보완�
 31 passed, 6 skipped, 독립 리뷰에서도 같은 결과를 확인했다. 코드 변경 후 전체 회귀와
 CI는 이어서 확인한다. 실제 coding agent의 정책 차단이 남아 있으므로 PR은 Draft로
 준비하며, 이슈 #52와 Goal 4/5를 완료 처리하지 않는다.
+
+**Goal 4B 권한 설정 복구 중 (2026-09-03):** 사용자가 실험용 workspace-write·Windows
+sandbox 설정 수정을 승인했다. 전역 설정은 그대로 두고 기존 호출에
+`windows.sandbox="elevated"`와 `approval_policy="never"`를 명시한 새 실제 probe에서
+파일 읽기와 apply_patch 쓰기가 모두 성공했다(21.922초, input 54,685 / cached 35,968 /
+output 273 tokens). 이전 실패와 이 성공을 비교하면 실행에 필요한 native sandbox 설정을
+개인 설정과 함께 생략한 경계가 유력한 원인이다. 두 설정을 함께 바꾼 관측이므로 한 설정만의
+인과로 단정하지 않는다. 전체 접근·규칙 무시·전역 config 수정은 하지 않았다.
+이 probe는 권한 복구 증거이며 실제 모델 코드 변경·학습 실험의 완료 증거는 아니다.
+명시적 호출 설정의 회귀 테스트와 실제 candidate paired smoke를 이어서 검증한다.
+
+새 실제 candidate 시도에서는 소스/관련 테스트 수정까지 성공했지만, agent가 실행한
+`uv run`이 workspace 밖 사용자 캐시에 쓰려다 거부되어 `blocked`로 종료했다.
+이는 이전의 모든 명령 정책 차단과 다른 실패다. 54.983초, input 123,962 /
+cached 95,232 / output 1,605 tokens를 보존했고, 성공한 candidate나 측정 성과로
+계산하지 않는다. 기존 설치된 테스트 Python을 직접 사용하고 cache provider를 끄며
+pytest 임시 경로를 disposable output 안으로 지정하는 새 실험 입력으로 보완한다.
+외부 캐시 쓰기 권한을 넓히거나 실행 거부를 성공으로 바꾸지 않는다.
+
+기존 Python을 직접 실행한 다음 시도는 코드·관련 테스트 2건·candidate commit 보존에
+성공했지만 workspace 회수에서 실패했다. pytest가 Windows sandbox 사용자로 만든
+0700 임시 디렉터리는 호스트 프로세스가 읽지 못했다. 동일 sandbox에서 해당 임시
+폴더만 정리하는 시도도 삭제 실행 정책에 거부되어 중단했으며 다른 경로나 권한으로
+재시도하지 않았다. 해당 실패 폴더는 보존한다. 이 제약 때문에 coding 단계는 임시
+데이터 없는 설정 계약 테스트, 실제 학습·예측 검증은 Harness가 맡는 최소 실행 범위를
+명시했다. 범용 sandbox 내부 pytest와 그 임시 디렉터리 회수는 아직 지원 완료가 아니다.
+
+보존된 실제 candidate commit의 patch digest를 대조한 뒤 별도 validation 복구를 실행했다.
+seed 42의 두 독립 학습·채점이 72.702초에 끝났고, baseline→candidate는
+NDCG@10 0.7817132868→0.7794390051, LogLoss 0.1639438929→0.1433473733,
+Brier 0.0374715513→0.0272754901이었다. 확률 지표는 좋아졌지만 순위 지표는 낮아졌다.
+이는 단일 seed 관측이며 σ 기반 승격, final 성과, Controller 자동 재개의 증거가 아니다.
+final은 소비하지 않았다.
+
+전체 회귀 첫 재실행은 951 passed / 11 failed / 13 skipped였다. 실패 11건은 동일
+snapshot manifest의 일반 경로 읽기였고 경로 길이는 정확히 260자, Windows long-path
+설정은 비활성이었다. 파일은 extended-length 경로로 3,851 bytes가 정상 조회됐다.
+짧은 새 pytest basetemp에서 해당 파일은 37 passed / 2 skipped였다. 시스템 설정이나
+test 판정 기준을 바꾸지 않고 짧은 경로에서 전체 회귀를 다시 검증한다.
+
+**실제 agent→학습 smoke 완료:** 임시 데이터 없는 설정 테스트로 역할을 분리한 새
+attempt에서는 실제 agent가 코드와 테스트를 수정하고 표적 6건을 통과했다. candidate
+`5dfcc97877f86b87ced7fec69b2279cae8e50386`을 보존한 뒤 기준/후보를 각각 새로 학습하여
+채점하고 두 새 workspace를 모두 회수했다. 총 127.734초 중 agent 67.983초,
+paired 학습·채점 50.561초였다. agent usage는 input 181,668 / cached 150,400 /
+output 1,776 / reasoning output 248 tokens이며 달러 비용은 미확인이다.
+3,840행·160 slate의 지표는 위 validation 복구 관측과 동일했다. final은 미소비이며
+이 결과는 Controller 전체 실행·독립 연구 기록 Judge·5-seed calibration을 대신하지 않는다.
+앞선 실패한 임시 폴더는 새 성공으로 지우지 않았으며 운영 제약은
+[#54](https://github.com/bbungjun/Autoresearch/issues/54)에서 추적한다.
 
 ## Task 7: 지표별 baseline σ 측정 + end-to-end 완주
 

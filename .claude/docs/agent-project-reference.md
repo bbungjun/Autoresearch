@@ -106,6 +106,9 @@ docs/
   실행·usage·프로세스 회수를, `local_trial_runner.py`는 candidate commit과 paired seed
   실행·봉인·artifact 보존을 맡는다. 설정 정본은 `HarnessRunConfig`이며 절대 로컬 경로와
   사전 실측 sigma를 요구한다. runtime은 모델 다운로드나 registry 초기화를 하지 않는다.
+  Codex 호출은 승인 정책 never 및 Windows-only elevated 구현을 명시하되 요청한
+  read-only/workspace-write 범위를 유지한다. Windows sandbox의 범용 pytest 임시 폴더
+  회수·candidate 입력 읽기 제약은 #54에서 별도로 추적한다.
 - **비책임:** GCP 자원 생성·운영 Vertex AI 경로 교체·시스템 드라이버 관리·임베딩 파인튜닝은
   이 로컬 adapter의 책임이 아니다. 연구 기록 Judge·REPORT·calibration은
   Task 6/7 후속 범위다. 위 Stage B/C facade 목록은 최초 단계의 계약 설명이며 전체

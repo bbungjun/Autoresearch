@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import sys
 import time
+from types import SimpleNamespace
+from typing import Literal
 
 import pytest
 from pydantic import ValidationError
@@ -76,6 +78,36 @@ def test_structured_response_explicit_arguments_usage_and_evidence(
         path = request.artifact_root / evidence.uri.rsplit("/", 1)[-1]
         assert hashlib.sha256(path.read_bytes()).hexdigest() == evidence.sha256
     assert "한 가설" not in repr(receipt)
+    recorded = json.loads((request.artifact_root / "receipt.json").read_text())
+    assert recorded["approval_policy"] == "never"
+    assert recorded["windows_sandbox"] == ("elevated" if os.name == "nt" else None)
+
+
+@pytest.mark.parametrize("platform_name", ["nt", "posix"])
+@pytest.mark.parametrize("mode", ["workspace-write", "read-only"])
+def test_platform_sandbox_settings_are_explicit_without_broadening_permissions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform_name: str,
+    mode: Literal["workspace-write", "read-only"],
+) -> None:
+    request = replace(_request(tmp_path), mode=mode)
+    config = _config()
+    monkeypatch.setattr(agent, "os", SimpleNamespace(name=platform_name))
+    args = agent._codex_argv(config, request)
+    settings = [args[index + 1] for index, value in enumerate(args) if value == "-c"]
+    assert 'approval_policy="never"' in settings
+    if platform_name == "nt":
+        assert 'windows.sandbox="elevated"' in settings
+    else:
+        assert not any(value.startswith("windows.") for value in settings)
+    assert args == (
+        str(config.executable), "exec", "--ephemeral", "--ignore-user-config",
+        "--sandbox", mode, "--json", "--skip-git-repo-check",
+        "--output-schema", str(request.artifact_root / "schema.json"),
+        "-o", str(request.artifact_root / "response.json"), "-m", "explicit-model",
+        "-c", 'model_reasoning_effort="medium"', "-c", 'approval_policy="never"',
+        *(("-c", 'windows.sandbox="elevated"') if platform_name == "nt" else ()),
+        "-C", str(request.cwd), "-",
+    )
 
 
 def test_environment_drops_credentials_and_preserves_explicit_auth_location(
