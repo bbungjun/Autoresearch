@@ -705,12 +705,11 @@ calibration CLI의 선택 baseline 인자가 내부의 초기 SHA 상수 제한 
 작동하지 않는 문제도 발견했다. 기본 SHA를 유지하고 명시 full SHA·실제 commit 일치와
 고정 5-seed·새 출력 조건을 검증하도록 최소 보완한다.
 
-**현재 근거:** 새 fixture는 seed 7101/T=2026-09-01로 한 번 준비했으며 기존 #60 관측
-208개와 #69 관측 128개 파일은 reference hash와 일치했다. 새 final ID는 이전 두 실험과
-다르며 아직 registry 초기화·final 소비·실제 coding 호출은 하지 않았다. 준비용 코드 검증과
-baseline calibration, 실제 agent 피처 구현의 결과는 확인 후 이 절에 추가한다. 현재
-성능 향상·피처 promote·자율성 확대 완료를 주장하지 않는다. calibration에서 σ 전제가
-깨지면 actual coding/final 전에 방향 결정을 요청하며, #69의 σ=0 실행 승인을 재사용하지 않는다.
+**실행 전 봉인:** 새 fixture는 seed 7101/T=2026-09-01로 한 번 준비했으며 baseline은
+`cf1642a5ba61fd85940c2a41762a91b6b4073044`로 고정했다. calibration과 실제 실행의
+SHA·snapshot·prediction 설정을 대조했고 새 final ID는 이전 두 실험과 다르다.
+calibration의 기존 σ 전제를 만족한 뒤 최초 registry를 준비했다. #69의 σ=0 실행 승인을
+재사용하거나 seed 탐색·epsilon 대입으로 조건을 바꾸지 않았다.
 
 **준비 코드 검증:** 추가 피처 연결은 RED 27건으로 receipt 불일치와 사전 검증 누락을
 확인한 뒤 보완했다. calibration의 새 SHA는 RED 2건 후 명시 pin을 지원했다. 최종
@@ -718,3 +717,82 @@ baseline calibration, 실제 agent 피처 구현의 결과는 확인 후 이 절
 경고는 숨기지 않는다. 실제 작은 CPU 모델의 22열 fit/predict·native model·receipt와
 21열 baseline 회귀를 포함한다. 추가 열은 테스트용 대역이며 평균 관심사 피처의 구현이나
 실제 실험 성공 증거로 세지 않는다. 전체 Ruff·변경된 calibration script Ruff도 통과했다.
+
+### Calibration과 실제 실행 결과
+
+별도 baseline calibration은 고정 seed 101~105의 5회 학습을 완료했다. 7개 지표 모두
+표본 표준편차(ddof=1)가 기존 최소값 1e-6보다 컸다. 이 구간의 coding·final 호출은 0회다.
+
+| 지표 | validation 평균 | 표본 표준편차 |
+| --- | ---: | ---: |
+| NDCG@10 | 0.7853719357553741 | 0.031146796617403168 |
+| Recall@10 | 0.99625 | 0.005590169943749454 |
+| NDCG@24 | 0.7863867240492686 | 0.030362046005638774 |
+| grouped ROC-AUC | 0.8936413043478261 | 0.009817645590152394 |
+| PR-AUC | 0.4931464140828802 | 0.03906264239060431 |
+| LogLoss | 0.15689895477735716 | 0.013612612198730584 |
+| Brier | 0.03623990959647297 | 0.001626391593488854 |
+
+실제 Controller 호출은 924.622초에 종료돼 REPORT까지 생성했다. 그러나 **피처 추가의
+공식 학습·평가 실증은 실패**했다. coding 2회 모두 코드·patch를 보존했지만 prepare의
+`workspace_cleanup_failed`로 중단됐다. 첫 후보는 `cc6b1eb6e8f4d7bfff5094453989bc964989c86b`,
+둘째는 `d7aefcca5a371840390ed53a81a59f58a6ef0440`이다. prepare가 성공 반환되지 않아
+ledger의 두 trial candidate SHA는 null이다. 두 번째도 원 champion에서 새로 구현했으며,
+첫 코드에 대한 validation 기반 수정 성공 사례가 아니다.
+
+| 구간 | 관측 | 해석 |
+| --- | --- | --- |
+| 실제 coding | 2회, 모두 patch 보존 | 코드 작성과 prepare 성공은 다름 |
+| 추가 피처의 공식 validation 학습 | 0회 | 피처의 성능·split 사용은 미검증 |
+| final | 기존 baseline끼리 5 pair·10회 학습, 21열 | 추가 피처 후보의 평가가 아님 |
+| 수치 결론 | `discard / primary_threshold_not_met`, baseline 유지 | 동일 구성의 차이 0이지 피처 무효의 증거가 아님 |
+| 새 문맥 기록 Judge | 1회, `concerns` | 22열 후보 실증 근거 부족을 정확히 지적 |
+
+각 final pair의 코드·prediction·model hash와 7개 지표는 동일했다. NDCG@10의 차이 0은
+고정 임계값 0.062293593234806335에 미달했다. 새 final 소비는 한 번이며, 이 평가 대상을
+초기화해 피처 후보로 다시 평가하지 않는다. calibration 5 fit, final 10 fit, coding 중
+작은 CPU 단위 테스트의 fit은 서로 다른 범위로 기록한다.
+
+### 회수 실패의 근거와 후속 조치
+
+두 cleanup은 각각 1.282초·1.468초에 `ValueError`, object_count null, removed_count 0으로
+실패했다. helper 프로세스는 회수됐지만 파일 회수는 실패한 것이다. 유력 가설은 기존
+`test_hardlinked_input_is_rejected`가 남긴 하드링크와 `_agent_temp`의 단일 링크만 허용하는
+사전 검사 충돌이다. 두 agent 모두 그 테스트 파일을 실행했다. 로그 형태도 전체 preflight
+완료 전 거부와 일치한다. 다만 잔류 하위 폴더 열람이 거부되어 실제 inode까지 확인하지
+못했으므로 **확정 원인이 아닌 강한 가설**로 남긴다. ACL 변경·접근 우회·강제 삭제는 하지 않았다.
+
+원본 기술 감사에서 첫 agent의 신규 테스트 RED 4건→GREEN 4건과 최종 관련 회귀
+108 passed / 2 deselected를 확인했다. 앞서 published-fixture 두 테스트가
+`fixture_state_conflict`로 실패한 뒤 선택에서 빠졌다. 전체 회귀 통과로 포장하지 않는다.
+넓은 코드 검색·traceback에서 fixture 소스 일부가 노출돼 사전의 좁은 열람 범위보다
+넓어진 한계도 있다. 두 번째 후보의 작은 학습 fixture에서는 추가 열이 상수 0이었으며,
+단위 테스트상 22열 전달만으로 실제 데이터에서의 유효성을 주장하지 않는다.
+
+[후속 #73](https://github.com/bbungjun/Autoresearch/issues/73)은 독립된 hardlink 최소 재현,
+테스트 소유 alias의 finally 정리 가능성, 기존 안전 정책 보존, published-fixture 충돌의
+분리 진단을 추적한다. 실행 중 수동 수정이나 세 번째 coding 기회는 넣지 않았다.
+실패 workspace와 raw 증거를 보존하며 새 실제 실험의 예산·final 대상은 별도로 결정한다.
+
+### 비용·자율성·포트폴리오 결론
+
+| 외부 호출 | 시간 | input tokens | cached input | output tokens | reasoning output |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| coding 1 | 383.187초 | 1,502,374 | 1,409,152 | 10,899 | 2,179 |
+| coding 2 | 238.202초 | 782,581 | 700,800 | 7,348 | 1,840 |
+| 기록 Judge | 29.592초 | 72,763 | 0 | 1,383 | 229 |
+
+cached·reasoning은 각각 input·output의 하위 관측치이며 합산하지 않는다. 달러 비용과
+자동 사람 개입 값은 null 그대로다. 단일 실행 구간의 별도 운영자 관찰에서는 사용자 추가
+승인·관측된 코드 편집, 코디네이터 코드 수정·stdin 입력·재시작·추가 coding 기회가 0이었다.
+코디네이터는 읽기 검토·안내와 후속 이슈 발행을 했으므로 운영자 활동 전체가 0인 것은 아니다.
+이 수동 증언을 준비 과정까지 포함한 완전 자율성이나 외부 활동 자동 감지로 확대하지 않는다.
+
+기존 #60 관측 208개·#69 관측 128개는 각 final marker를 포함해 사후에도 hash가 일치했다.
+새 문맥 Judge는 구조화 기록만, 구현 비참여 기술 reviewer는 raw 로그·patch까지 읽었다.
+따라서 코드 작성의 존재를 확인한 기술 감사가 기록 Judge의 증거 부족 지적을 무효화하지 않는다.
+
+이번 성과는 기존 interface만 사용해 학습 입력과 기록의 불일치를 고치고, 실제 자율 실행에서
+새로운 테스트/회수 충돌을 발견해 재현 가능한 후속 문제로 분리한 것이다. 피처 성능 개선은
+입증하지 못했다. PR #72는 준비 코드와 이 결과 기록만 반영하며 #71·상위 #17을 닫지 않는다.
+AI assistant의 작성·독립 검토와 실패 해석 과정을 함께 남기되, 실패를 성공 수치로 바꾸지 않는다.

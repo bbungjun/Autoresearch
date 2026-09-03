@@ -96,7 +96,7 @@
 - [Plan — 가설 수신부터 `[AR]` 이슈 발행까지 구현](plans/2026-08-04-hypothesis-to-auto-research-issue.md) (#516)
 - [Spec — 자율 ML 연구 Harness 기반 MVP와 논문 로드맵](specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md) — 저장소 전체 수정·외부 Sealed Judge·σ 기반 판정·local-first 반복 연구 계약과 §12의 구현/회귀·실측·수용 판단 구분 (#17; 최초 설계는 이전 조직 #769). 현재 유효 계약이므로 유지한다.
 - [Plan — 로컬 Research Harness MVP](plans/2026-08-15-local-research-harness-mvp.md) — Task 1~6 핵심 구현·Task 7 주요 실측·#69 단일 실패 candidate 자동 수정 실측 완료. 코드 반영 상태는 PR #70을 따르며 피처 추가 실증, 사람 개입 계측·판정 기준 수용 판단이 남아 archive하지 않는다 (#17, 2026-09-03 갱신).
-- [실측·포트폴리오 기록 — 로컬 자율 ML 실험 E2E](reports/2026-09-03-local-autonomous-experiment-e2e.md) — 실제 agent 피드백 수정·재학습·중단 복구·final/REPORT (#60), 설명 개선 (#62), Windows 입력 읽기·등록 temp 회수 (#54A/B), 중간점검 (§11, #67), 실제 실패 코드 단일 수정과 σ=0 판정 불가·기록 Judge의 증거 한계 (§12, #69), 피처 추가 실험의 사전 선택·학습 입력 증거 (§13, #71 준비 중).
+- [실측·포트폴리오 기록 — 로컬 자율 ML 실험 E2E](reports/2026-09-03-local-autonomous-experiment-e2e.md) — 실제 agent 피드백 수정·재학습·중단 복구·final/REPORT (#60), 설명 개선 (#62), Windows 입력 읽기·등록 temp 회수 (#54A/B), 중간점검 (§11, #67), 실제 실패 코드 단일 수정과 σ=0 판정 불가·기록 Judge의 증거 한계 (§12, #69), 피처 입력 증거 보완·양수 sigma calibration·coding 2회 뒤 회수 실패와 후속 #73 (§13, #71 실증 미완료).
 - [Spec — Research Harness P0-1 평가 snapshot](specs/2026-08-31-research-harness-evaluation-snapshot.md) — 완료된 P0-1 구현의 현재 유효 계약: `slate_id`, 평가 기간·click 귀속, label 봉인, split·fingerprint, 독립 재생성과 candidate-safe data view (#17, #22). 후속 Judge/Controller가 계속 소비하는 정본이므로 archive하지 않는다.
 - `applications/experiment_platform/` (FastAPI + Codex CLI/OpenAI + PostgreSQL 실험 API)
 - [Spec — Agent Orchestration GKE 내부 배포](specs/2026-07-30-agent-orchestration-gke-internal-deployment.md)

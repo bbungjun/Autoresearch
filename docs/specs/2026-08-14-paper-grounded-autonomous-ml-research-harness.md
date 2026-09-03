@@ -698,6 +698,16 @@ coding 420초다. 추가 재시도나 성능 기반 fixture seed 탐색은 하�
 기다린다. σ=0을 epsilon으로 바꾸거나 자동으로 다른 seed를 고르지 않는다. 기존 #69의
 σ=0 진행 승인을 이번 실험으로 확대하지 않는다. 기존 실험과 소비 상태는 보존한다.
 
+**2026-09-03 실행 상태.** 위 계약으로 #71을 한 번 실행했다. baseline 5-fit calibration은
+7개 sigma 모두 기존 전제를 만족했지만 coding 2회 모두 prepare의 workspace_cleanup_failed로
+끝나 추가 피처의 공식 학습·validation은 0회다. 이후 기존 baseline끼리 final 5 pair/10 fit과
+REPORT·기록 Judge1회는 완료됐다. final discard는 피처 효과를 검증한 결과가 아니다.
+피처 실증은 미완료로 유지하며 PR #72는 준비 연결·기록 범위다. 원본 로그와 코드가 가리키는
+intentional hardlink 테스트/회수 정책 충돌은 #73에서 최소 재현부터 조사한다. 실제 잔류
+inode 미확인으로 원인을 단정하지 않는다. 기존 안전 정책·실패 workspace·원본 기록·final
+소비 상태를 유지하며 추가 실제 실행 승인은 별도로 받는다. 상세는
+[실측 보고서 §13](../reports/2026-09-03-local-autonomous-experiment-e2e.md#13-새-피처가-실제-모델과-실험-기록에-들어가는가--71)을 따른다.
+
 ### 4.9 실제 agent 실행과 불변 run 입력 (#52)
 
 기존 `ResearchController` 정책은 유지하고 실제 `ResearchTrialRunner` adapter를 연결한다.
