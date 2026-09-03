@@ -1,4 +1,10 @@
-"""Candidate 로컬 재학습의 손 계산 라벨과 입력·seed 계약 검증."""
+"""Candidate 로컬 재학습의 라벨·입력·seed 계약을 검증한다.
+
+[파이프라인] 안전한 로컬 입력에서 피처 조립·학습·예측으로 이어지는 구간이다.
+[기능] 손 계산 라벨, 실제 모델·receipt 및 입력 거부를 검증하며, 보안 테스트가
+만든 alias는 실패 경로에서도 해제하여 후속 coding temp 회수를 방해하지 않는다.
+[비책임] 학습 구현은 local_training, 임시 파일 회수 정책은 _agent_temp 소유다.
+"""
 
 from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
@@ -193,9 +199,13 @@ def test_invalid_configuration(config: dict[str, object]) -> None:
 
 def test_hardlinked_input_is_rejected(tmp_path: Path) -> None:
     path = write_view(tmp_path)
-    os.link(path, tmp_path / 'alias.parquet')
-    with pytest.raises(FeatureContractError, match='local_training_path_invalid'):
-        module().load_local_training_input(path)
+    alias = tmp_path / 'alias.parquet'
+    os.link(path, alias)
+    try:
+        with pytest.raises(FeatureContractError, match='local_training_path_invalid'):
+            module().load_local_training_input(path)
+    finally:
+        alias.unlink()
 
 
 def test_input_is_not_read_again_after_loading(tmp_path: Path) -> None:

@@ -1,4 +1,10 @@
-"""실제 권한 조작 없이 고정 coding temp 회수와 경계 보존을 검증한다."""
+"""실제 권한 조작 없이 coding temp 회수와 경계 보존을 검증한다.
+
+[파이프라인] Coding 종료 뒤 workspace 회수 전의 고정 temp anchor 구간이다.
+[기능] 회수 preflight·실패·sentinel 보존을 검사하며, 테스트가 만든 하드링크는
+assertion 실패 시에도 해제하여 바깥 coding temp에 잔류하지 않게 한다.
+[비책임] 회수 구현은 _agent_temp, sandbox 실행은 coding_agent 소유다.
+"""
 
 import json
 import os
@@ -94,12 +100,16 @@ def test_hardlink_preflight_deletes_nothing(tmp_path: Path) -> None:
     sentinel = tmp_path / "outside"
     sentinel.write_text("safe")
     (anchor / "ordinary").write_text("preserved")
-    os.link(sentinel, anchor / "linked")
-    receipt = _receipt()
-    with pytest.raises(ValueError, match="unsafe_object"):
-        temp.clean(cwd, registration, receipt)
-    assert receipt["removed_count"] == 0
-    assert (anchor / "ordinary").exists() and sentinel.read_text() == "safe"
+    alias = anchor / "linked"
+    os.link(sentinel, alias)
+    try:
+        receipt = _receipt()
+        with pytest.raises(ValueError, match="unsafe_object"):
+            temp.clean(cwd, registration, receipt)
+        assert receipt["removed_count"] == 0
+        assert (anchor / "ordinary").exists() and sentinel.read_text() == "safe"
+    finally:
+        alias.unlink()
 
 
 def test_object_limit_preflight_deletes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
