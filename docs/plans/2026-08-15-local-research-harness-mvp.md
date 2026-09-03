@@ -2183,7 +2183,7 @@ published-fixture 테스트도 짧은 host 경로에서 통과했다. 별도 새
 다른 보안 테스트의 alias와 전체 sandbox suite까지 포괄하는 정리는 이번 범위가 아니다.
 문제·대안·결과는 실측 보고서 §14를 따른다.
 
-### Task 7P: 중첩된 로컬 fixture 생성 경로 — #74 (진행 중)
+### Task 7P: 중첩된 로컬 fixture 생성 경로 — #74 (구현·로컬 검증 완료)
 
 사용자가 #74를 승인했다. 새 합성 root에서 최초 실패 연산을 추적하고, 기존 Windows
 `_io_path` 패턴을 내부 생성 I/O에 적용하는 최소 접근을 검증한다. temp를 등록 경계 밖으로
@@ -2195,7 +2195,9 @@ alias/reparse/경계 검사는 유지하며 기존 fixture 재사용도 검증�
 - [x] 기존 경로 adapter를 내부 생성·탐색·재검증·회수 경계에 적용하고 짧은 경로·candidate view 회귀 검증
 - [x] contextlib에서 StageCError가 가려지는 별도 최소 재현을 #76으로 분리
 - [x] 생성 후 candidate metadata의 긴 snapshot resolve 실패를 #77로 분리 (data view는 추가 검증 대상)
-- [ ] 독립 리뷰·Ruff·CI·PR·포트폴리오 갱신과 merge (상태는 해당 PR을 정본으로 사용)
+- [x] 독립 리뷰·Ruff·포트폴리오 갱신 및 PR #78 발행
+
+CI·merge 상태의 정본은 [PR #78](https://github.com/bbungjun/Autoresearch/pull/78)이다.
 
 로컬 구현 검증은 49 passed/2 skipped, 독립 회귀는 86 passed/2 skipped, 학습 입력까지의
 추가 회귀는 99 passed였다. 독립 수정 전 대조 3건과 cleanup-only 대조 1건은 각각 실패했다.

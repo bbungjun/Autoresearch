@@ -880,8 +880,8 @@ descriptor·snapshot·manifest identity가 같았다. 별도로 수정 전 성�
 
 코디네이터의 추가 검증은 신규 nested·candidate data view·local training·local feature
 view·training features 5파일 99 passed / 34.39초였다. 전체 Ruff와 diff 검사가 통과했다.
-Windows native 경로 검증과 원격 Linux CI는 별개이며 CI·merge 상태는 연결 PR을 정본으로
-확인한다.
+Windows native 경로 검증과 원격 Linux CI는 별개이며 CI·merge 상태는
+[PR #78](https://github.com/bbungjun/Autoresearch/pull/78)을 정본으로 확인한다.
 
 기존 테스트를 긴 이름의 basetemp에서 실행한 첫 회귀는 11 failed, 35 passed, 2 skipped였다.
 테스트 자체의 원시 `manifest.read_bytes` 등이 긴 경로에서 실패했다. 짧은 basetemp에서
