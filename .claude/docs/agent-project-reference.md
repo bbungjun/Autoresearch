@@ -109,9 +109,14 @@ docs/
   Codex 호출은 승인 정책 never 및 Windows-only elevated 구현을 명시하되 요청한
   read-only/workspace-write 범위를 유지한다. Windows sandbox의 범용 pytest 임시 폴더
   회수·candidate 입력 읽기 제약은 #54에서 별도로 추적한다.
+  `report.py`는 종료 후 immutable input·typed ledger·attempt 증거를 구조화하고,
+  별도 빈 workspace의 새 read-only CodingAgent 검토를 한 번 요청하여 advisory 결과와
+  Markdown REPORT를 게시한다. private 경로/raw log/정답을 검토 prompt에 전달하지 않는다.
+  runtime은 종료 결과를 입력/ledger와 결속하고 REPORT 재개에서 Controller를 재실행하지
+  않는다. 수치 판정은 여전히 Sealed Judge 소유이며 기록 Judge는 이를 변경하지 않는다.
 - **비책임:** GCP 자원 생성·운영 Vertex AI 경로 교체·시스템 드라이버 관리·임베딩 파인튜닝은
-  이 로컬 adapter의 책임이 아니다. 연구 기록 Judge·REPORT·calibration은
-  Task 6/7 후속 범위다. 위 Stage B/C facade 목록은 최초 단계의 계약 설명이며 전체
+  이 로컬 adapter의 책임이 아니다. 5-seed calibration과 실제 완주 성과는
+  Task 7 후속 범위다. 위 Stage B/C facade 목록은 최초 단계의 계약 설명이며 전체
   패키지 export 현황은 `__init__.py`를 따른다.
 
 ### `autoresearch/`의 학습·평가 단계 패키지

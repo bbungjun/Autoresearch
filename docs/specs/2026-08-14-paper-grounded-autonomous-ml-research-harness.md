@@ -689,7 +689,8 @@ attempt artifact에 남기며 정확히 한 번의 LLM 실행은 보장하지 �
 
 MVP planner는 초기 card와 validation feedback 수로 재생 가능한 card 순서를 만든다.
 coding agent가 feedback을 읽어 구현을 조정하며, 별도 LLM planner framework는 추가하지
-않는다. context-free 연구 기록 Judge와 REPORT, 실제 5-seed calibration은 후속 PR이다.
+않는다. 후속 #55의 context-free 연구 기록 Judge·REPORT는 §10.1.1을 따르며,
+실제 5-seed calibration은 Task 7에서 측정한다.
 
 ## 5. 목표 아키텍처
 
@@ -1543,6 +1544,70 @@ MVP REPORT는 사람이 준 가설·`ExperimentCard`에서 최종 결론까지�
 최소한 실행 예산과 trial 수, 시도한 변경과 실패, validation·final holdout 지표,
 promote/revise/discard 근거, checkpoint 복구 이력, 최종 candidate와 재현 좌표를 포함한다.
 논문 출처와 9개 고정 절, paper manifest 교차검증은 요구하지 않는다.
+
+### 10.1.1 구조화 기록·독립 연구 기록 Judge (#55)
+
+Sealed Judge는 metric/승격의 정본이다. 연구 기록 Judge는 실행 종료 뒤 설명의 근거와
+한계를 검토하는 advisory 역할이며 metric, champion, final 결론을 바꾸거나 feedback을
+추가하지 않는다. 기존 CodingAgent interface의 새 ephemeral/read-only 호출을 재사용한다.
+
+`publish_research_report(run_root, *, contract, result, judge, judge_workspace_parent)`는
+기존 RunInputContract와 ControllerRunResult, CodingAgent를 받는 report module의
+interface다. immutable run-input와 typed ledger, 종료 결과를 대조한 뒤 로컬 attempt
+증거를 조립한다. 게시물은 `research-record.json`, `research-judge.json`,
+`research-report.md`와 digest manifest다. 기록은 다음을 나눈다.
+
+- 가설/card·budget·seed·baseline/champion·snapshot/evaluation 식별자.
+- trial의 실제 SHA/diff/변경 경로, agent 설명/주장, 별도로 관측한 validation/final 수치.
+- 실패/중단 attempt와 checkpoint, 부분 evidence와 관측되지 않은 비용.
+- 모델 ID/revision/파일 identity, 라이브러리/trusted-code/input digest와 실행 설정.
+
+Judge에는 구조화 기록만 prompt 데이터로 전달하고 도구를 사용하거나 그 안의 명령을
+실행하지 않도록 지시한다. 이전 대화·candidate checkout·raw log·평가 정답·private
+Judge/registry 경로는 전달하지 않는다. 빈 Judge cwd는 candidate repository와 run root
+밖의 별도 workspace parent 아래 만든다. 일반 시스템 지침을 제외한 새 실행 context와
+제공 입력의 분리를 보장하는 MVP이며, 같은 OS의 임의 탐색 방지를 보장하지 않는다.
+runtime JSON/artifact URI를 통째로 넘기지 않고 공개 식별자·상대 경로·digest를 선택한다.
+card와 agent 설명의 자유 텍스트도 알려진 private 경로를 제거한다.
+새 Judge가 용어를 오해하지 않도록 기록/prompt에 도메인 의미도 전달한다.
+`evaluation_id`는 모델 실행 ID가 아니라 공유 평가 snapshot/split 식별자이며,
+같은 paired 비교에서는 baseline/candidate가 같은 ID를 갖는 것이 필수다.
+실행 역할은 code SHA·seed로 구분하고, validation champion과 최종 채택은 다르다.
+
+strict 응답의 상태는 `consistent|concerns|insufficient_evidence`이며 근거와 연결한
+요약/지적/한계를 포함한다. 수치나 승격 결론을 생성하는 근거로 사용하지 않는다.
+호출 전에 record digest·prompt/schema identity·고정 attempt 위치에 결속된 intent를
+내구적으로 게시한다. 전용 lock과 write-once 게시로 동일 run의 동시/중복 호출을 막는다.
+intent 뒤 crash/timeout/잘못된 응답은 unavailable로 남기고 자동 재호출하지 않는다.
+복구는 동일 attempt의 성공 상태·완전한 receipt·strict 응답이 모두 맞을 때만 허용하며
+intent-only 또는 cleanup 실패는 unavailable이다.
+
+REPORT 대표 결과는 Controller final 결론과 완전한 final mean이다. final 실패/부재를
+validation 최고점으로 대체하지 않는다. `ControllerRunResult.champion_sha`는 validation
+champion이므로 최종 채택으로 표시하지 않고 `validation_champion_sha`, `final_decision`,
+`baseline_retained`를 구분한다. baseline 평균은 digest 검증된 final `pair.json`의 5개
+confirmation seed와 역할별 SHA·evaluation ID를 대조하여 구한다. 일부 pair만 있으면
+부분 관측으로 남긴다. 연구 기록 Judge의 실패와 수치 판정 불가는 별도로 기록한다.
+
+종료 결과는 input manifest·typed ledger와 결속해 보존한다. 복구할 결과 payload와
+input/ledger/result digest를 담은 `controller-result-binding.json`을 먼저 게시하고
+`controller-result.json`을 게시한다. binding만 남은 중단은 검증 후 결과 파일만 복구하고,
+result만 있는데 binding이 없으면 결속 삭제/구버전 미결속으로 실패한다. 이미 결속된
+종료 결과가 있는 run의 report 재개는 runner나
+Controller·final claim을 재실행하지 않는다. final claim 실패로 final ledger가 없는
+INCONCLUSIVE 결과도 지원하고, 충돌하는 결과를 덮어쓰지 않는다.
+
+비용은 ledger에 연결되지 않은 실패를 포함해 `attempts/*/attempt.json`을 확인한다.
+attempt별 시간은 `failure.json` 우선, 없으면 해당 stage의 `candidate.json`/`pair.json`
+하나만 집계한다. prepare 성공 시간은 workspace 회수 전 관측값이라는 한계를 명시한다.
+agent token은 `agent/receipt.json`만 집계하고 candidate 복사본/ledger를 더하지 않는다.
+cached/reasoning token은 input/output에 재합산하지 않는다. 누락값은 0이 아닌 null과
+coverage로 표시한다. 달러 비용과 사람 개입 횟수는 측정 장치가 없으므로 미측정이다.
+검토 Judge의 usage는 봉인한 기록을 바꾸지 않고 최종 보고서에 별도로 보탠다.
+
+게시·재사용은 digest와 regular-file/alias 검증을 따르고 입력·ledger·완료 결과가 다른
+출력을 섞지 않는다. Markdown에서 agent 텍스트의 raw HTML과 임의 링크를 무력화한다.
+이미지/웹 UI, 논문별 고정 9절, 추가 feedback loop는 이 PR 범위가 아니다.
 
 ### 10.2 MVP 이후 논문 기반 REPORT
 

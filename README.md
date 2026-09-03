@@ -99,8 +99,8 @@ target은 덮어쓰지 않고 실패합니다.
 
 이후 RuleBased fixture, candidate workspace, Sealed Judge, ledger·Controller,
 metadata v2, 로컬 피처/임베딩과 seed별 재학습 CLI를 구현했습니다. final용 metadata·workspace는
-별도 interface에서 기존 소비 grant 검증 후 전달합니다. 실제 agent·REPORT 통합은
-후속 Task 6/7 범위입니다. snapshot 계약 정본은
+별도 interface에서 기존 소비 grant 검증 후 전달합니다. 실제 agent 실행과 종료 REPORT는
+아래 로컬 실행 경로에서 연결하며, 5-seed calibration·실측 완주는 Task 7 범위입니다. snapshot 계약 정본은
 [`Research Harness P0-1 평가 snapshot`](docs/specs/2026-08-31-research-harness-evaluation-snapshot.md)입니다.
 
 ### Research Harness 로컬 임베딩 준비
@@ -179,9 +179,22 @@ run 설정과 산출물은 Judge-owned 로컬 파일이며 저장소에 커밋�
 대조해 재개합니다. 입력이 달라지면 실패하며 완료 trial을 재실행하지 않습니다. 중단된
 validation attempt는 재시작할 수 있어 LLM 호출 exactly-once는 보장하지 않습니다.
 최종 결과는 `controller-result.json`, 상세 증거는 ledger와 `attempts/`에 남습니다.
-final은 기존 단일 소비 계약을 유지합니다. 연구 기록 Judge/REPORT와 품질·자율성·비용
-calibration은 후속 단계이며 이 실행 명령만으로 성능 개선이 증명되는 것은 아닙니다.
-자세한 계약은 [Harness spec §4.9](docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md)를 따릅니다.
+결과는 `controller-result-binding.json`으로 입력·ledger와 연결합니다. 결속된 종료 결과가
+있으면 같은 명령을 다시 실행해도 Controller·학습·final claim 없이 REPORT만 복구합니다.
+입력이나 기록이 달라졌거나 결속 파일이 사라졌다면 재실행으로 덮지 않고 실패합니다.
+
+종료 시 `research-record.json`, `research-judge.json`, `research-report.md`와
+`research-report-manifest.json`을 게시합니다. 보고서는 실제 변경·agent 주장·관측 지표를
+구분하고 대표 수치는 final holdout의 완전한 비교를 사용합니다. validation champion을
+최종 채택 모델로 간주하지 않으며 final 실패를 validation 최고값으로 대체하지 않습니다.
+이전 대화와 candidate 코드가 없는 새 read-only Judge가 구조화 기록을 한 번 검토하지만,
+의견은 advisory이며 수치 판정·champion·feedback을 바꾸지 않습니다. 호출 intent 이후
+실패는 자동 재호출하지 않고 검토 unavailable로 기록합니다. 시간·token은 관측 coverage와
+함께 표시하고, 달러 비용·사람 개입 횟수는 측정되지 않았다면 null입니다.
+
+final은 기존 단일 소비 계약을 유지합니다. 실제 5-seed calibration과 품질·자율성·비용
+실측은 후속 단계이며 이 실행 명령만으로 성능 개선이 증명되는 것은 아닙니다.
+자세한 계약은 [Harness spec §4.9·§10.1.1](docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md)를 따릅니다.
 
 ## 배포 이미지
 

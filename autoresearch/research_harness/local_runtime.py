@@ -3,15 +3,16 @@
 [파이프라인] Judge fixture 준비 이후, validation 반복과 단일 final 종료 구간이다.
 [기능] typed 로컬 설정, 불변 run 입력·ledger 결속, 한 번의 feedback revision,
 실제 coding/training adapter와 Controller 조립 및 재개 결과 보존을 제공한다.
-[비책임] fixture 생성·모델 다운로드·sigma calibration·연구 기록 Judge/REPORT는 별도
-준비/후속 단계다. candidate 코드로 채점하지 않고 운영 MLflow/GCP 게시도 하지 않는다.
+봉인된 종료 결과가 있으면 Controller 재실행 없이 독립 기록 Judge/REPORT 게시로 재개한다.
+[비책임] fixture 생성·모델 다운로드·sigma calibration은 별도 준비 단계이며,
+연구 기록 조립은 report가 소유한다. 운영 MLflow/GCP 게시도 하지 않는다.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from importlib.metadata import PackageNotFoundError, version
@@ -35,9 +36,10 @@ from autoresearch.research_harness.ledger import (
 )
 from autoresearch.research_harness.local_evaluation_fixture import (
     FixtureActionLogSource, _open_lock_matches, _prepare_descriptor_lock,
-    _release_descriptor_lock, _safe_regular_file_identity,
+    _release_descriptor_lock,
 )
 from autoresearch.research_harness.prediction import HarnessPredictConfig
+from autoresearch.research_harness._report_state import ReportError
 
 
 @dataclass(slots=True)
@@ -160,6 +162,8 @@ def _run_lock(root: Path) -> Iterator[None]:
             raise LocalRuntimeError(error.stage) from None
         except FeatureContractError as error:
             raise LocalRuntimeError(error.reason) from None
+        except ReportError as error:
+            raise LocalRuntimeError("report_" + error.stage) from None
         finally:
             _release_descriptor_lock(stream)
 
@@ -223,6 +227,9 @@ def run_local_research(config: HarnessRunConfig) -> ControllerRunResult:
     from autoresearch.research_harness.run_inputs import (
         RunInputContract, freeze_run_inputs, load_run_inputs,
     )
+    from autoresearch.research_harness.report import (
+        load_terminal_result, publish_research_report, seal_terminal_result,
+    )
 
     fixture_root = _validate_locations(config)
     source = FixtureActionLogSource(fixture_root, config.fixture_descriptor_sha256)
@@ -255,6 +262,11 @@ def run_local_research(config: HarnessRunConfig) -> ControllerRunResult:
                 final_metadata=prepare_final_candidate_metadata(config.handoff, source=source),
             )
         bind_input_checkpoint(ledger, frozen.artifact)
+        terminal = load_terminal_result(config.run_root, contract=contract)
+        if terminal is not None:
+            publish_research_report(config.run_root, contract=contract, result=terminal,
+                                    judge=CodexCodingAgent(config.agent), judge_workspace_parent=config.workspace_parent)
+            return terminal
         runner = LocalResearchTrialRunner(
             repository_root=config.repository_root, workspace_parent=config.workspace_parent,
             artifacts_root=config.run_root / "attempts", source=source, handoff=config.handoff,
@@ -270,23 +282,7 @@ def run_local_research(config: HarnessRunConfig) -> ControllerRunResult:
                 config.confirmation_seeds, ledger,
             ),
         )
-        _preserve_result(config.run_root / "controller-result.json", result)
+        seal_terminal_result(config.run_root, contract=contract, result=result)
+        publish_research_report(config.run_root, contract=contract, result=result,
+                                judge=CodexCodingAgent(config.agent), judge_workspace_parent=config.workspace_parent)
         return result
-
-
-def _preserve_result(path: Path, result: ControllerRunResult) -> None:
-    # Final evidence contains private paths. This artifact stays Judge-owned, never prompt input.
-    payload = json.dumps(asdict(result), default=str, sort_keys=True, ensure_ascii=True,
-                         separators=(",", ":"), allow_nan=False).encode("ascii") + b"\n"
-    if os.path.lexists(path):
-        if _safe_regular_file_identity(path) is None or path.read_bytes() != payload:
-            raise LocalRuntimeError("result_conflict")
-        return
-    # A complete ledger can regenerate a missing result after publication interruption.
-    from tempfile import NamedTemporaryFile
-    with NamedTemporaryFile(dir=path.parent, prefix=".result-", delete=False) as stream:
-        temporary = Path(stream.name)
-        stream.write(payload)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
