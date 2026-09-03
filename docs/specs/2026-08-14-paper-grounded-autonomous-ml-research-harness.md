@@ -851,6 +851,17 @@ sentinel 보존을 검증한다. 제품 helper의 hardlink/reparse/identity 정�
 이는 새 로컬 테스트의 수명 보완이지 기존 sandbox 실패 폴더의 강제 회수나 실제 피처
 재실험 성공을 뜻하지 않는다. 별도로 재현한 중첩 경로의 fixture_build 실패는 #74를 따른다.
 
+**#74 중첩 fixture 생성 I/O:** 검증된 로컬 state root에서 파생한 staging의 내부 생성,
+snapshot 탐색, 완성 fixture 재검증과 소유한 staging 회수에 기존 Windows `_io_path`
+변환을 일관되게 적용한다. 공개 receipt에는 canonical 경로를 유지하며 descriptor·snapshot·
+manifest identity와 산출물 bytes를 변경하지 않는다. alias/reparse/regular-file 검사를
+완화하거나 임시 root를 등록 경계 밖으로 옮기지 않는다. Windows 전역 설정·ACL 변경이나
+임의 길이·UNC/device 경로의 신규 지원은 포함하지 않는다. 길이130/153자의 합성 root에서
+생성·재사용과 실패 회수를 검증하되, 중첩 fixture의 candidate metadata/view 소비는 별도
+[#77](https://github.com/bbungjun/Autoresearch/issues/77)로 남긴다. `contextlib` 경계의
+StageCError 가림은 [#76](https://github.com/bbungjun/Autoresearch/issues/76)이며 이번에
+예외 클래스 자체를 바꾸지 않는다. 실제 sandbox·피처 실험 성공 여부와도 구분한다.
+
 agent는 initial card와 validation feedback만 받아 현재 champion에서 한 가설을 구현한다.
 채점 규칙·정답·final 결과·grant·Judge 경로는 prompt/context에 넣지 않는다. 저장소 내부
 수정 경로 allowlist는 추가하지 않으며, 외부 trusted Judge가 수치 판정을 소유한다.

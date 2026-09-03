@@ -8,6 +8,8 @@ derived path·lock alias 검증, content-addressed write-once fixture 게시와 
 재검증 및 candidate source의 outer fixture provenance·canonical Judge state root 결속을
 제공한다. 알려진 하위 오류의 public Stage C 번역에서는 원래 exception context를 숨긴다.
 원본 artifact와 별개인 현재 final 소비 marker만 선택적 상태 파일로 허용한다.
+내부 생성·재검증·회수 I/O에는 Windows 긴 경로를 적용하되 공개 receipt와 content identity는
+유지한다.
 
 [비책임] candidate data view·workspace·argv·환경 구성과 metric/Judge 판정은 후속 Stage C 및
 P0-2 모듈이 담당한다. 임의 hostile filesystem actor와의 경쟁 방어도 담당하지 않는다.
@@ -173,7 +175,8 @@ def build_local_evaluation_fixture(
                     return _receipt_from_complete_fixture(
                         target, descriptor_digest, reused=True
                     )
-                _build_staged_fixture(staging, descriptor, descriptor_digest)
+                # 하위 producer와 snapshot publisher도 같은 I/O 경로를 상속한다.
+                _build_staged_fixture(_io_path(staging), descriptor, descriptor_digest)
                 handoff = _validated_judge_handoff(
                     _snapshot_root_from_staging(staging),
                     expected_fingerprint=None,
@@ -222,9 +225,9 @@ def build_local_evaluation_fixture(
             "fixture_build",
         ) from None
     finally:
-        if staging.exists():
+        if _io_path(staging).exists():
             try:
-                shutil.rmtree(staging)
+                shutil.rmtree(_io_path(staging))
             except OSError:
                 logger.warning(
                     "fixture_staging_cleanup_failed",
@@ -348,14 +351,7 @@ def _validate_coverage(snapshot_root: Path) -> None:
 
 
 def _snapshot_root_from_staging(staging: Path) -> Path:
-    roots = tuple(
-        path
-        for path in (staging / "evaluation-snapshots" / "by-hash").iterdir()
-        if path.is_dir()
-    )
-    if len(roots) != 1:
-        raise _fixture_error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "judge_snapshot_lookup")
-    return roots[0]
+    return _single_snapshot_root(staging)
 
 
 def _validated_judge_handoff(
@@ -447,6 +443,7 @@ def _fixture_is_valid(
     expected_descriptor: FixtureDescriptor,
     descriptor_digest: str,
 ) -> bool:
+    root = _io_path(root)
     try:
         if not _safe_tree(root):
             return False
