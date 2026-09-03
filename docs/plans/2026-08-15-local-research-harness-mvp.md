@@ -1195,7 +1195,7 @@ final metadata·권한 연결, checkpoint 영속화, 피처/임베딩·학습은
 | 2 (#46) | 실제 로컬 GPU adapter, 모델 고정 revision/파일 해시, 캐시 분리, CUDA 추론·OOM 검증 | #47 CI 통과·머지 완료 |
 | 3 (#48) | 재학습 CLI, seed별 학습·예측, 입력 무결성과 완전 라벨 기간 검증 | #50 CI 통과·머지 완료 |
 | 4 | final 권한/metadata, checkpoint identity, 실제 coding agent·독립 Judge·REPORT 연결 (필요하면 여러 PR) | #51·#53·#56 CI 통과·머지 완료 |
-| 5 | 5회 독립 재학습 calibration, E2E·복구·판정 시나리오와 품질/자율성/비용 실측 | #57 baseline/parser 실측 준비 |
+| 5 | 5회 독립 재학습 calibration, E2E·복구·판정 시나리오와 품질/자율성/비용 실측 | #59·#61 머지; #63 실제 E2E·독립 리뷰 완료, CI·병합 상태는 연결 PR 참조 |
 
 완료는 테스트 adapter의 성공이 아니라 실제 로컬 모델·agent의 완주와 증거 보존, 모든
 관련 PR의 main 머지다. 성능 개선은 성공 조건으로 강제하지 않는다. 합성 환경 결과를
@@ -1767,7 +1767,8 @@ durable checkpoint 후 재개, 단일 final batch 및 fresh-context 연구 기�
 - [x] 실제 trial1 완료 직후 주입 중단·동일 config 재개·trial2 feedback 수신 확인
 - [x] 단일 final 5-seed batch·REPORT·한 번의 fresh-context advisory Judge
 - [x] 종료 재호출 비반복 및 무변경/controlled 판정 시나리오 증거 구분
-- [ ] 품질·자율성·비용과 실패·한계 기록, 독립 리뷰·CI·PR·merge
+- [x] 품질·자율성·비용과 실패·한계 기록 및 독립 리뷰
+- CI·병합은 [PR #63](https://github.com/bbungjun/Autoresearch/pull/63)에서 추적한다.
 
 **구현 결과:** 모듈 부재의 RED 12건을 먼저 확인한 뒤 수동 wrapper를 구현했다.
 초기 단독 16 passed(0.73초), 기존 runtime 재개와 합친 직전 회귀 38 passed(8.43초),
