@@ -1,7 +1,7 @@
 # 로컬 Research Harness MVP — 독립 실행 경로 Implementation Plan
 
-> **현황 2026-09-03 (#67): Task 1~6 핵심 구현 완료, Task 7 주요 실측 완료·잔여 검증 진행 중.**
-> #54B까지 반영한 상태이며 전체 MVP 수용 완료는 아니다. 아래 종합 체크리스트와
+> **현황 2026-09-03 (#69): Task 1~6 핵심 구현·Task 7 주요 실측·단일 실패 후보 수정 실측 완료.**
+> 코드 반영 상태는 [PR #70](https://github.com/bbungjun/Autoresearch/pull/70)을 따르며 전체 MVP 수용 완료는 아니다. 아래 종합 체크리스트와
 > 잔여 검증 우선순위를 따른다. 과거 Task의 문제·결과는 해당 구현 시점 기록이다.
 
 **Goal:** 현행 executor를 수정하지 않고 정적 allowlist를 사용하지 않는 독립 로컬 Research
@@ -28,7 +28,7 @@ worktree 바깥의 Judge 소유 디렉터리와 별도 프로세스에 둔다. �
 **현재 판독 기준:** [spec §12](../specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md#12-mvp-완료-조건)의
 상태 표가 구현·회귀, 실제 측정, 남은 수용 판단, 제품 로드맵을 구분한다. Task 7의 남은
 시나리오와 전체 완료 조건이 있으므로 이 plan은 archive하지 않는다. 최신 실측과 후속 수정은
-[포트폴리오 기록 §5·§7~11](../reports/2026-09-03-local-autonomous-experiment-e2e.md)에 연결한다.
+[포트폴리오 기록 §5·§7~12](../reports/2026-09-03-local-autonomous-experiment-e2e.md)에 연결한다.
 
 ---
 
@@ -1983,16 +1983,17 @@ B 검증은 통합 회귀 94개와 이후 추가 중단/로그 실패를 포함�
       REPORT evidence의 대표 수치가 final 결과인지 확인. #60에서 단일 marker 아래 5-seed
       final·종료 재호출 비반복·REPORT를 실측했고, 동시 claim·잘못된 root·marker 삭제는
       registry/Controller 회귀로 검증했다. 모든 실패 조건을 실제 LLM E2E로 재현한 것은 아니다
-- [ ] 실제로 깨진 candidate를 agent가 실패 feedback을 받아 한 번 수정하고 학습·평가까지
-      복구하는 시나리오를 측정한다. #60 checkpoint 재개와 #54B 실패 pytest의 회수는
-      자동 코드 수정 실증을 대체하지 않는다
-- [ ] 사람 개입의 범위·횟수를 계측하고 중간 승인 없는 완주를 검증한다. 달러 비용은
-      기존 계약대로 확인 가능한 근거가 없으면 `null`을 허용하며, 실비 산출을 새 필수 gate로
+- [x] 실제로 깨진 candidate를 agent가 실패 feedback을 받아 한 번 수정하고 학습·평가까지
+      복구하는 시나리오를 측정한다 — #69에서 사전 주입 오타 한 건과 실제 agent 수정 1회를
+      연결했다. #60 checkpoint 재개와 #54B 실패 pytest의 회수와는 별도 실측이다
+- [x] 사람 개입의 범위·횟수를 관측하고 중간 승인 없는 완주를 검증한다 — #69 단일 호출의
+      별도 수동 관측에서 중간 승인·코드 수정·재시작은 0건이다. 자동 계측이 아니며 원본 human
+      값은 null로 유지한다. 달러 비용도 근거가 없으면 `null`을 허용하며, 실비 산출을 새 필수 gate로
       추가하지 않는다. token·시간을 비용 절감률로 바꾸지 않는다
 
-후속 검증 권고(별도 승인): #62 설명 개선과 #54A/B를 모두 반영한 새 통합 실행에서
-결과·증거 연결을 확인한다. 이는 최신 변경 조합의 미실측 한계를 닫기 위한 권고이며,
-이번 문서 갱신에서 새로운 필수 수용 gate를 추가한 것은 아니다.
+후속 검증 권고의 진행: #62 설명 개선과 #54A/B를 모두 반영한 새 통합 실행은 사용자 승인
+후 #69에서 실측했다. 기록 Judge는 수치 범위·정책을 확인했으나 구체적 편집 과정의 증거
+부족에는 concerns를 남겼다. 새 필수 gate나 Judge 정확도 향상 실증으로 해석하지 않는다.
 
 **검증:** 전체 테스트 + 실제 1회 완주 로그와 ledger 산출물
 
@@ -2031,14 +2032,15 @@ B 검증은 통합 회귀 94개와 이후 추가 중단/로그 실패를 포함�
 - [x] `ResearchDomain` ABC와 `YouTubeCTRDomain`이 구현되고 Controller가 이 interface를 통해
       snapshot·검증·평가·비교를 호출한다
 - [x] 최종 REPORT의 대표 수치는 final holdout 결과다
-- [ ] 의도적으로 깨진 candidate의 실제 자동 수정·복구와 사람의 중간 승인 없는 완주를
-      증명한다 — spec §12의 남은 두 의무이며 위 Task 7에서 추적한다
+- [x] 의도적으로 깨진 candidate의 실제 자동 수정·복구를 증명한다 — #69 단일 주입 결함
+- [x] 사람의 중간 승인 없는 완주를 증명한다 — #69 단일 호출 수동 관측에서 0건이다.
+      자동 계측이 아니며 원본의 사람 개입 값은 null이다. 범용 무인 실행은 주장하지 않는다
 
-### Task 7R: 실제 실패 후보 단일 수정 실증 — #69 (진행 중)
+### Task 7R: 실제 실패 후보 단일 수정 실증 — #69 (실측 완료)
 
-사용자가 2026-09-03 첫 권고 실행을 승인했다. 실행 전 고정하는 조건이며 결과는 아직 없다.
-조사 결과 기존 feedback에는 오류 로그가 있으나 다음 trial은 정상 champion에서 시작한다.
-이를 실제 failed candidate repair로 과장하지 않도록 spec §7.4의 최소 연결을 먼저 구현한다.
+사용자가 2026-09-03 첫 권고 실행을 승인했다. 실행 전 조사에서는 기존 feedback에 오류
+로그가 있으나 다음 trial이 정상 champion에서 시작하는 한계를 확인했다. 이를 실제 failed
+candidate repair로 과장하지 않도록 spec §7.4의 최소 연결을 먼저 구현하고 아래 실측을 수행했다.
 
 - [x] RED: 직전 실패 candidate 전달·prepare 실패 제외·성공/discard 제외·재개 동일성
 - [x] RED: agent 전에 실패 diff 복원·champion HEAD 유지·잘못된 계보 거부·report 출처 보존
@@ -2047,14 +2049,17 @@ B 검증은 통합 회귀 94개와 이후 추가 중단/로그 실패를 포함�
 - [x] 새 synthetic fixture seed `6901`, 평가 시작일 `2026-09-01`로 독립 snapshot 준비
 - [x] baseline `8dd67038d98817b3b4a5f33a4d9dd5009c2ce9fd`, E5-small 기존 모델/revision,
       CPU LightGBM 21개 피처를 유지하고 새 데이터에서 seed 101~105로 calibration 5 fit
-- [ ] 첫 prepare는 측정용 deterministic CodingAgent 대역이 `local_training.py`의
+- [x] 첫 prepare는 측정용 deterministic CodingAgent 대역이 `local_training.py`의
       `prediction.features.to_pandas()`를 속성 오타로 바꾼다. 외부 agent 호출이 아니며,
       실제 baseline 성공·candidate 실행 실패·오류 feedback을 보존한다
-- [ ] 둘째 prepare는 정식 repair context 경로로 실패 코드를 복원하고 실제 새 coding agent를
+- [x] 둘째 prepare는 정식 repair context 경로로 실패 코드를 복원하고 실제 새 coding agent를
       한 번 호출한다. 측정 wrapper는 정답 patch를 적용하지 않고 이후 코드를 수동 수정하지 않는다
-- [ ] 두 validation trial 뒤 기존 Controller로 새 final 1회·기록 Judge 1회·REPORT까지 실행한다
-- [ ] 실패/복구 SHA·patch·실제 재학습 receipt·지표·등록 temp 회수·원본 hash를 독립 검증한다
-- [ ] 문제·대안·구현·실측·실패·한계를 포트폴리오와 spec 상태에 반영하고 CI·PR·merge한다
+- [x] 두 validation trial 뒤 기존 Controller로 새 final 1회·기록 Judge 1회·REPORT까지 실행한다
+- [x] 실패/복구 SHA·patch·실제 재학습 receipt·지표·등록 temp 회수·원본 hash를 독립 검증한다
+- [x] 문제·대안·구현·실측·실패·한계를 포트폴리오와 spec 상태에 반영한다
+
+코드 반영·최신 CI·squash merge의 최종 상태는 [PR #70](https://github.com/bbungjun/Autoresearch/pull/70)에서
+확인한다. 실측 완료와 PR의 반영 상태를 구분하며, 다음 실증 의무가 남아 전체 plan은 유지한다.
 
 **예산:** calibration 5 fit + validation 최대 2 trial(첫 오류 주입, 둘째 실제 수정 기회 1회),
 prediction 호출별 300초, coding agent 420초, 새 trial 시작 예산 3600초. 정상 복원만 되면
@@ -2082,13 +2087,44 @@ agent 수정·재학습·채점의 증거로 판단하고, final 성능 판정�
 시간·token·실제 호출 수를 기록하고 확인되지 않은 달러 비용은 `null`을 유지한다.
 원본 #60/기존 소비 marker/기존 실패 workspace를 변경하지 않는다.
 
+**실측 결과:** 최초 fixture 주입은 LLM 0회이며 실패 candidate는
+`9d98b7295ed61b1c7c0ea99f4092b4d0ff5f15d8`이다. Baseline 성공 뒤 candidate가
+`prediction.featuers`에서 `predict_crash`로 실패했다. 다음 coding workspace는 champion
+HEAD를 유지하면서 그 실패 diff를 복원했고 실제 agent가 한 줄을 `prediction.features`로
+수정했다. 최종 코드가 정상 baseline `8dd67038d98817b3b4a5f33a4d9dd5009c2ce9fd`와 같아
+최종 candidate diff는 비어 있다. 빈 최종 diff만으로 복구 과정을 판단하지 않고 실패 SHA와
+agent의 실제 편집 이벤트를 함께 확인한다. Paired baseline은 바뀌지 않았다.
+
+둘째 validation은 성공했고 일곱 지표가 baseline과 같아 `discard / primary_not_improved`였다.
+Final 단일 batch의 5개 paired 결과도 생성됐지만 Recall@10 σ=0에 따라 `inconclusive /
+insufficient_baseline_noise`, baseline 유지로 끝났다. 수치가 같다는 이유로 σ를 임의로 채우거나
+`no_improvement` 판정으로 바꾸지 않았다. 성공한 공식 fit은 13회(첫 baseline 1 + 둘째
+validation 2 + final 10), 실패 prediction은 1회다. 사전 calibration 5 fit과 agent가 실행한
+작은 CPU 단위 테스트의 3 fit은 별도이며 공식 실험 수에 합치지 않는다.
+
+실제 coding agent는 1회·47.438초, 새 문맥 기록 Judge는 1회·33.436초였다. Runtime 호출은
+465.904초였고, 등록 temp 14개를 1.281초에 회수한 뒤 host empty 검증도 통과했다. 시간은
+각각 관측 구간이 다르므로 합산해 전체 비용을 만들지 않는다. 달러 비용과 자동 계측 사람
+개입 값은 null로 보존한다. 실행자는 단일 호출 중 읽기 전용 관측만 했으며 중간 승인·코드
+수정·수동 재시작 0건은 별도 operator observation에 보존한 수동 관측이며 원본 자동 계측의
+부재와 구분한다. 준비·승인·calibration·결함 주입과 사후 감사는 이 관측 구간에서 제외했다.
+
+Judge는 `concerns`를 남겼다. 구조화 기록으로 복구 후 학습·평가와 screening 범위·정책은
+확인했지만 정확한 오류 원인·한 줄 편집·테스트 로그는 직접 볼 수 없었다. 이 주장은 별도
+원본 감사에서 검증했으며, Judge가 모든 과정을 독립 확인했다고 표현하지 않는다. 독립 감사는
+차단 사항 없이 source 연결 118건·ledger 연결 169건·manifest/binding·Judge 증거 6건과
+기존 #60 관측 파일 208개 hash 일치를 확인했다. 상세 문제·
+해결·결과와 감사 근거는 [포트폴리오 §12](../reports/2026-09-03-local-autonomous-experiment-e2e.md#12-실패한-코드를-고쳤는가-정상-코드에서-다시-시작했는가--69)를 따른다.
+피처 추가 promote, σ=0을 포함한 정책 수용 판단, 범용 자율성·비용 측정은 남아 있다.
+
 ### 잔여 검증 우선순위 — 2026-09-03 권고
 
 아래는 #68 문서 갱신 당시의 권고안이며 당시에는 실험 실행 승인이 포함되지 않았다.
-이후 첫 권고의 실행 승인은 위 Task 7R (#69)에 기록했다. 나머지 권고는 별도 후속 범위다.
+이후 첫 권고는 위 Task 7R (#69)에서 승인·실측했고, 코드 반영·CI·merge 상태는 PR #70을 따른다.
+현재 다음 검증 후보는 2번 피처 추가와 3번 정책 수용 판단이며 별도 후속 범위다.
 실행 전 별도 이슈에서 실패 주입 위치·관측 범위·예산·종료 조건을 고정한다.
 
-1. **최소 자동 복구 시나리오:** 새 disposable candidate에 원인이 명확한 실패 하나를
+1. **최소 자동 복구 시나리오(실측 완료):** 새 disposable candidate에 원인이 명확한 실패 하나를
    주입한다. 실패 기록 → 구조화 feedback → 새 agent의 수정 한 번 → 실제 학습·평가·REPORT까지
    관측한다. 실패 상태의 보존, 수정 patch, 사람 개입, 호출·학습 횟수와 시간/token을 연결한다.
    #62/#54가 반영된 실행 경로를 함께 검증하되 이미 소비한 final이나 #60 원본을 재사용·변경하지 않는다.

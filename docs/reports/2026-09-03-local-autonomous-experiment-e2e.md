@@ -589,3 +589,91 @@ baseline·E5-small·LightGBM, 별도 5-seed calibration을 사용한다. 첫 후
 연결해 σ=0의 `inconclusive / insufficient_baseline_noise`가 실행 오류와 구분되고,
 종료 재호출에서 추가 실행·기록 Judge 호출이 없는지 검증한다. 여기서 학습·agent·소비
 grant는 대역이므로 실제 복구 성공의 증거로 세지 않는다. Ruff와 문서 링크 31건도 통과했다.
+
+### 실제 단일 복구 실행 결과
+
+승인 이후 실행을 한 번 수행해 **465.904초(약 7분 46초)**에 종료했다. 측정 전체는
+466.307초이며 아래 agent 시간·attempt 합계는 이 시간에 포함되므로 더하지 않는다.
+구현 코드 기준은 `dcbc07c`, 실행 시 HEAD는 실행 조건 문서만 추가한 `74bb7c6`이다.
+설치 CLI는 `0.153.0-alpha.5`를 사용했다. 설정·script hash와 원본 receipt는 별도
+로컬 측정 증거에 보존하고 데이터·모델·로컬 경로는 저장소에 게시하지 않는다.
+
+| 단계 | 실제 관측 | 해석 |
+| --- | --- | --- |
+| 최초 후보 | 대역이 `features`를 `featuers`로 변경; 외부 LLM 0회 | 자연 발생한 agent 실수가 아닌 사전 주입 결함 |
+| 최초 평가 | baseline 학습 성공, candidate `predict_crash` 및 실제 `AttributeError` | candidate는 fit 전에 실패 |
+| 복구 준비 | 실패 파일과 복원 파일의 SHA-256 일치 | 정상 champion에서 새로 시작한 결과가 아님 |
+| 실제 수정 | coding agent 1회, 명령 3개·파일 편집 1개 | reset/restore 없이 속성명 오타 한 곳 수정 |
+| 재평가 | baseline/candidate 2회 학습 성공, `discard / primary_not_improved` | 정상 코드 복구 성공, 품질 향상은 없음 |
+| final | 고정 seed 101~105의 5 pair·10회 학습, 새 소비 marker 1개 | `inconclusive / insufficient_baseline_noise`, baseline 유지 |
+| 보고·검토 | REPORT 생성, 새 문맥 기록 Judge 1회, `concerns` | 원본 기록을 변경하거나 재평가하지 않음 |
+
+원래 baseline은 `8dd67038d98817b3b4a5f33a4d9dd5009c2ce9fd`, 실패 후보는
+`9d98b7295ed61b1c7c0ea99f4092b4d0ff5f15d8`이다. 수정 후보는 원 baseline과 같아
+champion 기준 최종 patch는 0바이트다. 이는 편집하지 않았다는 뜻이 아니다. 실패 코드와
+복구 코드 사이에는 실제 한 줄 편집이 있고, native agent stdout이 이를 뒷받침한다.
+실패·복원 파일 hash는 모두
+`c067eb10a756a2451f7f17f48801bb67e94b5f0398c28f9b84a1d98ece6620b3`이다.
+
+정식 prediction은 **14회 중 학습 성공 13회, 결함으로 실패 1회**다. 성공 13회는
+첫 baseline 1회 + 복구 뒤 validation 2회 + final 10회다. 사전 calibration 5 fit과
+agent의 작은 CPU 단위 테스트 3 fit은 이 수에 포함하지 않는다. 해당 단위 테스트는
+1 passed / 2 warnings / 1.11초였다. 물리 코어 탐색 fallback과 cp949 subprocess
+출력 디코딩 경고가 있었으므로 경고 없는 실행이나 모든 환경 지원을 주장하지 않는다.
+
+final의 각 pair는 코드·prediction·model hash가 같고 평균도 같다.
+
+| 지표 | baseline 평균 | candidate 평균 |
+| --- | ---: | ---: |
+| NDCG@10·24 | 0.7735540422149131 | 0.7735540422149131 |
+| Recall@10 | 1.0 | 1.0 |
+| grouped ROC-AUC | 0.8909782608695652 | 0.8909782608695652 |
+| PR-AUC | 0.47311568032228435 | 0.47311568032228435 |
+| LogLoss | 0.1514273399934094 | 0.1514273399934094 |
+| Brier | 0.03339508206947623 | 0.03339508206947623 |
+
+σ=0인 판정 전제에서 중단하는 현재 계약에 따라 final의 공식 decision delta는
+`unknown / not_available`다. 위 원시 평균의 동일성을 근거로 공식 delta를 0으로
+고쳐 쓰지 않았다. 복구가 성공했다는 실행 결론과 성능 채택이 판정 불가라는 결론을
+분리하며, 평가 기준을 바꿔 승격을 만들어 내지 않았다.
+
+### 독립 검토, 비용과 남은 한계
+
+| 실제 외부 호출 | 시간 | input tokens | cached input | output tokens | reasoning output |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 수정 coding agent 1회 | 47.438초 | 134,908 | 106,368 | 1,045 | 131 |
+| 기록 Judge 1회 | 33.436초 | 69,878 | 0 | 1,320 | 184 |
+
+cached·reasoning은 각각 input·output의 하위 관측치다. 대역인 최초 prepare에는 외부
+호출 receipt가 없으므로 구조화 기록의 coding token coverage는 1/2다. 실제 모델
+호출 하나가 누락된 뜻이 아니다. 달러 비용과 사람 개입의 자동 관측값은 여전히 `null`이다.
+
+별도 운영자 관찰 기록에서는 **단일 실행 호출부터 프로세스 종료까지** 사용자 추가 승인,
+사용자 코드 편집 관측, 코디네이터 코드 편집·stdin 입력·수동 재시작·추가 수정 기회가
+각각 0이었다. 이는 해당 작업의 도구/메시지 이력에 근거한 수동 증언이며 자동 감지기가
+아니다. 가설·예산 선택, fixture·calibration 준비, σ=0 실행 승인과 사후 검토는 제외한다.
+전체 준비 과정의 사람 개입 0이나 미관측 외부 활동 부재로 확대하지 않는다.
+
+새 문맥 기록 Judge는 구조화 기록만 받았으므로 원본 traceback·소스·편집 로그를 직접
+검사할 수 없다는 `concerns`를 남겼다. 정확히 어떤 오류를 어떻게 고쳤는지는 그 입력만으로
+독립 확정하기 어렵다는 합리적인 지적이다. 동일 evaluation ID는 비교 좌표로 해석하여
+#62의 설명 개선을 관측했지만 모든 증거 가시성 문제가 해결된 것은 아니다. Judge를 다시
+불러 좋은 의견을 얻거나 원본 record·REPORT·검토 결과를 덮어쓰지 않았다.
+
+별도의 구현 비참여 reviewer는 원본 로그·patch까지 읽고 **차단사항 없음**으로 판단했다.
+실제 오류와 전달 feedback, 실패/복원 파일 일치, 한 줄 편집, 13개 학습 receipt를 확인했다.
+record source 118개·ledger artifact 참조 169개·report manifest·입력/ledger/result 결속·
+Judge evidence 6개의 hash도 일치했다. 기존 #60의 관측 대상 208개는 모두 이전 hash와
+같았으며 기존 final marker를 재사용하지 않았다. 기록 Judge보다 넓은 증거를 읽은 기술
+감사이므로 둘의 의견을 같은 입력에서 나온 찬반처럼 비교하지 않는다.
+
+#54A/B가 포함된 이번 실제 pytest 호출은 등록 temp **14/14개를 1,281ms에 회수**했고
+host empty·process cleanup 확인을 통과했다. 신규 experiment workspace와 등록 worktree
+잔존은 없었다. 이전 실패 폴더는 보존했으며 그 폴더까지 회수했다고 주장하지 않는다.
+
+**현재 입증 범위:** 사전 주입한 속성명 오류 한 건을 실제 agent의 수정 한 번으로
+복구해 재학습·평가·보고까지 끝낼 수 있다. 정상 baseline 복구이므로 모델 개선 성과는
+없다. AI assistant가 구현하고 별도 agent가 실제 증거를 감사한 과정, 실패를 숨기지 않고
+실행 성공·품질 판정·관측 한계를 분리한 점이 이번 포트폴리오의 핵심이다. 다음은 유효한
+피처 추가 실증, 영분산 지표의 수용 정책 판단과 더 넓은 자율성·비용 계측이다. 이 작업으로
+전체 MVP 완료나 임베딩/모델 자유 선택의 실증 완료를 선언하지 않는다.

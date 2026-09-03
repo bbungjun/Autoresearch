@@ -118,9 +118,15 @@ docs/
   Markdown REPORT를 게시한다. private 경로/raw log/정답을 검토 prompt에 전달하지 않는다.
   runtime은 종료 결과를 입력/ledger와 결속하고 REPORT 재개에서 Controller를 재실행하지
   않는다. 수치 판정은 여전히 Sealed Judge 소유이며 기록 Judge는 이를 변경하지 않는다.
-- **실측과 남은 검증:** 별도 5-seed calibration, 실제 두 trial·feedback 수정·checkpoint 재개·
-  단일 final·새 기록 Judge·REPORT까지 관측했다. 실패 candidate 자동 수정의 실제 완주,
-  피처/모델 교체와 사람 개입·달러 비용 계측, 최신 변경의 새 통합 E2E는 미완료다.
+- **복구 출발점:** Controller는 직전 validation 실패 후보를 선택 입력으로 전달하고,
+  runner는 champion HEAD를 유지한 채 검증한 실패 diff를 coding workspace에 복원한다.
+  비교 baseline을 실패 후보로 교체하지 않으며 report는 복구 출처를 ledger와 대조한다.
+- **실측과 남은 검증:** 별도 5-seed calibration과 #60의 feedback·checkpoint 재개를
+  관측했다. #69에서는 #62/#54가 반영된 새 실행으로 사전 주입 오류 한 건의 실제 agent
+  수정 한 번·재학습·단일 final·REPORT·새 기록 Judge까지 완주했다. σ=0을 유지하여 품질은
+  `inconclusive / insufficient_baseline_noise`, baseline 유지다. 실행 구간 개입 0은 수동
+  관측이며 자동 사람 개입·달러 비용은 null이다. 피처/모델 교체, 일반적인 복구·자율성
+  확대 실증과 수용 기준 판단은 남는다. 기록 Judge의 원본 편집 가시성 한계도 보존한다.
   자세한 상태·근거는 상위 spec §12와 plan의 최신 현황, E2E 포트폴리오 기록을 따른다.
 - **비책임:** GCP 자원 생성·운영 Vertex AI 경로 교체·시스템 드라이버 관리·임베딩 파인튜닝은
   이 로컬 adapter의 책임이 아니다. 위 Stage B/C facade 목록은 최초 단계의 계약 설명이며 전체
