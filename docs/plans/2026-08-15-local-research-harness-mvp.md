@@ -2183,12 +2183,35 @@ published-fixture 테스트도 짧은 host 경로에서 통과했다. 별도 새
 다른 보안 테스트의 alias와 전체 sandbox suite까지 포괄하는 정리는 이번 범위가 아니다.
 문제·대안·결과는 실측 보고서 §14를 따른다.
 
+### Task 7P: 중첩된 로컬 fixture 생성 경로 — #74 (진행 중)
+
+사용자가 #74를 승인했다. 새 합성 root에서 최초 실패 연산을 추적하고, 기존 Windows
+`_io_path` 패턴을 내부 생성 I/O에 적용하는 최소 접근을 검증한다. temp를 등록 경계 밖으로
+옮기거나 시스템 긴 경로 설정·ACL을 변경하지 않는다. 공개 receipt 경로·fingerprint와
+alias/reparse/경계 검사는 유지하며 기존 fixture 재사용도 검증한다.
+
+- [x] root70자 성공, root130자 snapshot lock touch(265자), root153자 action log copyfile(270자) 실패 확인
+- [x] 중첩 경로 생성·재사용·동일 입력 identity 회귀를 먼저 RED로 확인 (2 failed)
+- [x] 기존 경로 adapter를 내부 생성·탐색·재검증·회수 경계에 적용하고 짧은 경로·candidate view 회귀 검증
+- [x] contextlib에서 StageCError가 가려지는 별도 최소 재현을 #76으로 분리
+- [x] 생성 후 candidate metadata의 긴 snapshot resolve 실패를 #77로 분리 (data view는 추가 검증 대상)
+- [ ] 독립 리뷰·Ruff·CI·PR·포트폴리오 갱신과 merge (상태는 해당 PR을 정본으로 사용)
+
+로컬 구현 검증은 49 passed/2 skipped, 독립 회귀는 86 passed/2 skipped, 학습 입력까지의
+추가 회귀는 99 passed였다. 독립 수정 전 대조 3건과 cleanup-only 대조 1건은 각각 실패했다.
+기존 Windows symlink 생성 제한·FIFO 미지원 skip만 유지하며 신규 3건은 모두 실행했다. 전체17파일의 변경 전후
+동일성과 한계는 실측 보고서 §15를 따른다.
+
+과거 #60/#69/#71 증거·실패 workspace·final marker를 보존한다. 실제 coding·품질 실험과
+새 final 소비는 이번 범위에 포함하지 않는다. 긴 경로 생성 성공과 sandbox/피처 실증
+성공은 분리해 기록한다.
+
 ### 잔여 검증 우선순위 — 2026-09-03 권고
 
 아래는 #68 문서 갱신 당시의 권고안이며 당시에는 실험 실행 승인이 포함되지 않았다.
 이후 첫 권고는 위 Task 7R (#69)에서 승인·실측했고, 코드 반영·CI·merge 상태는 PR #70을 따른다.
 현재 2번 피처 추가는 #71에서 시도했으나 회수 실패로 미완료다. #73의 테스트 수명 보완과
-#74의 중첩 경로 fixture 실패를 확인한 뒤
+#74의 중첩 경로 fixture 생성 수정에 이어 #76의 예외 전달과 #77의 candidate 입력 소비를 검증한 뒤
 새 피처 실험과 3번 정책 수용 판단으로 돌아간다.
 실행 전 별도 이슈에서 실패 주입 위치·관측 범위·예산·종료 조건을 고정한다.
 

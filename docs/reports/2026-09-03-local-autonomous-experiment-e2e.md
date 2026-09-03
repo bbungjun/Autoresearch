@@ -842,3 +842,64 @@ OS/라이브러리 실패 연산과 과거 sandbox 오류와의 동일성은 추
 #69의128개, #71의112개 관측 파일과 각 final marker는 기존 reference hash와 일치했다.
 실패 workspace는 그대로 보존했다. AI assistant 구현과 독립 검토를 분리하고, 새로 재현한
 원인과 미확인 가설·후속 문제를 구분한 과정 자체를 문제 해결 근거로 남긴다.
+
+## 15. 중첩 fixture의 생성 경로와 내용 identity 분리 — #74
+
+**문제와 근거:** #73에서 새로 재현한 fixture 생성 오류를 실제 파일 연산까지 추적했다.
+기존 실패 workspace를 열거나 지우지 않고 seed1937/T=2026-09-01의 새 합성 입력으로
+비교했다. root70자는 성공했지만 root130자는 snapshot lock의 `Path.touch`에서 전체
+265자 경로의 `FileNotFoundError(errno=2)`로, root153자는 action log 임시 파일의
+`shutil.copyfile`에서 전체270자 경로의 동일 예외로 실패했다. 상위 공개 오류는
+`StageCError(stage=fixture_build)`다. 이 재현만으로 과거 sandbox 오류의 원인을 모두
+확정한 것은 아니다.
+
+**원인과 선택:** 같은 모듈의 읽기·검증에는 Windows 확장 경로용 `_io_path`가 이미
+있었지만 하위 생성기로 넘기는 staging과 일부 탐색·재사용·정리에는 적용되지 않았다.
+[Windows 경로 문서](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation)의
+확장 경로 형식을 기존의 검증된 절대 경로 I/O에 적용했다. 시스템 설정 변경, temp를 등록
+경계 밖으로 이동, 파일 이름/내용 계약 변경보다 기존 패턴의 누락 경계를 보완하는 접근을
+선택했다. 생성 함수에만 적용한 첫 수정은 snapshot 탐색·재사용에서 여전히 실패했다.
+따라서 같은 모듈 안의 생성·snapshot 탐색·완성본 재검증·소유 staging 회수까지 적용했다.
+공개 receipt는 접두사 없는 canonical 경로를 유지하며 alias/reparse/hardlink 검사를
+완화하지 않는다. daily action log·snapshot publisher 모듈은 변경하지 않았다.
+
+**검증:** 신규 root130/153 생성·재사용 회귀는 수정 전 2 failed / 7.68초였다. 수정 뒤
+신규 3건과 fixture·소비 상태·기존 피처 view 회귀는 49 passed, 2 skipped / 41.23초였다.
+생성 후 의도적인 하위 오류를 주입해 공개 오류 code/stage와 private detail 비노출,
+staging 회수·정리 경고 부재를 확인했다. 같은 입력의 짧은/중첩 root 간 전체 artifact와
+descriptor·snapshot·manifest identity가 같았다. 별도로 수정 전 성공한 root70의 fixture와
+수정 후 root130의 fixture도 전체17파일 SHA가 일치했다. 경로 변경으로 평가 데이터가
+달라진 것이 아님을 변경 전 산출물까지 대조했다.
+
+구현 비참여 reviewer는 신규 nested·fixture·소비 상태·candidate data view를 독립 실행해
+86 passed, 2 skipped / 40.70초를 확인했다. skip 2건은 기존 Windows symlink 생성 제한과 FIFO 미지원이며
+신규 nested 3건은 모두 실행됐다. 수정 전 함수를 파일 변경 없이 메모리에 복원하면 신규
+3건 모두 실패했다(9.11초). 현재 생성 수정은 유지하고 cleanup만 수정 전으로 복원한 대조도
+잔여 staging과 정리 경고로 실패했다(1 failed / 3.34초). 생성과 실패 회수 각각의 회귀가
+실제 결함을 검출한다는 근거다.
+
+코디네이터의 추가 검증은 신규 nested·candidate data view·local training·local feature
+view·training features 5파일 99 passed / 34.39초였다. 전체 Ruff와 diff 검사가 통과했다.
+Windows native 경로 검증과 원격 Linux CI는 별개이며 CI·merge 상태는 연결 PR을 정본으로
+확인한다.
+
+기존 테스트를 긴 이름의 basetemp에서 실행한 첫 회귀는 11 failed, 35 passed, 2 skipped였다.
+테스트 자체의 원시 `manifest.read_bytes` 등이 긴 경로에서 실패했다. 짧은 basetemp에서
+기존 회귀를 수행하되 신규 테스트는 root130/153을 강제했다. 실패 테스트를 skip/deselect로
+숨기지 않았으며, 모든 기존 테스트가 임의의 긴 경로에서 동작한다는 보장은 하지 않는다.
+
+**범위 밖 발견:** 생성·재사용 뒤 중첩 fixture의 `prepare_candidate_metadata`가
+`JUDGE_HANDOFF_INVALID / fixture_source_provenance`로 실패했다. root130의 snapshot
+경로306자에서 `resolve(strict=True)`의 WinError3를 별도로 재현했다. candidate data view의
+비슷한 I/O는 소스 감사 후보이지 도달·실패가 확정된 단계가 아니다.
+[#77](https://github.com/bbungjun/Autoresearch/issues/77)에서 소비 경계를 검증한다.
+또한 파일 I/O 없는 최소 재현에서 frozen/slots `StageCError`를 contextlib가 전달할 때
+traceback 대입이 `TypeError`로 가려졌다. 예외 계약 수정은
+[#76](https://github.com/bbungjun/Autoresearch/issues/76)으로 분리했다.
+
+**결과와 한계:** 중첩 합성 fixture의 생성·재사용과 실패 회수를 보완했으며 임의 길이,
+UNC/device 경로, 실제 sandbox 전체 동작은 보장하지 않는다. 실제 LLM coding·추가 피처
+학습·품질 측정·final 소비를 수행하지 않았고 #71 실증은 여전히 미완료다. 기존 #60의208개,
+#69의128개, #71의112개 관측과 각 final marker의 reference hash가 그대로임을 확인했다.
+실패 workspace와 원본 로그를 보존했다. AI assistant의 단계별 RED/GREEN·내용 동일성
+대조·독립 리뷰를 문제 해결 근거로 삼으며 생성 성공을 모델 성능 개선으로 표현하지 않는다.
