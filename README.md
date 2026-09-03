@@ -192,9 +192,16 @@ validation attempt는 재시작할 수 있어 LLM 호출 exactly-once는 보장�
 실패는 자동 재호출하지 않고 검토 unavailable로 기록합니다. 시간·token은 관측 coverage와
 함께 표시하고, 달러 비용·사람 개입 횟수는 측정되지 않았다면 null입니다.
 
-final은 기존 단일 소비 계약을 유지합니다. 실제 5-seed calibration과 품질·자율성·비용
-실측은 후속 단계이며 이 실행 명령만으로 성능 개선이 증명되는 것은 아닙니다.
+final은 기존 단일 소비 계약을 유지합니다. baseline 5-seed calibration은 실측했으며,
+Controller 전체 품질·자율성·비용 검증은 계속 진행 중입니다. 이 실행 명령이나 baseline
+변동량 측정만으로 candidate의 성능 개선이 증명되는 것은 아닙니다.
 자세한 계약은 [Harness spec §4.9·§10.1.1](docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md)를 따릅니다.
+
+사전 수동 측정 도구는 `python -m scripts.research_harness.calibrate_baseline --help`와
+`python -m scripts.research_harness.benchmark_parser --help`로 확인합니다. 새 절대 출력
+디렉터리만 허용하며 원본 결과를 덮어쓰거나 자동 재학습하지 않습니다. 전자는 고정 baseline의
+validation 5회 새 학습, 후자는 합성 parser 자원 측정이며 agent/final 실행 도구가 아닙니다.
+실제 입력 준비와 결과·한계는 [Task 7 기록](docs/plans/2026-08-15-local-research-harness-mvp.md#첫-실측-pr--57)을 참조합니다.
 
 ## 배포 이미지
 
