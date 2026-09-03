@@ -719,7 +719,7 @@ output root에서 자동 재학습하지 않는다. MVP는 one-shot 측정을 �
 parser 실측은 실제 `seal_prediction_copy`의 성공/실패와 전체 봉인 wall time, 같은
 parser worker의 별도 관측 실행(시작~종료 시간·메모리 종류)을 구분한다. 파일 생성과
 최종 scoring 시간은 parser 시간에 합치지 않는다. 현재 300k행·65MiB·10초·256MiB 및
-parsed JSONL 80MiB 상한은 그대로 적용한다. 긴 alphanumeric 식별자와 backslash-heavy
+parsed JSONL 80MiB 상한은 #57 최초 측정에 그대로 적용했다. 긴 alphanumeric 식별자와 backslash-heavy
 유효 식별자를 별개로 측정하고, 초과 행/물리 행/파일 byte 제한의 음성 케이스도 확인한다.
 
 backslash의 JSON escaping으로 내부 출력 상한과 충돌할 가능성도 측정한다.
@@ -759,6 +759,29 @@ seed 101~105의 새 fit 5회, validation 3,840행·160 slate를 사용했다. sn
 성공했지만 backslash-heavy 300k행은 3.356초에 거부됐다. 따라서 parser 최대 입력
 지원은 아직 완료가 아니며 별도 수정이 필요하다. 상세 raw 값·자원 측정·한계는
 [Task 7 실측 기록](../plans/2026-08-15-local-research-harness-mvp.md#첫-실측-pr--57)에 남긴다.
+
+**#58 내부 출력 상한 보정:** 외부 CSV의 허용 문자를 줄이지 않고 내부 정규화 JSONL
+상한만 104MiB로 보정한다. evaluation ID 69byte, 두 ID는 각각 최대 64개의 backslash가
+128byte로 확장되고, 정규화 float 표현을 보수적으로 24byte로 잡으면 JSON 문법 11byte와
+LF 1byte를 포함해 한 행은 최대 `69 + 2×128 + 24 + 11 + 1 = 361byte`다.
+`361 × 300,000 = 108,300,000byte`는 104MiB(`109,051,904byte`) 이내다.
+외부 65MiB·300k행·226byte, parser 10초·256MiB 및 내부 행 512byte 제한은 유지한다.
+출력은 streaming 파일이므로 출력 한도와 프로세스 메모리를 동일하게 취급하지 않는다.
+
+기존 alphanumeric/unique backslash 측정을 보존하고 두 ID 전체 backslash와
+24byte score token `+1.2345678901234567e-100`의 별도 300k행을 추가 검증한다.
+CSV 행은 226byte이며 정규화 후 score는 23byte, JSONL은 행당 360byte가 된다.
+이 마지막 입력은 parser capacity만 검증하며 중복 key가 있어 Judge의 유효한 평가
+데이터셋이라고 주장하지 않는다. 실제 ingestion·별도 worker 자원 관측과 음성 입력을
+다시 측정한 뒤 초기 한도의 충분성을 판단한다. 임계값·metric·final 계약은 변경하지 않는다.
+
+2026-09-03 재측정에서 세 유효 입력은 모두 300k행 처리에 성공했다. 실제 ingestion은
+일반 문자 3.968초, 기존 backslash 4.417초, 최대 JSON 확장 4.525초였다.
+마지막 입력의 내부 출력은 108,000,000byte이며 별도 worker 시작~종료 4.547초,
+peak working set 25,493,504byte·peak commit 13,754,368byte를 관측했다.
+300,001행/물리 행 초과/65MiB 초과는 계속 거부됐다. 해당 Windows/Python 환경의
+한 번씩 측정 결과이며 다른 하드웨어·동시 부하의 성능 보장은 아니다. 세 입력 모두
+현행 시간·메모리 안에서 처리돼 외부 행/파일 한도를 낮추지는 않는다.
 
 ## 5. 목표 아키텍처
 
