@@ -2,7 +2,9 @@
 
 from dataclasses import replace
 import importlib
+from pathlib import Path
 import statistics
+import subprocess
 
 import pytest
 
@@ -43,19 +45,22 @@ def test_invalid_seed_order_and_existing_output_fail_before_execution(tmp_path):
         m.run_calibration(replace(request, out=tmp_path / "fresh", seeds=(1, 2, 3, 4, 5)))
 
 
-def test_each_seed_is_called_once_and_ledger_contains_checkpoint_evidence(tmp_path, monkeypatch):
+@pytest.mark.parametrize('baseline_sha', [module().BASELINE_SHA, 'b' * 40])
+def test_each_seed_is_called_once_and_ledger_contains_checkpoint_evidence(tmp_path, monkeypatch, baseline_sha):
     m = module()
     calls = []
     request = m.CalibrationRequest(tmp_path, tmp_path / "workspaces", tmp_path / "snapshot", "a" * 64,
-                                   tmp_path / "prediction.json", tmp_path / "out")
+                                   tmp_path / "prediction.json", tmp_path / "out", baseline_sha=baseline_sha)
     monkeypatch.setattr(m, "_prepare_inputs", lambda req: {"kind": "fake-prepared", "model_files": []})
     def fit(req, prepared, seed, output):
+        assert req.baseline_sha == baseline_sha
         calls.append(seed)
         return _score_for(0.5, EvaluationId("eval_" + "a" * 64))
     monkeypatch.setattr(m, "_single_fit", fit)
     result = m.run_calibration(request)
     assert calls == [101, 102, 103, 104, 105]
     assert result["status"] == "complete"
+    assert result['baseline_sha'] == baseline_sha
     assert result["metrics"]["ndcg_at_10"]["sample_stddev"] == 0.0
     assert result["current_sigma_gate_satisfied"] is False
     from autoresearch.research_harness.ledger import open_trial_ledger
@@ -142,3 +147,38 @@ def test_single_fit_calls_existing_runner_once_then_scores_after_cleanup(tmp_pat
     prepared = {"handoff": None, "source": None, "metadata": None, "config": config, "model_files": []}
     assert m._single_fit(request, prepared, 101, output) == "score"
     assert events == ["open", "fit", "copy", "cleanup", "seal", "score"]
+
+
+@pytest.mark.parametrize('baseline_sha', ['main', 'HEAD', 'abc1234', 'A' * 40, '-x' + 'a' * 38, '', None])
+def test_invalid_baseline_identity_rejected_before_output_or_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, baseline_sha: object,
+) -> None:
+    m = module()
+    request = m.CalibrationRequest(tmp_path, tmp_path / 'workspaces', tmp_path / 'snapshot', 'a' * 64,
+                                   tmp_path / 'prediction.json', tmp_path / 'out', baseline_sha=baseline_sha)
+    monkeypatch.setattr(m, '_prepare_inputs', lambda req: pytest.fail('Invalid SHA reached preparation'))
+    with pytest.raises(m.CalibrationError, match='request_or_existing_output'):
+        m.run_calibration(request)
+    assert not request.out.exists()
+
+
+def test_missing_pinned_commit_fails_real_git_preparation_before_fit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    m = module()
+    repository = tmp_path / 'repository'
+    repository.mkdir()
+    subprocess.run(['git', '-C', str(repository), 'init'], check=True, capture_output=True)
+    workspace = tmp_path / 'workspaces'
+    workspace.mkdir()
+    snapshot = tmp_path / 'fixture/evaluation-snapshots/by-hash' / ('a' * 64)
+    snapshot.mkdir(parents=True)
+    request = m.CalibrationRequest(repository, workspace, snapshot, 'a' * 64,
+                                   tmp_path / 'prediction.json', tmp_path / 'out', baseline_sha='b' * 40)
+    monkeypatch.setattr(m, '_single_fit', lambda *args: pytest.fail('Missing commit reached fit'))
+    with pytest.raises(m.CalibrationError, match='preparation_failed'):
+        m.run_calibration(request)
+    import json
+    failure = json.loads((request.out / 'preparation-failure.json').read_bytes())
+    assert failure['error_type'] == 'CalledProcessError'
+    assert not (request.out / 'seed-101').exists()

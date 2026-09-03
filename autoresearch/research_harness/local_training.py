@@ -2,7 +2,8 @@
 
 [파이프라인] candidate v2 게시와 prediction CSV 게시 사이의 학습 구간이다.
 [기능] 동일 bytes의 receipt 검증, 완전 과거 라벨, 시점 피처, seed별 분할·sampling·
-LightGBM fit과 예측 및 경로 없는 재현 receipt를 제공한다.
+LightGBM fit과 예측 및 경로 없는 재현 receipt를 제공한다. 기존 21열 접두부와
+학습·예측 schema를 검증하고 추가 수치 피처를 실제 모델 입력 순서로 기록한다.
 [비책임] GPU 모델 준비는 local_embedding, CLI·산출물 게시는 prediction,
 평가 라벨·지표·최종 판정은 Sealed Judge가 담당한다.
 """
@@ -33,6 +34,7 @@ from autoresearch.action_log_generation.pipeline import EVENT_LOG_PARQUET_SCHEMA
 from autoresearch.action_log_generation.schema import EventLog
 from autoresearch.feature_engineering.model_contract import (
     CATEGORICAL_FEATURE_COLUMNS, FeatureContractError, MODEL_FEATURE_COLUMNS,
+    resolve_experiment_feature_columns,
 )
 from autoresearch.model_training.downsampling import downsample_negatives, apply_downsampling_calibration
 from autoresearch.model_training.lgbm_model import LGBMModel
@@ -44,7 +46,7 @@ from autoresearch.research_harness.evaluation_snapshot_models import ArtifactRec
 from autoresearch.research_harness.evaluation_source_models import LoadedPartition, SourceEvent, SourcePartitionReceipt
 from autoresearch.research_harness.fixture_errors import StageCError
 from autoresearch.research_harness.fixture_models import CandidateDataManifestV2, CandidateHistoryReceipt, _MetadataArtifactReceipt
-from autoresearch.research_harness.local_features import build_local_features
+from autoresearch.research_harness.local_features import LocalFeatureBatch, build_local_features
 
 
 _KST = timezone(timedelta(hours=9))
@@ -224,6 +226,32 @@ def _digest(value: object) -> str:
     return sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
 
 
+def _feature_columns(training: LocalFeatureBatch, prediction: LocalFeatureBatch) -> tuple[str, ...]:
+    columns = tuple(training.features.column_names)
+    extra = columns[len(MODEL_FEATURE_COLUMNS):]
+    try:
+        expected = resolve_experiment_feature_columns(extra) if extra else MODEL_FEATURE_COLUMNS
+    except FeatureContractError:
+        raise FeatureContractError('local_training_features_columns_invalid') from None
+    if columns != expected or tuple(prediction.features.column_names) != columns:
+        raise FeatureContractError('local_training_features_columns_invalid')
+    if training.features.schema.types != prediction.features.schema.types:
+        raise FeatureContractError('local_training_features_types_invalid')
+    reserved = set(_SLATE_SCHEMA.names) | {
+        'event_id', 'source_event_id', 'clicked', 'label', 'score',
+    } | set(training.diagnostics.column_names) | set(prediction.diagnostics.column_names)
+    if any(not name.strip() or name in reserved for name in extra):
+        raise FeatureContractError('local_training_features_columns_invalid')
+    for batch in (training, prediction):
+        for name in extra:
+            values = batch.features[name]
+            if not (pa.types.is_integer(values.type) or pa.types.is_floating(values.type)):
+                raise FeatureContractError('local_training_features_types_invalid')
+            if values.null_count or not np.isfinite(values.to_numpy()).all():
+                raise FeatureContractError('local_training_features_values_invalid')
+    return columns
+
+
 def train_local_candidate(
     inputs: LocalTrainingInput, *, seed: int, embedding: TextEmbedder,
     config: LocalTrainingConfig = LocalTrainingConfig(),
@@ -253,6 +281,7 @@ def train_local_candidate(
                   history_start_date=inputs.manifest.history_partitions[0].dt)
     training = build_local_features(requests, **kwargs)
     prediction = build_local_features(inputs.slate, **kwargs)
+    feature_columns = _feature_columns(training, prediction)
     frame = training.features.to_pandas()
     x_train, y_train, realized = downsample_negatives(frame.iloc[train].copy(), labels.iloc[train],
                                                    config.sampling_rate, random_state=seed)
@@ -297,7 +326,7 @@ def train_local_candidate(
                      'scale_pos_weight': weight, 'sampled_train_rows': len(y_train),
                      'source_event_ids_sha256': _digest([inputs.training_rows[int(i)].source_event_id for i in y_train.index])},
         'model_config': config.model_dump(), 'model_text_sha256': sha256(model_text.encode()).hexdigest(),
-        'feature_columns': list(MODEL_FEATURE_COLUMNS), 'categorical_categories': categories,
+        'feature_columns': list(feature_columns), 'categorical_categories': categories,
         'feature_diagnostics': {name: {'rows': len(batch.diagnostics), **{
             column: sum(batch.diagnostics[column].to_pylist()) for column in batch.diagnostics.column_names}}
             for name, batch in (('training', training), ('prediction', prediction))},

@@ -139,7 +139,7 @@ def test_actual_lightgbm_seed_retraining_and_receipt(tmp_path: Path) -> None:
     assert first.receipt['input_manifest_sha256'] == loaded.manifest_sha256
     assert first.receipt['sampling']['realized_rate'] == 1.0
     assert str(tmp_path) not in json.dumps(first.receipt)
-    assert set(first.receipt['feature_columns']) == set(MODEL_FEATURE_COLUMNS)
+    assert first.receipt['feature_columns'] == list(MODEL_FEATURE_COLUMNS)
 
 
 @pytest.mark.parametrize('seed', [-1, 2**32, True])

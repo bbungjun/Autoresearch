@@ -677,3 +677,44 @@ host empty·process cleanup 확인을 통과했다. 신규 experiment workspace�
 실행 성공·품질 판정·관측 한계를 분리한 점이 이번 포트폴리오의 핵심이다. 다음은 유효한
 피처 추가 실증, 영분산 지표의 수용 정책 판단과 더 넓은 자율성·비용 계측이다. 이 작업으로
 전체 MVP 완료나 임베딩/모델 자유 선택의 실증 완료를 선언하지 않는다.
+
+## 13. 새 피처가 실제 모델과 실험 기록에 들어가는가 — #71
+
+**문제:** 단일 오류 복구 다음에는 agent가 새 피처를 작성하고 실제 학습·평가까지 연결하는
+실증이 필요했다. 기존 `local_training`은 feature table 전체를 모델에 전달하지만
+receipt에는 고정 21개 이름만 기록한다. 따라서 새 열을 추가하면 실제 모델과 설명 증거가
+어긋날 수 있었다. 이는 모델 학습 불가가 아니라 관측·계약의 불일치다.
+
+**사전 대안 검토:** 처음 고려한 과거 클릭 카테고리 비중은 현재 합성 이력이 T-2/T-1뿐이고
+완전 학습일은 T-2라, 당일 제외 규칙을 지키면 학습행에서 모두 cold-start가 된다. 긴 이력
+생성은 유용하지만 fixture 계약 확장이므로 이번 최소 실험과 분리했다. 조회수/관측 영상
+나이도 검토했으나 fixture metadata에서 조회수와 나이가 반대 방향의 같은 순서를 가져
+tree가 새 분할 정보를 얻기 어렵다. candidate 품질이나 evaluation label을 본 뒤 피처를
+고른 것이 아니라 입력 기간·계산 구조를 검토해 범위를 좁힌 과정이다.
+
+**선택:** 독립 reviewer의 제안 중 기존 최대 관심사 유사도를 보완하는 평균 관심사
+유사도를 선택했다. 키워드 하나의 높은 일치와 전체 관심사의 적합도를 구분한다는 가설이다.
+기존 21개 피처·고정 E5·LightGBM 설정은 그대로 두며 실제 agent가 candidate에 22번째
+열을 구현한다. 키워드 중복·빈 입력·as-of·clip/반올림 계약과 손 계산 기대값은 실행 전에
+spec §4.8.1로 고정한다. 준비 worker는 실제 피처를 미리 구현하지 않는다.
+
+**최소 연결과 리뷰:** 기존 `LocalFeatureBatch` interface를 유지하고 학습 module 안에서
+학습·예측 열 순서/타입·추가 수치 유효성을 검증한 뒤 실제 입력 열을 receipt에 기록하는
+방식을 택했다. 새로운 feature registry나 별도 공개 옵션을 만들지 않는다. 독립 리뷰는
+calibration CLI의 선택 baseline 인자가 내부의 초기 SHA 상수 제한 때문에 새 기준선에
+작동하지 않는 문제도 발견했다. 기본 SHA를 유지하고 명시 full SHA·실제 commit 일치와
+고정 5-seed·새 출력 조건을 검증하도록 최소 보완한다.
+
+**현재 근거:** 새 fixture는 seed 7101/T=2026-09-01로 한 번 준비했으며 기존 #60 관측
+208개와 #69 관측 128개 파일은 reference hash와 일치했다. 새 final ID는 이전 두 실험과
+다르며 아직 registry 초기화·final 소비·실제 coding 호출은 하지 않았다. 준비용 코드 검증과
+baseline calibration, 실제 agent 피처 구현의 결과는 확인 후 이 절에 추가한다. 현재
+성능 향상·피처 promote·자율성 확대 완료를 주장하지 않는다. calibration에서 σ 전제가
+깨지면 actual coding/final 전에 방향 결정을 요청하며, #69의 σ=0 실행 승인을 재사용하지 않는다.
+
+**준비 코드 검증:** 추가 피처 연결은 RED 27건으로 receipt 불일치와 사전 검증 누락을
+확인한 뒤 보완했다. calibration의 새 SHA는 RED 2건 후 명시 pin을 지원했다. 최종
+확장 회귀는 154 passed / 2 warnings / 17.29초이며 기존 MLflow의 Pydantic deprecated
+경고는 숨기지 않는다. 실제 작은 CPU 모델의 22열 fit/predict·native model·receipt와
+21열 baseline 회귀를 포함한다. 추가 열은 테스트용 대역이며 평균 관심사 피처의 구현이나
+실제 실험 성공 증거로 세지 않는다. 전체 Ruff·변경된 calibration script Ruff도 통과했다.

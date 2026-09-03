@@ -3,6 +3,7 @@
 > **현황 2026-09-03 (#69): Task 1~6 핵심 구현·Task 7 주요 실측·단일 실패 후보 수정 실측 완료.**
 > 코드 반영 상태는 [PR #70](https://github.com/bbungjun/Autoresearch/pull/70)을 따르며 전체 MVP 수용 완료는 아니다. 아래 종합 체크리스트와
 > 잔여 검증 우선순위를 따른다. 과거 Task의 문제·결과는 해당 구현 시점 기록이다.
+> 후속 #71의 피처 추가 실험은 Task 7F에서 준비·진행 상태를 추적한다.
 
 **Goal:** 현행 executor를 수정하지 않고 정적 allowlist를 사용하지 않는 독립 로컬 Research
 Harness(봉인된 사후 판정 + 자가 피드백) 경로를 만든다. 사람이 준 가설·`ExperimentCard`로
@@ -2116,6 +2117,37 @@ Judge는 `concerns`를 남겼다. 구조화 기록으로 복구 후 학습·평�
 기존 #60 관측 파일 208개 hash 일치를 확인했다. 상세 문제·
 해결·결과와 감사 근거는 [포트폴리오 §12](../reports/2026-09-03-local-autonomous-experiment-e2e.md#12-실패한-코드를-고쳤는가-정상-코드에서-다시-시작했는가--69)를 따른다.
 피처 추가 promote, σ=0을 포함한 정책 수용 판단, 범용 자율성·비용 측정은 남아 있다.
+
+### Task 7F: 실제 피처 하나 추가·학습·평가 — #71 (진행 중)
+
+사용자가 다음 피처 실험 계획을 승인했다. 계약은 spec §4.8.1이며 actual 결과는 아직 없다.
+
+- [x] #71 발행과 이슈 연결 브랜치 생성, 기존 입력/21개 피처 및 학습 receipt 검토
+- [x] 클릭 비중의 학습 cold-start·조회수/나이의 순서 중복을 입력 구조에서 확인하고
+      `mean_topic_similarity` 추가 가설·계산·예산을 실행 전에 확정
+- [x] RED→GREEN: 대역 22번째 수치 열의 실제 학습/예측/receipt·native model 일치,
+      baseline 21열 보존과 입력 불일치 오류 테스트. 실제 피처는 준비 worker가 구현하지 않음
+- [x] 최소 입력 검증·receipt 보완, 구현 비참여 reviewer의 코드·spec 사전 리뷰
+- [x] calibration의 기존 선택 baseline SHA가 초기 상수로만 제한된 문제를 보완한다.
+     기본값은 유지하고 명시 full SHA·실제 commit 검증, 고정5seed·기존출력 거부 회귀를 확인한다
+
+준비 코드의 확장 회귀는 local training/추가 피처/calibration/공개 prediction CLI/기존 피처를
+묶어 154 passed, 2 warnings(17.29초)였다. 경고는 기존 MLflow의 Pydantic deprecated
+사용이며 새 피처의 품질 결과가 아니다. Ruff·diff 검사도 통과했다.
+독립 reviewer의 관련 76개 재실행도 13.55초에 통과했고 사전 차단사항은 없었다.
+
+- [ ] baseline 구현 SHA 봉인, 새 fixture seed7101/T=2026-09-01, 별도 cache·출력 준비
+- [ ] baseline 101~105 5 fit calibration, 기존 #60/#69 증거 보존 대조. sigma 전제 불충족 시
+      actual coding/final을 시작하지 않고 사용자 결정 요청
+- [ ] 실제 agent가 golden test부터 추가 피처를 구현하고 screening/feedback 최대1회를 수행
+- [ ] 새 final 단일 소비·REPORT·새 문맥 Judge1회, 피처 코드·22열 모델 입력·receipt·지표 감사
+- [ ] 포트폴리오에 문제/대안/결정·시간/token·수동 개입·성공/미승격/한계를 기록
+- [ ] CI·독립 리뷰·PR·squash merge와 상위 #17 상태 갱신
+
+완주가 미승격이면 결과를 그대로 보존하며 피처 promote 실증 의무는 남긴다. 모델에 새 열이
+전달됐다는 사실만으로 유효 split 사용이나 품질 개선을 주장하지 않는다. 자동 사람 개입·
+달러 비용은 관측 근거가 없으면 null이다. 기록 Judge의 가시성 한계는 원본 기술 감사와
+구분한다. 기존 #60/#69의 final·raw 산출물은 재사용/덮어쓰기하지 않는다.
 
 ### 잔여 검증 우선순위 — 2026-09-03 권고
 
