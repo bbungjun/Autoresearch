@@ -1761,6 +1761,59 @@ coverage로 표시한다. 달러 비용과 사람 개입 횟수는 측정 장치
 출력을 섞지 않는다. Markdown에서 agent 텍스트의 raw HTML과 임의 링크를 무력화한다.
 이미지/웹 UI, 논문별 고정 9절, 추가 feedback loop는 이 PR 범위가 아니다.
 
+### 10.1.2 지표 범위와 판정 기준의 설명 계약 (#62)
+
+#60에서 발견한 문제는 계산 오류가 아니라 서로 다른 관측 범위를 하나의 설명으로
+표시한 것이다. 공개 `publish_research_report` interface와 수치 Judge·Controller·ledger는
+그대로 두고, 새 기록의 projection을 `research-record-v2`로 명시한다.
+
+새 trial의 지표 설명은 `metric_groups`로 구분한다. 각 group은 지표 값과 그 값의
+scope, seed 집합, 집계 방식, 연결된 evidence를 함께 제공한다. Validation의 candidate
+절대값은 screening seed의 단일 결과다. Decision delta는 screening 비교 또는 confirmation
+5-seed paired delta 평균이므로 같은 범위로 표시하지 않는다. Final의 candidate 절대값과
+delta는 confirmation 평균이다. 확인되지 않은 집계는 unknown/unavailable로 남기고,
+부분 pair나 orphan attempt를 완료된 5-seed 증거로 사용하지 않는다. 원래 ledger 값과
+공식 decision/reason은 보존하며 설명을 위해 모델을 재학습·재채점하지 않는다.
+
+`metric_groups`의 두 항목은 `candidate_absolute`, `decision_delta`다. 각각 `status`,
+`scope`, `seeds`, `aggregation`, `metrics`, `evidence_refs`를 가진다. Delta의 지표 이름은
+원래 ledger의 `delta__` 접두사만 제거하고 수치는 그대로 둔다. 그룹의 완전한 근거를
+확인할 수 없으면 원래 값은 보존하되 `status=not_available`, `scope=unknown`, 빈 seed
+집합으로 표시한다. 근거 참조는 검증된 attempt ID·상대 경로·SHA로 한정한다.
+설명 전용 정책은 `run.decision_policy`에 두며 아래 수치 Judge 계약을 설명한다.
+
+Judge 입력과 Markdown은 동일한 group을 소비한다. 판정 정책 설명에는 다음을 포함한다.
+
+- Screening: 유효한 같은 seed 비교에서 NDCG@10 delta가 엄격히 0보다 커야 confirmation.
+- Confirmation/final: 서로 다른 seed 5쌍의 방향 정규화 delta 평균으로 비교한다.
+  Primary는 `delta >= 2 * sigma`, 여섯 guardrail은 각각 `delta >= -sigma`다.
+  Primary 미달은 discard, primary 통과 후 guardrail 미달은 revise, 모두 통과하면 promote.
+- 큰 값이 좋은 지표는 candidate−baseline, LogLoss/Brier는 baseline−candidate다.
+- 기존 `baseline_sigmas`와 위 배수로 산출한 지표별 threshold를 함께 표시한다.
+  이는 설명용 값이며 기존 판정을 덮어쓰지 않는다. 누락·무효 sigma는 임의 보정하지 않는다.
+- 공식 비교는 strict `>` 또는 `>=`이며 표시용 반올림 값으로 판단하지 않는다.
+  필요한 지표의 유효성, sigma `> 1e-6`, 적용 지표의 `max(30, ceil(total * 0.20))`
+  coverage gate가 선행함을 명시한다. 이 규칙을 p-value 기반 유의성 검정이라고 부르지 않는다.
+
+호환성: 이미 `research-record-v1`이 게시된 run은 새 projection으로 교체하지 않는다.
+완료 및 부분 게시를 재개할 때도 기존 버전의 projection·prompt·Markdown을 사용하고,
+terminal/input/ledger/source 및 intent/digest를 재검증한다. 새 record가 없는 run만 v2를
+기본으로 사용한다. 알 수 없는 버전은 실패하고 자동 migration·원본 덮어쓰기·Judge 재호출은
+하지 않는다. Record 버전은 기존 digest 결속에 포함되므로 manifest/intent envelope를
+별도 확장하는 것은 필요하지 않다.
+Record가 없는데 intent·Judge attempt·review·REPORT·manifest 등 후속 산출물이 남았다면
+새 v2 실행으로 취급하지 않는다. 새 게시 또는 Judge 호출 전에 실패하여 유실을 숨기지 않는다.
+
+이 호환 약속은 동일한 기존 `RunInputContract`를 받는 report 게시 interface에 한정한다.
+`report.py`도 trusted runtime identity에 포함되므로 새 코드로 옛 config의 전체 runtime을
+재실행하면 입력 identity 변경으로 실패하는 기존 동작은 유지한다. 호환을 위해 runtime
+identity를 완화하거나 #60 CLI를 다시 실행하지 않는다.
+
+검증은 서로 다른 screening 값과 confirmation delta를 가진 golden, final/부분 결과,
+정책 설명과 수치 Judge의 일치, v1 완료·부분 게시 재개, 기존 redaction/write-once 회귀로
+수행한다. #60 실험의 원본 REPORT·Judge 응답·소비 marker는 수정하지 않는다. 새 실제
+LLM 검토나 final 재실행 없이 테스트로 projection 개선만 검증했다는 한계를 기록한다.
+
 ### 10.2 MVP 이후 논문 기반 REPORT
 
 REPORT는 최고 점수만 보여주는 결과 페이지가 아니라 논문에서 candidate까지의 감사 가능한
