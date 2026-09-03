@@ -234,17 +234,20 @@ PR 전용 취소, 9개 캐시 scope의 분리, 빌드 결과의 실행 연결, r
 
 구현 PR은 [#82](https://github.com/bbungjun/Autoresearch/pull/82)이며,
 main merge commit은 `6de4d0d70de0a79b0c9b3b36bdba1ff02ab3a71e`이다.
-PR 검증 당시 commit은 `ee56a8a73a2c2061c7930ac07ab67b2f990389fc`이다.
+PR head commit은 `ee56a8a73a2c2061c7930ac07ab67b2f990389fc`이다.
+실제 checkout과 이미지 VCS_REF는 `refs/pull/82/merge`의
+`79663819b53f615e4c5f4b77a1714fbb8bb3da48`이며 두 attempt에서 동일하다.
 
 | 실행 | 조건과 확인 범위 | 근거 |
 | --- | --- | --- |
 | 변경 전 기준 main | 기존 일반 docker build, 전체 CI 성공 | [33753267255](https://github.com/bbungjun/Autoresearch/actions/runs/33753267255) |
 | PR 최초 실행 | 캐시 생성, Python 3.11·3.12·Feast·PostgreSQL·lock drift·9개 이미지 및 smoke 성공; 별도 Ruff 성공 후 merge | [33777667664 / attempt 1](https://github.com/bbungjun/Autoresearch/actions/runs/33777667664/attempts/1) |
-| PR 동일 커밋 재실행 | 동일 이미지 9개의 저장된 캐시 재사용, 빌드 단계별 측정 | [33777667664 / attempt 2](https://github.com/bbungjun/Autoresearch/actions/runs/33777667664/attempts/2) |
-| merge 이후 main | main push 이벤트의 변경 경로 판정·빌드·실행 검증 | [33778610655](https://github.com/bbungjun/Autoresearch/actions/runs/33778610655) |
+| PR 동일 커밋 재실행 | 동일 이미지 9개의 저장된 캐시 재사용, 전체 CI 성공 | [33777667664 / attempt 2](https://github.com/bbungjun/Autoresearch/actions/runs/33777667664/attempts/2) |
+| merge 이후 main | main push의 변경 경로 판정·9개 이미지·smoke·전체 테스트 성공 | [33778610655](https://github.com/bbungjun/Autoresearch/actions/runs/33778610655) |
 
-PR 캐시는 PR ref에 속한다. 따라서 PR 재실행에서의 캐시 적중과 main에서의
-캐시 생성은 구분해서 기록한다. 다음 표의 캐시 전후 비교는 같은 PR commit의
+PR 캐시는 PR ref에 속한다. main 최초 실행에서도 캐시를 새로 생성했으며,
+빌드 단계 합계는 1,350초, 마지막 job까지의 전체 경과시간은 518초였다.
+따라서 PR 재실행에서의 캐시 적중과 main에서의 캐시 생성은 구분해서 기록한다. 다음 표의 캐시 전후 비교는 같은 PR commit의
 attempt 1과 attempt 2이며, 서로 다른 소스나 이미지 집합을 비교한 것이 아니다.
 
 | 이미지 | 변경 전 기준 | PR 최초 실행 | PR 캐시 재사용 |
@@ -271,23 +274,31 @@ attempt 1과 attempt 2이며, 서로 다른 소스나 이미지 집합을 비교
 변경 전 기준 실행 대비로는 `(704 - 345) / 704 ≈ 51.0%` 짧았다.
 반복 측정의 평균·분산을 구한 결과가 아닌 **각 조건 1회 관측값**이다.
 
-전체 workflow의 경과시간은 별도 지표다. API의 `startedAt → updatedAt`
-기준으로 변경 전은 514초, PR 최초 실행은 506초였다. 빌드 합계가 늘었어도
+전체 workflow의 경과시간은 별도 지표다. workflow `startedAt`부터
+마지막 job의 `completedAt`까지는 변경 전 513초, PR 최초 실행 504초였다.
+캐시 재사용 실행은 502초였다. 즉 이 표본에서 전체 경과시간은 504초에서
+502초로 거의 같았고, 빌드 단계 합계만 크게 줄었다. API의 `updatedAt`은
+완료시각 전용 필드가 아니므로 경과시간 계산에 쓰지 않았다. 빌드 합계가 늘었어도
 전체 경과시간이 그만큼 늘지 않은 이유를 이해하려면 병렬 실행과 마지막으로
 끝나는 job을 함께 봐야 한다. PR 최초 실행에서 Python 3.12 job은 8분 19초,
 Agent 이미지 job은 7분 46초였다. 빌드 합계의 감소율을 전체 CI 감소율로
 대체하지 않는다.
 
-캐시 로그에서 import manifest와 설치 단계의 `CACHED`를 확인했다. 예를 들어
+캐시 로그에서 import manifest와 설치 단계의 `CACHED`를 확인했다.
+재사용 실행의 로그에는 전체 `CACHED` 표기 117개가 있었고, 기준·최초 PR·
+main 최초 실행의 로그에서는 각각 11개였다. 이는 로그 표기 개수이며
+레이어 크기를 반영한 적중률을 뜻하지 않는다. 예를 들어
 MLflow 재실행은 설치 레이어를 재사용했고 cache export가 0.5초였다.
 최초 실행의 Feast export는 20.6초, Train export는 66.3초였다.
 이 수치는 BuildKit의 `sending cache export ... done` 구간이며 Build step
 전체 시간과 구분한다.
 
-문서 전용 변경은 [후속 이슈 #83](https://github.com/bbungjun/Autoresearch/issues/83)
-에서 이 기록을 반영하면서 검증한다. 수동 `workflow_dispatch` 전체 실행과
+문서 전용 변경은 [후속 PR #84](https://github.com/bbungjun/Autoresearch/pull/84)
+에서 검증한다. [최초 문서 PR 실행](https://github.com/bbungjun/Autoresearch/actions/runs/33779198508)에서
+Docker 하위 job 6개가 모두 skipped이고 집계 job은 success인 것을 확인했다. 수동 `workflow_dispatch` 전체 실행과
 새 커밋에 의한 이전 PR 실행 취소는 로컬 설정 검사 범위이며, 이 측정만으로
-원격 실증까지 완료했다고 주장하지 않는다.
+원격 실증까지 완료했다고 주장하지 않는다. 문서 PR의 새 커밋으로 이전
+실행 취소를 확인한 경우에는 해당 취소 실행과 최종 성공 실행을 함께 확인한다.
 
 ## 포트폴리오 서술 초안
 
