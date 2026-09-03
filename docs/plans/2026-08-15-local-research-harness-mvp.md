@@ -1195,7 +1195,7 @@ final metadata·권한 연결, checkpoint 영속화, 피처/임베딩·학습은
 | 2 (#46) | 실제 로컬 GPU adapter, 모델 고정 revision/파일 해시, 캐시 분리, CUDA 추론·OOM 검증 | #47 CI 통과·머지 완료 |
 | 3 (#48) | 재학습 CLI, seed별 학습·예측, 입력 무결성과 완전 라벨 기간 검증 | #50 CI 통과·머지 완료 |
 | 4 | final 권한/metadata, checkpoint identity, 실제 coding agent·독립 Judge·REPORT 연결 (필요하면 여러 PR) | #51·#53·#56 CI 통과·머지 완료 |
-| 5 | 5회 독립 재학습 calibration, E2E·복구·판정 시나리오와 품질/자율성/비용 실측 | #57 baseline/parser 실측 준비 |
+| 5 | 5회 독립 재학습 calibration, E2E·복구·판정 시나리오와 품질/자율성/비용 실측 | #59·#61 머지; #63 실제 E2E·독립 리뷰 완료, CI·병합 상태는 연결 PR 참조 |
 
 완료는 테스트 adapter의 성공이 아니라 실제 로컬 모델·agent의 완주와 증거 보존, 모든
 관련 PR의 main 머지다. 성능 개선은 성공 조건으로 강제하지 않는다. 합성 환경 결과를
@@ -1717,7 +1717,7 @@ Feast/Postgres/lock/Ruff CI 및 Docker 집계 성공 후 `e89155e6`으로 squash
 - [x] 상한 도출·실제 escape/긴 score roundtrip·작은 worker 초과 경계 RED
 - [x] 내부 cap/docstring과 benchmark 동일 상한, 최대 확장 입력 추가
 - [x] 실제 300k 재측정·자원 및 원본 evidence 보존
-- [ ] 독립 리뷰·회귀·CI·PR·merge 및 전후 결과 기록
+- [x] 독립 리뷰·회귀·CI·PR·merge 및 전후 결과 기록
 
 **결과:** 상한/측정 사례 부재의 4 RED를 확인한 뒤 최소 수정했다. 실제 작은 파일로
 CSV 226byte→JSONL 360byte와 worker 출력 720byte 정확 허용/719byte 제한 거부를
@@ -1746,6 +1746,95 @@ Windows/Python 3.12.13의 실제 300k행 재측정은 다음과 같다. 모두 C
 이번에는 외부 입력 한도·시간·메모리를 유지할 근거를 확보했고, 실제 Controller E2E는
 [#60](https://github.com/bbungjun/Autoresearch/issues/60)에서 이어간다.
 
+#61은 독립 리뷰·집중 회귀 80 passed / 3 skipped(8.82초), Python 3.11/3.12·
+Feast/Postgres/lock/Ruff 및 해당 이미지 CI 통과 뒤 `465b6aac`로 squash merge되었다.
+실제 artifact 12개와 이전 입력 5개의 동일성도 독립 대조했다.
+
+### 실제 feedback·중단 복구·final·REPORT — #60
+
+**문제:** 각 연결과 baseline 변동량은 실측했지만 실제 두 trial의 피드백 수정,
+durable checkpoint 후 재개, 단일 final batch 및 fresh-context 연구 기록 Judge를
+하나의 run으로 완주한 증거는 없다.
+
+**해결:** spec §4.11의 작은 수동 드라이버로 기존 runtime을 호출한다. 독립 설계 리뷰에서
+중단 대상을 ledger/checkpoint/stage/created로 한정하고, 관측 API가 원본 ledger를 복구하지
+않도록 일반 파일 읽기만 사용하기로 했다. 첫 trial 비반복과 정상적인 두 번째 agent 호출,
+종료 후 전체 비반복을 각각 구분한다. registry 최초 준비와 과거 미소비 근거도 남긴다.
+
+- [x] 관측 비변경·출력 중복 거부·정확한 durable checkpoint 중단·실패 보존 RED
+- [x] 기존 runtime을 호출하는 수동 측정 드라이버와 좁은 회귀
+- [x] 입력/모델/코드/실측 sigma 고정, registry 최초 준비 evidence
+- [x] 실제 trial1 완료 직후 주입 중단·동일 config 재개·trial2 feedback 수신 확인
+- [x] 단일 final 5-seed batch·REPORT·한 번의 fresh-context advisory Judge
+- [x] 종료 재호출 비반복 및 무변경/controlled 판정 시나리오 증거 구분
+- [x] 품질·자율성·비용과 실패·한계 기록 및 독립 리뷰
+- CI·병합은 [PR #63](https://github.com/bbungjun/Autoresearch/pull/63)에서 추적한다.
+
+**구현 결과:** 모듈 부재의 RED 12건을 먼저 확인한 뒤 수동 wrapper를 구현했다.
+초기 단독 16 passed(0.73초), 기존 runtime 재개와 합친 직전 회귀 38 passed(8.43초),
+추가 경계 검증 뒤 독립 회귀 40 passed(6.91초)와 Ruff가 통과했다. 안전한 stage/code만 짧은 식별자 패턴으로 보존하며 예외 원문·private
+경로는 오류 요약에 넣지 않는다. 이번 실행에서 실제 개선이 없더라도 실험 절차와 모델
+성과를 분리해 기록하며, 미관측 promote를 실제 달성했다고 표시하지 않는다.
+
+**실행 준비:** 이전 실제 validation receipt의 `final_consumed=false`와 calibration의
+final 호출 0회, 현재 registry 부재를 함께 확인한 뒤 동일 fixture의 빈 registry를
+최초 준비했다. 아직 final marker는 없다. 설정 SHA256은
+`6b9c1d677f898860ac6e23f822a51487b5e47cf526fd87844d2fbde5c1bc61fa`, preflight runtime
+identity는 `f532495eb4bc87cb9d7f99d0492201b763fdfb55fb336b358ea0cb694f5f0ec5`다.
+명시적인 training override가 없음을 확인했다. 최초 준비 receipt와 입력은 로컬에만
+보존하며 이 준비를 final 소비 또는 실험 완주로 집계하지 않는다.
+
+**첫 실제 trial와 중단:** candidate `deabbf6e667cc6be12f1209153bf05780c97cbab`은
+class weight 기본값을 auto→1.0으로 변경하고 대응 예상값·모듈 설명만 갱신했다.
+설정 테스트 6 passed(3.46초), agent 73.891초, paired 학습·채점 71.141초였다.
+첫 호출의 runtime 구간은 156.511초이며 의도된 `KeyboardInterrupt` 후 원본 ledger는
+입력 checkpoint(seq0)→첫 trial(seq1)→validation 완료 checkpoint(seq2), trailing bytes 0으로 남았다.
+측정 driver/script identity는 `d40dd8b1b61d2ac21044341a9a129f935f41ba8eecaee47a01bf163d070a0136`이다.
+
+seed42 baseline→candidate는 NDCG@10 0.7817132868→0.7794390051,
+LogLoss 0.1639438929→0.1433473733, Brier 0.0374715513→0.0272754901이었다.
+확률 지표는 개선됐지만 primary가 낮아져 `discard / primary_not_improved`가 기록됐다.
+입력 181,018 / cached 150,016 / output 2,001 / reasoning output 419 tokens를 관측했다.
+final marker와 terminal은 아직 없었다. 독립 감사에서 before/after 및 작은 원본 6건 hash,
+candidate patch의 테스트 무효화 부재, 실제 test exit0와 이 판정이 일치했다.
+같은 config/script로 재개하여 첫 trial 비반복과 두 번째 agent의 feedback 수신을 확인했다.
+
+**재개·종료 결과:** 두 번째 agent는 첫 feedback의 7개 값·delta를 실제로 받아 weight=1.0과
+leaf 31→63을 적용했다. 설정 테스트 6 passed(2.94초), candidate는
+`9122ab51de8c16bb0b9be8017642d1d1d0e6a135`다. 5-seed validation 평균 NDCG 개선
+0.036972964886937555가 2σ=0.025289683785820496을 넘고 모든 guardrail도 개선돼
+실제 `promote`됐다. 평가·테스트 무효화나 threshold 변경은 없다.
+
+Final은 같은 후보를 5-seed paired 10 fit으로 한 번 평가했다. NDCG 평균은
+0.7829057233345075→0.8081143457149691, 개선폭 0.02520862238046171로 양수지만
+2σ에 미달해 `discard / primary_threshold_not_met`, 사용자 결론은 `no_improvement`다.
+관측 수치 향상과 채택 기준 충족을 구분하며 baseline을 유지했다. 이는 p-value 기반
+통계 유의성 판정이 아니다. 전체 7개 지표·seed 분포·해석은
+[실측 보고서](../reports/2026-09-03-local-autonomous-experiment-e2e.md)에 남겼다.
+
+세 호출 runtime은 156.511초(중단), 866.336초(재개·종료), 3.023초(종료 재호출)다.
+최초 두 호출 합은 1,022.847초이며 Python cold import와 호출 사이 대기 시간은 제외한다.
+전체 24 fit, coding agent 2회, fresh Judge 1회를 관측했다. 종료 재호출에서 원본 208개가
+같은 hash로 유지됐고 추가/변경/삭제는 각각 0개였다. 첫 trial 원본 24개도 반복되지 않았다.
+독립 감사는 ledger artifact 151개, 최종 관측 208개 및 세 단계 전후 결속을 확인했다.
+
+기록 Judge는 available/concerns로 정상 응답했다. evaluation ID 의미는 올바르게 이해했으나
+screening 절대값과 confirmation 평균 delta가 하나의 metric_scope에 섞인 설명을 지적했다.
+sigma 7개는 기록에 존재하며, 부족한 설명은 판정 규칙·산출 threshold다. 수치와 최종 판정은
+독립 재계산과 일치한다. 원본·Judge 응답을 바꾸거나 재호출하지 않고
+[#62](https://github.com/bbungjun/Autoresearch/issues/62)로 후속 개선을 분리했다.
+
+이전 #52 무변경 paired 실측의 연결 hash 11개와 7개 delta=0을 재확인했다. 해당 code SHA는
+`9fb1498527a6e5b23a722071b7aae70b03c858de`로 이번 baseline과 다르며, 새 Controller 실행이
+아닌 보존 결과의 판정 재생이다. Controlled golden의 promote/revise/discard 경계와 실제
+validation promote·무변경·주입 중단 복구를 구분한다. 이번 후보는 하이퍼파라미터 변경이며
+아래의 더 강한 ‘피처 1개 추가로 개선’ 실험까지 수행한 것은 아니다.
+
+**최종 회귀·리뷰:** 전체 Harness 1,033 passed / 13 skipped / 기존 MLflow·Pydantic 경고 2건
+(501.07초), 측정 wrapper·판정 golden 집중 회귀 41 passed(1.11초), Ruff와 diff check를
+통과했다. 독립 reviewer가 최종 코드·문서·실측 원본의 일치를 확인했고 차단 발견 사항은 없다.
+PR CI 및 병합 상태는 #60에 연결된 GitHub PR을 정본으로 확인한다.
+
 ### Task 7 전체 완료 체크리스트
 
 - [x] **지표별 baseline σ 측정** (D5) — validation slate에서 Task 6의 Harness baseline 설정을 seed
@@ -1760,11 +1849,11 @@ Windows/Python 3.12.13의 실제 300k행 재측정은 다음과 같다. 모두 C
       65 MiB artifact 상한을 실측한다. 시간·메모리 안에서 안정적으로 처리하지 못하거나
       실사용 slate 규모와 맞지 않으면 행 상한을 포함한 세 초기값을 함께 낮춰 spec과 plan을
       먼저 갱신한다
-- [ ] 로컬 end-to-end 1회 완주 — slate 조립 → baseline 점수화 → Judge 판정 → ledger 기록
+- [x] 로컬 end-to-end 1회 완주 — slate 조립 → baseline 점수화 → Judge 판정 → ledger 기록
       → 피드백 반환 → 2차 trial
 - [ ] **promote 경로 검증** — 일부러 개선된 candidate(유효한 피처 1개 추가)로 `promote`가
       실제 발생하는지 확인한다. 이걸 하지 않으면 승격이 없는 상태의 원인을 알 수 없다
-- [ ] 중단 후 checkpoint 재개 1회 확인
+- [x] 중단 후 checkpoint 재개 1회 확인 — 첫 validation durable append 후 주입 중단
 - [ ] validation loop가 끝난 뒤 final holdout을 정확히 1회 평가하고 feedback 없이 종료되는지,
       새 run·새 ledger·동시 Controller에서도 온전한 같은 Judge 상태 루트의 registry가
       재평가를 막는지, root 부재·접근 불가·관측된 marker 삭제에서 fail-closed하는지, 최종

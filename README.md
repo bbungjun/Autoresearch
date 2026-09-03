@@ -203,6 +203,14 @@ Controller 전체 품질·자율성·비용 검증은 계속 진행 중입니다
 validation 5회 새 학습, 후자는 합성 parser 자원 측정이며 agent/final 실행 도구가 아닙니다.
 실제 입력 준비와 결과·한계는 [Task 7 기록](docs/plans/2026-08-15-local-research-harness-mvp.md#첫-실측-pr--57)을 참조합니다.
 
+실행 전후 증거 관측은 `python -m scripts.research_harness.measure_e2e --help`로 확인합니다.
+기존 run 설정과 별도의 새 측정 출력이 필요하며, 선택한 첫 validation checkpoint 직후의
+주입 중단·동일 설정 재개·종료 재호출을 구분해 기록합니다. registry를 초기화하거나 실패한
+호출을 자동으로 재시도하지 않습니다. 정상 runtime 반환은 모델 개선을 의미하지 않습니다. 실측 계약과
+현재 진행 상태는 [spec §4.11](docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md#411-실제-controller-e2e-측정-60)을 따릅니다.
+실제 두 trial의 피드백 수정·중단 복구·단일 final·종료 재호출 결과와 한계는
+[실측·포트폴리오 기록](docs/reports/2026-09-03-local-autonomous-experiment-e2e.md)에 정리했습니다.
+
 ## 배포 이미지
 
 | 이미지 | 용도 |
