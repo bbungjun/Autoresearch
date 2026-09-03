@@ -156,6 +156,33 @@ identity와 진단·시간은 재현 근거이며, native 모델을 별도로 �
 평가 정답 조회 또는 승격 판정을 하지 않습니다. 자세한 계약은
 [Harness spec §4.8](docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md)을 따릅니다.
 
+### 실제 자율 실험 실행과 재개
+
+`python -m autoresearch.cli harness-run --config <local-run.json>`은 준비된 fixture와
+모델, 기존 Codex CLI 로그인을 사용합니다. `local_runtime.HarnessRunConfig`가 설정 정본이며
+repository/workspace/run 절대 경로, Judge handoff와 fixture descriptor digest,
+baseline/champion SHA, 초기 card, budget, screening seed와 서로 다른 confirmation seed
+5개, 실측 baseline sigma, prediction·agent 설정을 요구합니다. 최대 두 validation trial로
+한 번의 feedback revision을 허용합니다. sigma는 이 명령이 임의로 채우지 않습니다.
+
+모델/캐시·run root·별도 workspace parent를 먼저 준비하고 fixture의 소비 registry도
+기존 계약에 따라 준비해야 합니다. 이 명령은 registry를 생성하거나 초기화하지 않습니다.
+Codex 모델과 reasoning effort는 명시하며 새 API key나 유료 클라우드 자원을 요구하지 않습니다.
+agent 호출은 개인 config를 읽지 않고 승인 정책 `never`와 요청 sandbox 범위를 명시합니다.
+native Windows는 기존에 설치된 `elevated` sandbox를 선택하며 전체 접근으로 우회하지 않습니다.
+Windows MVP에서는 agent의 임시 데이터 없는 설정 테스트와 Harness의 실제 학습 검증을
+분리합니다. 범용 sandbox pytest 임시 폴더 회수와 candidate 입력 읽기 제약은
+[#54](https://github.com/bbungjun/Autoresearch/issues/54)에서 추적합니다.
+run 설정과 산출물은 Judge-owned 로컬 파일이며 저장소에 커밋하거나 candidate에 주지 않습니다.
+
+같은 명령은 `run-inputs`의 고정 metadata·설정·모델 파일·trusted Harness 코드와 ledger를
+대조해 재개합니다. 입력이 달라지면 실패하며 완료 trial을 재실행하지 않습니다. 중단된
+validation attempt는 재시작할 수 있어 LLM 호출 exactly-once는 보장하지 않습니다.
+최종 결과는 `controller-result.json`, 상세 증거는 ledger와 `attempts/`에 남습니다.
+final은 기존 단일 소비 계약을 유지합니다. 연구 기록 Judge/REPORT와 품질·자율성·비용
+calibration은 후속 단계이며 이 실행 명령만으로 성능 개선이 증명되는 것은 아닙니다.
+자세한 계약은 [Harness spec §4.9](docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md)를 따릅니다.
+
 ## 배포 이미지
 
 | 이미지 | 용도 |

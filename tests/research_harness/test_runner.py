@@ -187,6 +187,13 @@ os.write(2, b"y" * 70000 + b"stderr-end")
     assert payload["out"] == str(process.predictions)
     assert payload["seed"] == 1937
     expected_environment = dict(process.environment)
+    runtime = process.cwd / "harness_out" / ".runtime"
+    expected_environment.update({
+        "HOME": str(runtime / "home"), "USERPROFILE": str(runtime / "home"),
+        "TEMP": str(runtime / "tmp"), "TMP": str(runtime / "tmp"),
+        "TMPDIR": str(runtime / "tmp"),
+        "USERNAME": "harness",
+    })
     assert {
         name: payload["environment"][name] for name in expected_environment
     } == expected_environment
@@ -303,6 +310,8 @@ def test_worker_reports_candidate_popen_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     status = tmp_path / "start.status"
+    (tmp_path / "harness_out").mkdir()
+    monkeypatch.chdir(tmp_path)
 
     class GateInput:
         buffer = io.BytesIO(b"\0")
@@ -323,6 +332,8 @@ def test_worker_filters_interpreter_environment_before_candidate_spawn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     status = tmp_path / "start.status"
+    (tmp_path / "harness_out").mkdir()
+    monkeypatch.chdir(tmp_path)
     captured_environment: dict[str, str] = {}
 
     class GateInput:
@@ -352,6 +363,13 @@ def test_worker_filters_interpreter_environment_before_candidate_spawn(
         for name, value in os.environ.items()
         if name in worker_module._ALLOWED_ENVIRONMENT
     }
+    runtime = tmp_path / "harness_out" / ".runtime"
+    expected_environment.update({
+        "HOME": str(runtime / "home"), "USERPROFILE": str(runtime / "home"),
+        "TEMP": str(runtime / "tmp"), "TMP": str(runtime / "tmp"),
+        "TMPDIR": str(runtime / "tmp"),
+        "USERNAME": "harness",
+    })
     monkeypatch.setattr(worker_module.sys, "stdin", GateInput())
     monkeypatch.setattr(worker_module.sys, "argv", ["worker", str(status), "candidate"])
     monkeypatch.setattr(worker_module.subprocess, "Popen", capture_candidate_start)
@@ -359,6 +377,72 @@ def test_worker_filters_interpreter_environment_before_candidate_spawn(
     assert worker_module.main() == 0
     assert status.read_bytes() == b"S"
     assert captured_environment == expected_environment
+
+
+def test_prediction_child_uses_disposable_home_and_temp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in ("HOME", "USERPROFILE", "TEMP", "TMP", "TMPDIR", "CODEX_HOME",
+                 "USERNAME", "USER", "LOGNAME", "LNAME",
+                 "OPENAI_API_KEY", "GITHUB_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS"):
+        monkeypatch.setenv(name, "host-private-must-not-inherit")
+    process = _candidate(tmp_path, """
+import tempfile
+import getpass
+payload = {"home": str(Path.home()), "tmp": tempfile.gettempdir(), "user": getpass.getuser(), "environment": dict(os.environ)}
+Path(args.out).write_text(json.dumps(payload), encoding="utf-8")
+""")
+    _run(process)
+    payload = json.loads(process.predictions.read_text(encoding="utf-8"))
+    runtime = process.cwd / "harness_out" / ".runtime"
+    assert Path(payload["home"]) == runtime / "home"
+    assert Path(payload["tmp"]) == runtime / "tmp"
+    assert payload["user"] == "harness"
+    assert (runtime / "home").is_dir() and (runtime / "tmp").is_dir()
+    assert "host-private-must-not-inherit" not in payload["environment"].values()
+    assert not {"CODEX_HOME", "OPENAI_API_KEY", "GITHUB_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS"} & payload["environment"].keys()
+
+
+@pytest.mark.parametrize("kind", ["directory", "file", "symlink", "broken_symlink"])
+def test_prediction_child_rejects_existing_runtime_without_start(
+    tmp_path: Path, kind: str,
+) -> None:
+    if "symlink" in kind:
+        _require_symlink(tmp_path)
+    process = _candidate(tmp_path, "Path('must-not-start').write_text('bad')\n")
+    runtime = process.cwd / "harness_out" / ".runtime"
+    if kind == "directory":
+        runtime.mkdir()
+    elif kind == "file":
+        runtime.write_text("preserve")
+    else:
+        target = tmp_path / "outside"
+        if kind == "symlink":
+            target.mkdir()
+        runtime.symlink_to(target, target_is_directory=True)
+    with pytest.raises(RunnerError) as caught:
+        _run(process)
+    assert caught.value.code is RunnerErrorCode.START_FAILED
+    assert not (process.cwd / "must-not-start").exists()
+    if kind == "file":
+        assert runtime.read_text() == "preserve"
+
+
+def test_worker_does_not_create_runtime_before_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "harness_out").mkdir()
+    monkeypatch.chdir(tmp_path)
+    status = tmp_path / "start.status"
+
+    class NoRelease:
+        buffer = io.BytesIO(b"")
+
+    monkeypatch.setattr(worker_module.sys, "stdin", NoRelease())
+    monkeypatch.setattr(worker_module.sys, "argv", ["worker", str(status), "candidate"])
+    assert worker_module.main() == 127
+    assert not (tmp_path / "harness_out" / ".runtime").exists()
+    assert status.read_bytes() == b"F"
 
 
 def test_runner_classifies_missing_and_nonregular_predictions(tmp_path: Path) -> None:
@@ -568,16 +652,26 @@ def test_persistent_process_after_successful_cleanup_is_process_leak(
     assert captured.value.code is RunnerErrorCode.PROCESS_LEAKED
 
 
-def test_runner_rejects_replaced_output_directory_identity(tmp_path: Path) -> None:
+def test_runner_rejects_replaced_output_directory_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     process = _candidate(
         tmp_path,
-        """
-output = Path(args.out).parent
-output.rename("original-harness-out")
-output.mkdir()
-Path(args.out).write_text("candidate-output", encoding="utf-8")
-""",
+        "Path(args.out).write_text('candidate-output', encoding='utf-8')\n",
     )
+    original_wait = runner_module._wait_for_exit
+
+    def swap_output_after_exit(launcher: subprocess.Popen[bytes], timeout_seconds: float) -> int:
+        # Windows는 child home/temp 아래를 실행 중 rename하는 것부터 거부할 수 있다.
+        # child 종료 후, Runner의 identity 판정 직전에 실제 디렉터리를 교체한다.
+        exit_code = original_wait(launcher, timeout_seconds)
+        output = process.predictions.parent
+        output.rename(process.cwd / "original-harness-out")
+        output.mkdir()
+        process.predictions.write_text("replacement-output", encoding="utf-8")
+        return exit_code
+
+    monkeypatch.setattr(runner_module, "_wait_for_exit", swap_output_after_exit)
 
     with pytest.raises(RunnerError) as captured:
         _run(process)

@@ -1450,6 +1450,123 @@ skip이며 신규 38개는 모두 실행됐다. 전체 Ruff·diff check도 통�
 adapter를, 이어 context-free 실험 기록 검토와 REPORT를 연결한다. Goal 5에서만 실제
 5-seed sigma와 품질·자율성·비용 및 개선/무변경/복구 시나리오를 측정한다.
 
+### Goal 4A 완료
+
+PR #51은 독립 리뷰와 전체 CI 통과 후 `9fb1498527a6e5b23a722071b7aae70b03c858de`로
+squash merge했다. Python 3.11/3.12, Feast/Postgres, lock/export, Ruff와 변경 대상 이미지
+빌드가 통과했다. agent/mlflow 이미지는 기존 path filter에 따라 건너뛰었다.
+위 4A의 독립 리뷰·검증·merge·기록 항목도 완료 상태다.
+
+### Goal 4B: 실제 coding agent와 재개 가능한 실행 (#52)
+
+**문제:** metadata가 메모리에만 있고 실제 ResearchTrialRunner adapter가 없어 모델 학습과
+Controller 정책을 한 run에서 실행·재개할 수 없었다. Codex CLI 로그인·구조화 응답 smoke는
+성공했지만 실제 코드 변경이나 자율 ML 실험을 증명하지 않는다.
+
+**해결:** spec §4.9를 먼저 고정하고 기존 Controller/Workspace/LocalRunner/Domain을
+조립한다. immutable run-input 게시와 actual agent launcher는 작은 module로 분리한다.
+원천 재조회 대신 저장 metadata bytes를 재개하며 final registry는 기존 위치·권한을 유지한다.
+
+- [x] run-input 고정/복구/drift/부분 게시 테스트부터 구현
+- [x] Codex CLI structured response·usage·timeout·tree 회수 테스트와 adapter
+- [x] 실제 trial runner의 candidate commit·seed paired 실행·봉인/평가 연결
+- [x] local 실행 설정과 checkpoint 결속·재개 CLI 및 README/reference 갱신
+- [x] 실제 agent 코드 변경/실제 학습 연결 smoke (5-seed calibration과 구분)
+- [ ] 독립 리뷰·회귀·CI·PR·merge, 문제/해결/결과 기록
+
+**한계:** 새 실행의 LLM 호출 횟수는 exactly-once가 아니다. 중단된 validation attempt는
+다시 실행할 수 있으며 그 비용과 실패를 보존한다. 실제 품질 개선은 보장하지 않는다.
+
+**구현/검증 중간 기록:** run-input 게시·새 process 복구·drift·부분 게시 검증은 신규
+48개, Ledger 인접 회귀 포함 73개가 통과했다. Codex adapter 신규 27개와 기존 Runner
+회귀는 54 passed, 4 skipped였다. Windows fstat/lstat의 ctime 의미 차이로 정상 응답을
+거부하는 문제, Ctrl-C receipt 보존, JSON `1e400` 비유한 값 처리도 재현 후 수정했다.
+runtime/CLI 테스트는 checkpoint replay·metadata 원천 미조회·snapshot 변경·잘못된 경로·
+registry 미초기화 등을 검증했다. 빈 ledger의 last_sequence가 -1인 기존 계약을 테스트로
+확인하여 truthiness 대신 명시적 >= 0 비교를 사용했다. 독립 리뷰는 얕은 snapshot 경로의
+IndexError, 학습 cancellation 산출물/시간 손실, frozen exception과 contextlib 충돌을
+발견했고 각각 RED 회귀 후 수정했다.
+
+**실제 실행 발견 — 성공과 구분:** 저장 로그인과 명시 모델로 실제 Codex를 호출했지만
+내부 파일 읽기 명령이 `blocked by policy`로 거부됐다. CLI exit 0과 구조화 응답만으로는
+구현 성공을 증명할 수 없었다. 131.702초, input 447,840 / cached input 400,512 /
+output 4,687 / reasoning output 1,840 tokens가 CLI에서 보고됐다. cached/reasoning은
+별도 관측 필드이며 전체 token에 중복 합산하지 않는다. 달러 비용은 미확인이다.
+code SHA는 baseline과 같고 patch는 비어 있어 실제 코드 변경·학습·개선 성과는 없었다.
+실행용 진단 스크립트의 출력 함수 인자 오류도 candidate 준비 직후 발생하여 수정했다.
+그 뒤 무변경 paired adapter만 실제 GPU 환경에서 분리 점검했으나 학습 진입 전 MLflow의
+`Path.home()` 초기화가 최소 환경변수에서 실패했다. host home을 다시 상속하는 대신
+trusted launcher가 disposable home/temp를 제공하도록 계약을 보완했다.
+
+이 과정에서 agent 응답에 implemented/no_change/blocked 상태를 추가해 정책 차단을
+의도적인 무변경과 구분했고, checkout line-ending 잡음이 변경 목록에 들어오지 않도록
+최종 staged patch와 경로만 candidate 증거로 보존한다. Windows 실행 정책은 우회하거나
+전체 접근으로 바꾸지 않았다. 실제 agent 코드 변경·paired 학습 smoke 및 CI/merge는
+아직 완료 결과로 기록하지 않는다. Controller ledger duration에는 기존 계약상 agent
+prepare 시간이 없으므로 후속 전체 비용 집계는 attempt의 agent/prepare/학습 기록을 쓴다.
+
+**실제 paired 학습 연결 검증:** home 보완 뒤 PyTorch cache 초기화가 Windows의
+`getpass.getuser()` fallback에서 `pwd` import로 실패함을 별도 실제 import probe로 확인했다.
+host 이름 대신 child USERNAME을 `harness`로 고정하고 다시 실행했다. 최종 실제 GPU
+paired adapter는 동일 baseline SHA·seed 42의 **두 독립 학습/예측/봉인/채점**을
+40.468초에 완료했다. 두 결과 모두 3,840행·160 slate, NDCG@10 0.7817132868,
+Recall@10 1.0, LogLoss 0.1639438929, Brier 0.0374715513으로 같았다. 이 값은
+단일 seed의 무변경 연결 smoke이며 agent가 개선 코드를 구현한 실험이나 baseline sigma
+calibration이 아니다. final은 소비하지 않았다. HOME/USERNAME 보완의 runner 회귀는
+31 passed, 6 skipped, 독립 리뷰에서도 같은 결과를 확인했다. 코드 변경 후 전체 회귀와
+CI는 이어서 확인한다. 실제 coding agent의 정책 차단이 남아 있으므로 PR은 Draft로
+준비하며, 이슈 #52와 Goal 4/5를 완료 처리하지 않는다.
+
+**Goal 4B 권한 설정 복구 중 (2026-09-03):** 사용자가 실험용 workspace-write·Windows
+sandbox 설정 수정을 승인했다. 전역 설정은 그대로 두고 기존 호출에
+`windows.sandbox="elevated"`와 `approval_policy="never"`를 명시한 새 실제 probe에서
+파일 읽기와 apply_patch 쓰기가 모두 성공했다(21.922초, input 54,685 / cached 35,968 /
+output 273 tokens). 이전 실패와 이 성공을 비교하면 실행에 필요한 native sandbox 설정을
+개인 설정과 함께 생략한 경계가 유력한 원인이다. 두 설정을 함께 바꾼 관측이므로 한 설정만의
+인과로 단정하지 않는다. 전체 접근·규칙 무시·전역 config 수정은 하지 않았다.
+이 probe는 권한 복구 증거이며 실제 모델 코드 변경·학습 실험의 완료 증거는 아니다.
+명시적 호출 설정의 회귀 테스트와 실제 candidate paired smoke를 이어서 검증한다.
+
+새 실제 candidate 시도에서는 소스/관련 테스트 수정까지 성공했지만, agent가 실행한
+`uv run`이 workspace 밖 사용자 캐시에 쓰려다 거부되어 `blocked`로 종료했다.
+이는 이전의 모든 명령 정책 차단과 다른 실패다. 54.983초, input 123,962 /
+cached 95,232 / output 1,605 tokens를 보존했고, 성공한 candidate나 측정 성과로
+계산하지 않는다. 기존 설치된 테스트 Python을 직접 사용하고 cache provider를 끄며
+pytest 임시 경로를 disposable output 안으로 지정하는 새 실험 입력으로 보완한다.
+외부 캐시 쓰기 권한을 넓히거나 실행 거부를 성공으로 바꾸지 않는다.
+
+기존 Python을 직접 실행한 다음 시도는 코드·관련 테스트 2건·candidate commit 보존에
+성공했지만 workspace 회수에서 실패했다. pytest가 Windows sandbox 사용자로 만든
+0700 임시 디렉터리는 호스트 프로세스가 읽지 못했다. 동일 sandbox에서 해당 임시
+폴더만 정리하는 시도도 삭제 실행 정책에 거부되어 중단했으며 다른 경로나 권한으로
+재시도하지 않았다. 해당 실패 폴더는 보존한다. 이 제약 때문에 coding 단계는 임시
+데이터 없는 설정 계약 테스트, 실제 학습·예측 검증은 Harness가 맡는 최소 실행 범위를
+명시했다. 범용 sandbox 내부 pytest와 그 임시 디렉터리 회수는 아직 지원 완료가 아니다.
+
+보존된 실제 candidate commit의 patch digest를 대조한 뒤 별도 validation 복구를 실행했다.
+seed 42의 두 독립 학습·채점이 72.702초에 끝났고, baseline→candidate는
+NDCG@10 0.7817132868→0.7794390051, LogLoss 0.1639438929→0.1433473733,
+Brier 0.0374715513→0.0272754901이었다. 확률 지표는 좋아졌지만 순위 지표는 낮아졌다.
+이는 단일 seed 관측이며 σ 기반 승격, final 성과, Controller 자동 재개의 증거가 아니다.
+final은 소비하지 않았다.
+
+전체 회귀 첫 재실행은 951 passed / 11 failed / 13 skipped였다. 실패 11건은 동일
+snapshot manifest의 일반 경로 읽기였고 경로 길이는 정확히 260자, Windows long-path
+설정은 비활성이었다. 파일은 extended-length 경로로 3,851 bytes가 정상 조회됐다.
+짧은 새 pytest basetemp에서 해당 파일은 37 passed / 2 skipped였다. 시스템 설정이나
+test 판정 기준을 바꾸지 않고 짧은 경로에서 전체 회귀를 다시 검증한다.
+
+**실제 agent→학습 smoke 완료:** 임시 데이터 없는 설정 테스트로 역할을 분리한 새
+attempt에서는 실제 agent가 코드와 테스트를 수정하고 표적 6건을 통과했다. candidate
+`5dfcc97877f86b87ced7fec69b2279cae8e50386`을 보존한 뒤 기준/후보를 각각 새로 학습하여
+채점하고 두 새 workspace를 모두 회수했다. 총 127.734초 중 agent 67.983초,
+paired 학습·채점 50.561초였다. agent usage는 input 181,668 / cached 150,400 /
+output 1,776 / reasoning output 248 tokens이며 달러 비용은 미확인이다.
+3,840행·160 slate의 지표는 위 validation 복구 관측과 동일했다. final은 미소비이며
+이 결과는 Controller 전체 실행·독립 연구 기록 Judge·5-seed calibration을 대신하지 않는다.
+앞선 실패한 임시 폴더는 새 성공으로 지우지 않았으며 운영 제약은
+[#54](https://github.com/bbungjun/Autoresearch/issues/54)에서 추적한다.
+
 ## Task 7: 지표별 baseline σ 측정 + end-to-end 완주
 
 앞선 Task가 전부 머지된 뒤에만 가능하다. σ 측정에 `harness-predict`(Task 6)와
