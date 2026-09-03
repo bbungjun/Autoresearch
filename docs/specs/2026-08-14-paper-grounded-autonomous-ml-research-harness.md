@@ -1,6 +1,8 @@
 # 자율 ML 연구 Harness — YouTube 리랭킹 기반 MVP와 논문 로드맵
 
-> 2026-08-14 | 상태: 제품 방향·상위 설계·구현 계획 확정, 구현 미착수
+> 최초 작성 2026-08-14 | 현황 갱신 2026-09-03 (#67)
+> 상태: 기반 MVP 핵심 구현·합성 데이터 E2E 완료, 잔여 자율성 실증·수용 판단 진행 중
+> 현재 추적: [#17](https://github.com/bbungjun/Autoresearch/issues/17)
 >
 > 이 문서는 기존 executor의 다음 단계를 정의한다. 현재의 단일 가설 실행 계약을
 > 폐기하지 않으며, 사람이 준 가설로 반복 실험을 완주하는 기반 MVP와 그 위에 놓일
@@ -24,9 +26,11 @@ Autoresearch의 최종 목표는 CTR 도메인의 최고 성능 자체가 아니
 Trial Ledger와 REPORT 생성까지 완주한다. 논문 자동 발견과 claim compiler, 논문 출처가
 연결된 9절 REPORT, 웹 배선은 이 기반을 검증한 뒤의 로드맵이다.
 
-## 2. 배경과 현재 한계
+## 2. 설계 당시 배경과 현재 위치
 
-현재 저장소는 기준 SHA와 데이터 스냅샷을 고정한 뒤 Codex가 한 번 코드를 수정하고,
+### 2.1 설계 당시 배경 (2026-08-14)
+
+당시 저장소는 기준 SHA와 데이터 스냅샷을 고정한 뒤 Codex가 한 번 코드를 수정하고,
 baseline/candidate를 학습·평가해 리포트를 남기는 경로까지 도달했다. 이 경로는 다음
 기반을 이미 제공한다.
 
@@ -36,7 +40,7 @@ baseline/candidate를 학습·평가해 리포트를 남기는 경로까지 도�
 - 데이터·분할 fingerprint, 지표 JSON, 에이전트 작성 리포트
 - 실패한 Job 회수, 실험 상태와 Step 관측
 
-그러나 현재 실행 모델은 본질적으로 한 번의 `코드 수정 → 검증 → 학습 → 평가 → 보고`다.
+그러나 당시 실행 모델은 본질적으로 한 번의 `코드 수정 → 검증 → 학습 → 평가 → 보고`였다.
 에이전트가 결과를 관찰해 다음 가설을 선택하는 반복 연구 루프가 없고, 논문 발견·출처
 검증·실험 이력에 기반한 후속 전략도 없다. 따라서 executor만 놓고 보면 범용 coding
 agent나 기존 goal 실행과 구별되는 ML 연구 방법론이 부족하다.
@@ -50,6 +54,21 @@ agent나 기존 goal 실행과 구별되는 ML 연구 방법론이 부족하다.
 
 이 문서는 위 계약의 현재 구현 사실을 반복하지 않고, 그 위에 놓일 자율 연구 계층을
 정의한다.
+
+### 2.2 현재 위치 (2026-09-03, #54B 머지 기준)
+
+이제 별도 로컬 Harness에서 snapshot·Sealed Judge·candidate worktree·Controller·재학습
+CLI·구조화 기록·독립 연구 기록 Judge·REPORT까지 연결되어 있다. Task 6 구현을 완료했고,
+Task 7에서는 5-seed calibration과 실제 agent feedback, 중단·재개, 단일 final 소비,
+REPORT를 합성 데이터로 실측했다. #62의 설명 개선과 #54A/B의 Windows 입력 읽기·등록
+temp 회수도 구현·개별 검증됐지만, 이 변경들을 모두 반영한 새 통합 E2E는 아직 없다.
+
+현재 상태에서 **실험 완주**, **모델 채택**, **전체 MVP 수용**을 구분한다. #60은 validation
+`promote`를 관측했으나 final 기준 미달로 baseline을 유지했다. 실제 깨진 candidate의 자동
+수정·복구, 사람 개입 횟수 계측, 명시적인 피처 추가 실험과 판정 기준의 수용 판단은 남아 있다.
+논문 발견·출처 연결·웹 배선은 별도 로드맵이다. 완료 상태와 증거 종류는 §12가 정본이며,
+[실측·포트폴리오 기록](../reports/2026-09-03-local-autonomous-experiment-e2e.md)의
+§5·§7~11에서 관측값과 한계를 확인한다. 이 문서는 현재 소비되는 계약이므로 archive하지 않는다.
 
 ## 3. 제품 계약
 
@@ -1688,9 +1707,11 @@ final holdout 실행 자체가 실패하면 재평가로 정보를 더 소비하
 ### 8.3 final holdout 전역 소비 registry
 
 final holdout 소비 상태는 run별 ledger나 checkpoint가 아니라 `evaluation_id` 기준의 **전역
-소비 registry**가 소유한다. Judge 상태 루트는 필수 harness 설정
-`harness-run --judge-state-root <absolute-path>`로 결정하며, 상대 경로를 받거나 run·workspace·
-ledger 아래로 유도하지 않는다. registry marker의 고정 절대 경로는
+소비 registry**가 소유한다. Judge 상태 루트는 Controller의 필수 절대 경로 입력이다.
+현재 로컬 CLI는 `harness-run --config <json>`을 사용하며, config의 검증된
+`handoff.snapshot_root`에서 fixture root를 도출해 `judge_state_root`로 결속한다.
+초기 설계의 `--judge-state-root` CLI 옵션이나 동명 config 필드를 제공하지 않는다.
+상대 경로를 받거나 run·workspace·ledger 아래로 유도하지 않는다. registry marker의 고정 절대 경로는
 `<judge-state-root>/final-holdout-consumed/<evaluation_id>`다.
 
 Controller는 final 평가 전에 설정값을 정규화한 절대 경로로 해석하고, 상태 루트와 registry
@@ -2014,28 +2035,62 @@ research lineage다.
 
 ## 12. MVP 완료 조건
 
-- [ ] 사람이 준 가설과 `ExperimentCard`, 예산으로 research run을 시작한다.
-- [ ] 에이전트가 저장소 전체 범위에서 candidate를 만들 수 있다.
-- [ ] 이전 결과를 관찰해 서로 다른 trial을 순차 실행한다.
+2026-09-03 중간점검 기준이다. `[x]`는 해당 항목의 구현과 필요한 검증이 확보됐다는 뜻이지,
+모든 항목이 실제 ML E2E로 검증됐다는 뜻은 아니다. 계약 위반·동시성·실패 분기는 회귀
+테스트로, 실행·자율성 시나리오는 별도 실측으로 확인한다. 아래 표가 그 증거 수준을 구분한다.
+
+| 합의한 능력·완료 의무 | 현재 상태 | 근거와 남은 조건 |
+| --- | --- | --- |
+| 재현 가능한 입력·validation/final 분리 | 완료 — 구현·회귀 및 합성 E2E | P0-1 snapshot spec, Task 1/1-C, §4.11. 시간·누수·손상 경계는 회귀 근거다. |
+| ranking 포함 수치 Sealed Judge·고정 판정 | 완료 — 구현·회귀 및 합성 E2E | Task 2A~D, §4.11. 실제 validation promote와 final discard를 관측했다. |
+| 로컬 재학습·5-seed calibration | 완료 — 실제 측정 | §4.8·4.10, Task 6 #48 / Task 7 #57. GPU 임베딩과 CPU 학습이며 운영 champion 재현은 아니다. |
+| 결과를 받은 agent의 1회 feedback 수정 | 완료 — 실제 측정 | §4.11, 실측 기록 §5. class weight·트리 설정 변경이며 새 피처·임베딩 선택 실증은 아니다. |
+| 구조화 기록·새 문맥 Judge 1회·REPORT | 완료 — 구현 및 최초 실측 | §10.1.1, 실측 기록 §5. Judge는 advisory이며 수치 판정을 바꾸거나 추가 실험을 지시하지 않는다. |
+| 지표 범위·threshold 설명 개선 | 완료 — 구현·회귀 / 후속 실측 필요 | §10.1.2, 실측 기록 §8. #62 설명을 받은 새 LLM Judge의 평가는 아직 없다. |
+| checkpoint 재개·완료 작업 비반복 | 완료 — 실제 측정 | §4.11, 실측 기록 §5. 깨진 코드를 고친 것과는 다른 복구 시나리오다. |
+| Windows 입력 읽기·등록 temp 회수 | 완료 — 별도 native 검증 | §4.9, 실측 기록 §9~10. #54A/B이며 등록 범위 밖 private 산출물은 지원하지 않는다. |
+| 깨진 candidate의 자동 코드 수정·복구 | 구현·회귀 / 실측 필요 | Task 5b 실패 feedback 테스트는 있으나 실제 agent가 실패를 고쳐 학습·평가까지 복구한 시나리오는 미실측이다. |
+| 피처 1개 추가 candidate의 promote | 실측 필요 | 일반 promote 의무는 #60에서 충족했다. plan Task 7의 더 구체적인 피처 추가 시나리오는 남는다. |
+| threshold·coverage 기준의 실용성 | 실측 자료 확보 / 수용 판단 필요 | calibration·E2E는 완료했으나 기준 유지 또는 사전 변경의 수용 결론은 미확정이다. 기존 정책은 유지한다. |
+| 품질·자율성·비용 | 일부 실측 / 계측 보완 필요 | 합성 품질·시간·token은 관측했다. 달러 비용·사람 개입 횟수는 미측정이며 무인 완주를 단정하지 않는다. |
+| 논문 발견·PaperCard·compiler·출처·웹 | MVP 이후 로드맵 | §11.3. 현재 완료율에 포함하거나 구현 완료로 표시하지 않는다. |
+
+구현·회귀 근거는 [domain](../../autoresearch/research_harness/domain.py),
+[Judge 판정 경계](../../tests/research_harness/test_judge_decision.py),
+[Controller 실패 feedback·재개](../../tests/research_harness/test_controller.py),
+[final registry](../../tests/research_harness/test_consumption_registry.py),
+[workspace 경계](../../tests/research_harness/test_workspace.py)를 대조했다.
+실제 실행 근거는 [실측 기록 §5](../reports/2026-09-03-local-autonomous-experiment-e2e.md#5-실제-e2e-결과)와
+[Task별 구현·검증 기록](../plans/2026-08-15-local-research-harness-mvp.md)을 따른다.
+
+- [x] 사람이 준 가설과 `ExperimentCard`, 예산으로 research run을 시작한다.
+- [x] 에이전트가 저장소 전체 범위에서 candidate를 만들 수 있다 — 경로 allowlist 없음;
+      시크릿·산출물 위생 계약과 동일 OS 위협 모델 한계는 유지한다.
+- [x] 이전 결과를 관찰해 서로 다른 trial을 순차 실행한다.
 - [ ] 의도적으로 깨진 candidate에서 자동 복구하고 다음 trial을 계속한다.
-- [ ] 동일한 Sealed Judge로 baseline과 candidate를 비교한다.
-- [ ] candidate action log는 `dt < T`로 제한하며 추가 metadata·임베딩 재료는 4.5절을 따른다.
+- [x] 동일한 Sealed Judge로 baseline과 candidate를 비교한다.
+- [x] candidate action log는 `dt < T`로 제한하며 추가 metadata·임베딩 재료는 4.5절을 따른다.
       원격 데이터 자격 증명·평가 action log·fixture 생성 상태와 seed는 주지 않는다. candidate history의
       완전 라벨 출력일 상한은 `T-2`로 강제한다.
-- [ ] 평가 출력일 `[T, T_end]`의 click·귀속 후보 impression은
+- [x] 평가 출력일 `[T, T_end]`의 click·귀속 후보 impression은
       `dt BETWEEN T AND T_end + 1`로 스캔하고 출력은 `[T, T_end]` impression으로 제한하며,
       `T_end + 1` 파티션이 없으면 snapshot 생성을 거부한다.
-- [ ] 유저 단위로 분리된 validation에서만 반복 피드백하고, final holdout은 마지막 1회만
+- [x] 유저 단위로 분리된 validation에서만 반복 피드백하고, final holdout은 마지막 1회만
       평가해 에이전트에게 피드백하지 않는다.
-- [ ] 필수 절대 `judge_state_root`가 없거나 접근 불가하면 final 평가를 시작하지 않고,
+- [x] 필수 절대 `judge_state_root`가 없거나 접근 불가하면 final 평가를 시작하지 않고,
       온전한 같은 상태 루트에서는 `evaluation_id` marker가 남은 final holdout의 재소비를
       거부한다. 상태 루트 자체의 무결성은 위협 모델의 한계다.
-- [ ] click 확률 추정치·σ·metric 값·지표별 coverage 계약이 불완전하면 판정을 내리지 않고,
+- [x] click 확률 추정치·σ·metric 값·지표별 coverage 계약이 불완전하면 판정을 내리지 않고,
       보정 품질은 LogLoss·Brier guardrail로 감시한다.
-- [ ] 프로세스를 중단한 뒤 마지막 checkpoint부터 재개한다.
-- [ ] 개선 여부와 무관하게 지표·commit·snapshot·복구 이력이 ledger와 일치하는 MVP
+- [x] 프로세스를 중단한 뒤 마지막 checkpoint부터 재개한다.
+- [x] 개선 여부와 무관하게 지표·commit·snapshot·복구 이력이 ledger와 일치하는 MVP
       REPORT를 생성한다.
 - [ ] 사람의 중간 승인 없이 시작부터 REPORT까지 완주한다.
+
+마지막 항목은 실행 안에 승인 gate가 없다는 구현 사실만으로 완료 처리하지 않는다.
+사람의 사전 준비와 실행 중 개입을 분리해 관측 범위를 정하고 실측해야 한다. 다음 검증 권고 순서는
+[plan의 잔여 검증 우선순위](../plans/2026-08-15-local-research-harness-mvp.md#잔여-검증-우선순위--2026-09-03-권고)를
+따르며, 이번 문서 갱신은 후속 실험 실행이나 기존 수용 기준 변경을 승인하지 않는다.
 
 ### MVP 이후 로드맵 완료 조건
 

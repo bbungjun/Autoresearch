@@ -1,7 +1,8 @@
 # 로컬 Research Harness MVP — 독립 실행 경로 Implementation Plan
 
-> **상태: #769 이슈·브랜치 생성, 기반 MVP 범위와 확정 결정 승인 완료.** 구현은 아래
-> Task 순서와 검증·동료 리뷰 규칙을 따른다.
+> **현황 2026-09-03 (#67): Task 1~6 핵심 구현 완료, Task 7 주요 실측 완료·잔여 검증 진행 중.**
+> #54B까지 반영한 상태이며 전체 MVP 수용 완료는 아니다. 아래 종합 체크리스트와
+> 잔여 검증 우선순위를 따른다. 과거 Task의 문제·결과는 해당 구현 시점 기록이다.
 
 **Goal:** 현행 executor를 수정하지 않고 정적 allowlist를 사용하지 않는 독립 로컬 Research
 Harness(봉인된 사후 판정 + 자가 피드백) 경로를 만든다. 사람이 준 가설·`ExperimentCard`로
@@ -20,9 +21,14 @@ worktree 바깥의 Judge 소유 디렉터리와 별도 프로세스에 둔다. �
 **Tech Stack:** Python 3.11/3.12, uv, pytest, ruff, pandas/pyarrow, typer
 
 **Spec:** [`docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md`](../specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md)
-(#769 선행 커밋에 반영됨)
+(최초 설계는 이전 조직 #769에서 시작했으며, 현재 개인 저장소 추적은 #17)
 
-**Issue:** #769
+**Issue:** [#17](https://github.com/bbungjun/Autoresearch/issues/17)
+
+**현재 판독 기준:** [spec §12](../specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md#12-mvp-완료-조건)의
+상태 표가 구현·회귀, 실제 측정, 남은 수용 판단, 제품 로드맵을 구분한다. Task 7의 남은
+시나리오와 전체 완료 조건이 있으므로 이 plan은 archive하지 않는다. 최신 실측과 후속 수정은
+[포트폴리오 기록 §5·§7~11](../reports/2026-09-03-local-autonomous-experiment-e2e.md)에 연결한다.
 
 ---
 
@@ -145,7 +151,8 @@ candidate가 볼 수 있는 action log는 `dt < T`이고, 이 범위에서 완�
   않는다. action log는 Harness가 주입한 `dt < T` 파일만, metadata·임베딩 재료는 spec 4.5절의
   로컬 입력만 제공한다. D3은 코드 수정 범위를 여는
   결정이고 이 규칙은 평가 데이터 접근을 닫는 결정이라 충돌하지 않는다.
-- **Judge 상태 루트.** `harness-run --judge-state-root <absolute-path>`를 필수 설정으로 받고,
+- **Judge 상태 루트.** Controller는 필수 절대 `judge_state_root` 입력을 받는다. 현재
+  `harness-run --config <json>`은 검증된 snapshot의 fixture root에서 이 경로를 도출하며,
   final 소비 marker는 그 고정 절대 경로 아래에 둔다. 경로가 상대 경로이거나 상태 루트가
   없거나 접근 불가하면 final 평가를 시작하지 않는다. Harness가 임시 경로를 만들거나
   fallback하지 않는다.
@@ -352,7 +359,8 @@ REPORT evidence 위에 이어질 후속 구현이다.
 
 ## Task 0: spec에 확정 결정 반영 후 커밋 (완료)
 
-대상 spec과 이 plan은 #769 브랜치의 선행 커밋에 이미 반영되어 추적 중이다.
+대상 spec과 이 plan은 최초 설계 당시 이전 조직 #769 브랜치의 선행 커밋에 반영됐다.
+아래는 그 시점의 이력이며 현재 이슈·브랜치 운영 지시가 아니다.
 
 - [x] spec 4.3에 **artifact 정의** 추가 — "재평가 대상은 candidate가 산출한 예측 점수
       파일이며, Judge는 candidate 코드를 실행하지 않는다"
@@ -774,8 +782,8 @@ subprocess 회수와 final 단일 소비는 각각 Task 5a와 Task 4/5b에 남�
 - [x] `ledger.py` — `experiment-ledger.jsonl` append-only. 공개 interface는
       `open_trial_ledger(path)`, `append(TrialRecord | CheckpointRecord)`, `read_state()`로 제한하고
       process lock, canonical JSONL, 연속 sequence, file `fsync`를 내부에서 소유한다
-- [x] `consumption_registry.py` — 필수 harness 설정
-      `harness-run --judge-state-root <absolute-path>`를 정규화한 **고정 절대 경로** 아래
+- [x] `consumption_registry.py` — Controller에 전달된 필수 `judge_state_root`의
+      정규화한 **고정 절대 경로** 아래
       `final-holdout-consumed/<evaluation_id>` marker를 둔다. state root는
       run·workspace·ledger에 종속시키지 않는다. 상대 경로, root/registry 디렉터리 부재,
       읽기·marker 생성·`fsync` 불가는 모두 final 평가 시작 전 fail-closed하고, 임시 경로를
@@ -995,8 +1003,9 @@ adapter, 재학습 `harness-predict` CLI, baseline sigma 실측은 없으며 각
 사전학습 임베딩 모델 추론, CPU에서 LightGBM 학습, 로컬에서 Controller·Judge를 실행한다.
 기존 21개 피처 구조와 LightGBM 설정을 출발점으로 삼되 로컬 임베딩을 사용하므로
 운영 champion의 동일 재현이 아닌 Harness baseline으로 기록한다. 임베딩 파인튜닝은
-초기 범위에서 제외한다. 아래 체크리스트에서 metadata 변환·v2 모델과 validation 게시·workspace를 구현했으며,
-Task 6 전체 완료가 아니다.
+초기 범위에서 제외한다. 아래 체크리스트의 구현은 #40~#55에서 완료했고 #60에서 통합
+실측했다. #62와 #54A/B는 후속 보완이다. 이 완료는 Task 7의 모든 실증 의무나 전체 MVP
+수용 완료를 의미하지 않는다.
 
 **구현 순서:** 입력 계약 확정 → 로컬 피처·임베딩 → 재학습 CLI → 실행 연결·REPORT.
 
@@ -1006,14 +1015,14 @@ Task 6 전체 완료가 아니다.
       계약 테스트를 GREEN으로 전환했다. 후속 #42에서 validation 게시와 workspace까지 연결했다
 - [x] 2026-09-03 GPU와 기존 Python 환경을 조회했다. RTX 3070 Ti, VRAM 8192 MiB,
       NVIDIA 드라이버 591.86, Python 3.12.13을 확인했다. 조회한 프로젝트 가상환경에는
-      LightGBM·PyArrow가 있고 PyTorch·Sentence Transformers는 없다. GPU 인식과
-      CUDA 텐서 연산 성공은 다른 검증이며, 후자는 아직 수행하지 않았다
+      LightGBM·PyArrow가 있고 PyTorch·Sentence Transformers는 없었다. 이는 최초 조회 기록이다.
+      이후 #46에서 별도 환경의 CUDA tensor와 실제 모델 추론을 검증했다
 - [x] [evaluation snapshot spec §18](../specs/2026-08-31-research-harness-evaluation-snapshot.md)에
       두 metadata 파일의 컬럼·시점·cold-start·v2 manifest·final 전달·재개 identity 목표를 확정했다
-- [ ] CUDA 지원 실행 의존성을 준비하고 작은 텐서 연산과 실제 모델 추론을 검증한 뒤
+- [x] CUDA 지원 실행 의존성을 준비하고 작은 텐서 연산과 실제 모델 추론을 검증한 뒤
       소형 로컬 모델 ID/revision·배치 크기·trial 시간 상한을 정한다. 초기 실험에 GCP는 사용하지 않는다.
       클라우드 자원 생성·계정 유료 전환·유료 API·크레딧 외 과금은 별도 승인 없이 하지 않는다
-- [ ] 합성 fixture의 사용자 프로필·영상/채널 관측 정보를 candidate-safe 입력으로 추출한다.
+- [x] 합성 fixture의 사용자 프로필·영상/채널 관측 정보를 candidate-safe 입력으로 추출한다.
       확정한 §18을 typed model·materializer·workspace에 구현한다. v1 manifest를 덮어쓰지 않고
       새 workspace에 v2를 게시한다. 문서 확정과 동작 구현을 구분한다
 - [x] 과거 action log와 메타데이터로 기존 피처를 조립한다. 학습 행에도 당시 사용 가능한
@@ -1025,24 +1034,26 @@ Task 6 전체 완료가 아니다.
 - [x] 모델·revision·텍스트·역할·전처리·정규화별로 캐시를 구분한다. 모델 변경 시 사용자와
       카테고리 벡터를 함께 갱신한다. 평가에서는 준비된 모델 파일만 사용하며, 메모리 부족이나
       모델 부재를 다른 모델/클라우드로 조용히 우회하지 않고 실패로 기록한다
-- [ ] `autoresearch/cli.py`에
+- [x] `autoresearch/cli.py`에
       `harness-predict --slate <in> --out <out> --seed <n>`(candidate용)와
-      `harness-run --judge-state-root <absolute-path>`(연구 실행) 추가
-- [ ] `harness-predict` 기본 구현 — 위 Harness baseline 설정으로 주어진 seed에서 split·sampling·
+      `harness-run --config <json>`(연구 실행) 추가. 필수 절대 `judge_state_root`는
+      검증된 `handoff.snapshot_root`의 fixture root에서 도출해 run 입력에 고정한다.
+      초기 plan의 직접 CLI 옵션이나 동명 config 필드는 제공하지 않는다(#52)
+- [x] `harness-predict` 기본 구현 — 위 Harness baseline 설정으로 주어진 seed에서 split·sampling·
       모델 초기화를 포함해 **재학습한 뒤** slate를 점수화한다. 고정 모델을 다시 점수화만
       하는 구현은 허용하지 않는다. **이것이 baseline이자 candidate가 고쳐 나갈 출발점이다**
-- [ ] `report.py` — Trial Ledger와 final holdout evidence에서 `research-report.md`를 만든다.
+- [x] `report.py` — Trial Ledger와 final holdout evidence에서 `research-report.md`를 만든다.
       사람이 준 가설·`ExperimentCard`, trial·실패·복구 이력, validation/final 지표,
       최종 결론과 재현 좌표를 포함한다. 논문 출처와 9절 고정 형식은 로드맵 범위다
-- [ ] 실제 coding agent·LocalRunner·Controller를 연결하고 모델 ID/revision 또는 파일 해시,
+- [x] 실제 coding agent·LocalRunner·Controller를 연결하고 모델 ID/revision 또는 파일 해시,
       임베딩 처리 설정·코드·데이터 버전·실행 장치·시간·실패를 재현 기록으로 남긴다.
       합성 환경 동작 증거를 실제 사용자 품질 개선이나 미측정 비용 절감으로 표현하지 않는다
-- [ ] REPORT 결론은 final holdout의 유효한 비교 결과에 따라 `개선|개선 없음|판정 불가`
+- [x] REPORT 결론은 final holdout의 유효한 비교 결과에 따라 `개선|개선 없음|판정 불가`
       중 하나이고, validation champion이 final에서 기각되면 `개선 없음`과 baseline 유지를
       명시한다
-- [ ] `README.md`와 `.claude/docs/agent-project-reference.md`에
+- [x] `README.md`와 `.claude/docs/agent-project-reference.md`에
       `autoresearch/research_harness/` 추가 (CLAUDE.md 필수 규칙)
-- [ ] `docs/README.md` 역할별 인덱스에 이 spec/plan 등재
+- [x] `docs/README.md` 역할별 인덱스에 이 spec/plan 등재
 
 **검증:**
 
@@ -1147,7 +1158,9 @@ history cutoff 검증을 재사용하되 metadata receipt의 타입·고정 경�
 - [x] 검증된 fixture 원본 receipt와 history/validation 요청으로 prepared byte bundle을 만든다.
 - [x] v2 opt-in materializer에 atomic 게시·동일 target 재사용·변조/누락/alias 거부를 연결한다.
 - [x] workspace opt-in 및 기존 view digest 전달, 오류 시 회수를 검증한다.
-- [ ] 독립 리뷰·Harness 회귀·Ruff·CI를 확인하고 문제·해결·결과를 기록한다.
+- [x] 독립 리뷰·Harness 회귀·Ruff·CI를 확인하고 문제·해결·결과를 기록한다.
+      독립 리뷰·로컬 검증은 아래 기록이며 PR #43은 2026-09-03 KST 머지됐다.
+      Python 3.11/3.12·Feast/Postgres·Ruff·lock/export·대상 이미지 CI가 통과했다.
 
 범위는 validation 파일 게시와 workspace 연결이다. final용 준비/grant, Controller
 checkpoint 영속화, 피처 조립·임베딩·학습은 후속으로 분리한다. v1을 유지하고 같은 prepared
@@ -1419,8 +1432,8 @@ Python 3.11(5분 9초)/3.12(6분 20초), feast/postgres, lock/export, Ruff와 �
 - [x] final 권한/paired bytes/validation 분리 테스트 RED → GREEN
 - [x] fixture registry 상태 공존과 추가 파일·alias 거부 회귀
 - [x] final disposable workspace·최소 process context·회수 연결
-- [ ] 독립 리뷰·Harness 회귀·Ruff·CI·PR·squash merge
-- [ ] 문제·해결·검증 결과와 남은 제한 기록
+- [x] 독립 리뷰·Harness 회귀·Ruff·CI·PR·squash merge — 아래 Goal 4A 완료 기록
+- [x] 문제·해결·검증 결과와 남은 제한 기록
 
 **검증 결과:** final interface 부재 **1 failed** 뒤 신규 23개를 구현하고 기존 validation
 metadata/data-view/registry를 포함해 **100 passed (39.60초)**를 확인했다. fixture 소비 상태
@@ -1940,14 +1953,20 @@ B 검증은 통합 회귀 94개와 이후 추가 중단/로그 실패를 포함�
 
 ### Task 7 전체 완료 체크리스트
 
+상태는 2026-09-03 기준이며 측정 기록은 #57·#58·#60, 후속 설명·실행 환경 보완은 #62·#54다.
+`[x]`의 증거 범위는 각 항목에 적는다. 실제 실패 수정, 피처 추가, 수용 판단은 아래처럼
+별도로 남기며 전체 체크 수로 자율성 완료율을 계산하지 않는다.
+
 - [x] **지표별 baseline σ 측정** (D5) — validation slate에서 Task 6의 Harness baseline 설정을 seed
       5개로 **5회 독립 재학습**한 뒤 같은 slate를 점수화해 primary와 모든 guardrail의
       표준편차를 각각 구하고 ledger에 기록한다. 측정 전에는 `compare()`가 판정할 수 없다
 - [x] 측정된 지표별 σ map과 baseline 지표 절대값을 이 plan과 spec에 기록한다 — 이후
       실험의 기준선이다
 - [ ] 5-seed 실측 분포와 의도된 개선·무변경 candidate 경로를 보고 `2σ/-1σ`,
-      `σ > 1e-6`, 지표별 20%·30개 coverage 하한이 실용적인지 재조정한다. 변경이 필요하면
-      승격 판정을 열기 전에 spec과 plan을 먼저 갱신한다
+      `σ > 1e-6`, 지표별 20%·30개 coverage 하한이 실용적인지 수용 판단한다.
+      유지 또는 조정 근거를 명시해야 하며, 측정이 끝났다는 이유만으로 완료하지 않는다.
+      변경이 필요하면 해당 새 실험의 승격 판정을 열기 전에 spec과 plan을 먼저 갱신한다.
+      이번 문서 갱신에서는 기준을 바꾸지 않으며 #60의 판정도 재해석하지 않는다
 - [x] 최악 길이 300,000행 predictions fixture로 parser wall-clock 10초·메모리 256 MiB와
       65 MiB artifact 상한을 실측한다. 시간·메모리 안에서 안정적으로 처리하지 못하거나
       실사용 slate 규모와 맞지 않으면 행 상한을 포함한 세 초기값을 함께 낮춰 spec과 plan을
@@ -1955,12 +1974,25 @@ B 검증은 통합 회귀 94개와 이후 추가 중단/로그 실패를 포함�
 - [x] 로컬 end-to-end 1회 완주 — slate 조립 → baseline 점수화 → Judge 판정 → ledger 기록
       → 피드백 반환 → 2차 trial
 - [ ] **promote 경로 검증** — 일부러 개선된 candidate(유효한 피처 1개 추가)로 `promote`가
-      실제 발생하는지 확인한다. 이걸 하지 않으면 승격이 없는 상태의 원인을 알 수 없다
+      실제 발생하는지 확인한다. 일반적인 실제 validation promote는 #60의 class weight·트리
+      설정 변경으로 확인했다. 이 항목은 더 구체적인 피처 추가 실험 의무여서 미완료로 둔다
 - [x] 중단 후 checkpoint 재개 1회 확인 — 첫 validation durable append 후 주입 중단
-- [ ] validation loop가 끝난 뒤 final holdout을 정확히 1회 평가하고 feedback 없이 종료되는지,
+- [x] validation loop가 끝난 뒤 final holdout을 정확히 1회 평가하고 feedback 없이 종료되는지,
       새 run·새 ledger·동시 Controller에서도 온전한 같은 Judge 상태 루트의 registry가
       재평가를 막는지, root 부재·접근 불가·관측된 marker 삭제에서 fail-closed하는지, 최종
-      REPORT evidence의 대표 수치가 final 결과인지 확인
+      REPORT evidence의 대표 수치가 final 결과인지 확인. #60에서 단일 marker 아래 5-seed
+      final·종료 재호출 비반복·REPORT를 실측했고, 동시 claim·잘못된 root·marker 삭제는
+      registry/Controller 회귀로 검증했다. 모든 실패 조건을 실제 LLM E2E로 재현한 것은 아니다
+- [ ] 실제로 깨진 candidate를 agent가 실패 feedback을 받아 한 번 수정하고 학습·평가까지
+      복구하는 시나리오를 측정한다. #60 checkpoint 재개와 #54B 실패 pytest의 회수는
+      자동 코드 수정 실증을 대체하지 않는다
+- [ ] 사람 개입의 범위·횟수를 계측하고 중간 승인 없는 완주를 검증한다. 달러 비용은
+      기존 계약대로 확인 가능한 근거가 없으면 `null`을 허용하며, 실비 산출을 새 필수 gate로
+      추가하지 않는다. token·시간을 비용 절감률로 바꾸지 않는다
+
+후속 검증 권고(별도 승인): #62 설명 개선과 #54A/B를 모두 반영한 새 통합 실행에서
+결과·증거 연결을 확인한다. 이는 최신 변경 조합의 미실측 한계를 닫기 위한 권고이며,
+이번 문서 갱신에서 새로운 필수 수용 gate를 추가한 것은 아니다.
 
 **검증:** 전체 테스트 + 실제 1회 완주 로그와 ledger 산출물
 
@@ -1968,28 +2000,55 @@ B 검증은 통합 회귀 94개와 이후 추가 중단/로그 실패를 포함�
 
 ## MVP 완료 조건
 
-- [ ] 에이전트가 저장소 어느 파일이든 수정해도 harness가 차단하지 않는다
-- [ ] candidate가 evaluator·테스트·split 코드를 고쳐도 판정 수치가 바뀌지 않는다
-- [ ] candidate action log는 `dt < T`로 제한하고 metadata·임베딩 재료는 spec 4.5절을 따른다.
+실행·실측 의무는 위 Task 7과 [spec §12](../specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md#12-mvp-완료-조건)를
+함께 따른다. 아래 완료는 구현 경계와 관련 회귀, 필요한 실제 측정 근거가 확보됐다는 뜻이다.
+
+- [x] 에이전트의 수정 위치를 path allowlist로 제한하지 않는다. 시크릿·산출물 위생 계약은 유지한다
+- [x] candidate가 evaluator·테스트·split 코드를 고쳐도 **동일한 봉인 prediction의 Judge
+      채점·판정 계약**은 바뀌지 않는다. 코드 변경으로 prediction 자체가 달라지는 것과는 구분한다.
+      외부 Judge의 구현·회귀 근거이며 적대적인 동일 OS 사용자 완전 격리를 뜻하지 않는다
+- [x] candidate action log는 `dt < T`로 제한하고 metadata·임베딩 재료는 spec 4.5절을 따른다.
       평가 action log·원격 데이터 자격 증명·fixture 생성 상태와 seed는 주지 않는다. candidate가
       완전 라벨로 사용할 수 있는 마지막 출력일은 `T-2`다
-- [ ] 평가 출력일 `[T, T_end]`의 click·귀속 후보 impression은
+- [x] 평가 출력일 `[T, T_end]`의 click·귀속 후보 impression은
       `dt BETWEEN T AND T_end + 1`로 스캔하고 출력은 `[T, T_end]` impression으로 제한하며,
       `T_end + 1` 파티션 누락은 fail-closed한다
-- [ ] `predictions.csv` 계약 위반이 지표 조작이 아니라 실행 실패로 처리된다
-- [ ] `harness-predict`가 필수 `--seed`로 학습부터 실행하며 baseline 5-seed sweep은 5회
+- [x] `predictions.csv` 계약 위반이 지표 조작이 아니라 실행 실패로 처리된다
+- [x] `harness-predict`가 필수 `--seed`로 학습부터 실행하며 baseline 5-seed sweep은 5회
       재학습이다. 고정 모델 재점수화 구현은 계약 위반이다
-- [ ] `score`는 `[0,1]` click 확률 추정치이며 범위 위반, metric `None`, σ·coverage 미달은
+- [x] `score`는 `[0,1]` click 확률 추정치이며 범위 위반, metric `None`, σ·coverage 미달은
       `promote/revise/discard` 없이 fail-closed하고, 보정 품질은 LogLoss·Brier가 감시한다
-- [ ] 판정 결과가 구조화된 피드백으로 에이전트에게 돌아가고, 다음 trial이 그것을 참조한다
-- [ ] 프로세스를 중단한 뒤 마지막 checkpoint부터 재개된다
-- [ ] 로컬에서 Kubernetes 없이 완주한다
-- [ ] 지표별 baseline σ가 측정되어 ledger에 기록되고, 판정이 각 지표의 값을 입력으로 쓴다
-- [ ] 일부러 개선된 candidate로 `promote`가 실제 발생함을 1회 확인했다 (D5 검증 의무)
-- [ ] validation은 반복 피드백에 쓰고 final holdout은 마지막 1회·무피드백으로만 사용한다
-- [ ] 필수 절대 `judge_state_root`가 없거나 접근 불가하면 final 평가를 시작하지 않고,
+- [x] 판정 결과가 구조화된 피드백으로 에이전트에게 돌아가고, 다음 trial이 그것을 참조한다
+- [x] 프로세스를 중단한 뒤 마지막 checkpoint부터 재개된다
+- [x] 로컬에서 Kubernetes 없이 완주한다
+- [x] 지표별 baseline σ가 측정되어 ledger에 기록되고, 판정이 각 지표의 값을 입력으로 쓴다
+- [x] 개선을 목표로 한 candidate로 `promote`가 실제 발생함을 1회 확인했다 (D5 검증 의무).
+      #60의 validation promote이며 final 채택이나 위 Task 7의 피처 추가 실험 완료는 아니다
+- [x] validation은 반복 피드백에 쓰고 final holdout은 마지막 1회·무피드백으로만 사용한다
+- [x] 필수 절대 `judge_state_root`가 없거나 접근 불가하면 final 평가를 시작하지 않고,
       온전한 같은 상태 루트에서는 `evaluation_id` marker가 남은 final holdout의 재소비를
       거부한다. 상태 루트 자체의 무결성은 위협 모델의 한계다
-- [ ] `ResearchDomain` ABC와 `YouTubeCTRDomain`이 구현되고 Controller가 이 interface를 통해
+- [x] `ResearchDomain` ABC와 `YouTubeCTRDomain`이 구현되고 Controller가 이 interface를 통해
       snapshot·검증·평가·비교를 호출한다
-- [ ] 최종 REPORT의 대표 수치는 final holdout 결과다
+- [x] 최종 REPORT의 대표 수치는 final holdout 결과다
+- [ ] 의도적으로 깨진 candidate의 실제 자동 수정·복구와 사람의 중간 승인 없는 완주를
+      증명한다 — spec §12의 남은 두 의무이며 위 Task 7에서 추적한다
+
+### 잔여 검증 우선순위 — 2026-09-03 권고
+
+아래는 다음 작업의 권고안이며 이번 문서 갱신에 실험 실행 승인은 포함되지 않는다.
+실행 전 별도 이슈에서 실패 주입 위치·관측 범위·예산·종료 조건을 고정한다.
+
+1. **최소 자동 복구 시나리오:** 새 disposable candidate에 원인이 명확한 실패 하나를
+   주입한다. 실패 기록 → 구조화 feedback → 새 agent의 수정 한 번 → 실제 학습·평가·REPORT까지
+   관측한다. 실패 상태의 보존, 수정 patch, 사람 개입, 호출·학습 횟수와 시간/token을 연결한다.
+   #62/#54가 반영된 실행 경로를 함께 검증하되 이미 소비한 final이나 #60 원본을 재사용·변경하지 않는다.
+   Final이 필요하면 새 평가 대상과 온전한 별도 소비 상태를 사전에 준비한다. 복구가 실패하면
+   추가 수동 수정을 성공 시나리오로 섞지 않고 실패·한계를 보고한다.
+2. **피처·임베딩 자율성 확장:** 먼저 작은 피처 하나의 추가·학습 반영·평가를 검증한다.
+   판정 기준을 고정한 채 promote 여부를 관측하고, 미승격이면 그 결과를 보존한다. 임베딩 모델
+   선택·교체는 이후 별도 실험으로 분리해 원인과 비용을 설명할 수 있게 한다.
+3. **수용 판단과 포트폴리오 마감:** calibration 분포·무변경·개선·실패 복구 결과를 모아
+   threshold·coverage의 유지 또는 변경 근거와 남은 한계를 결정한다. 기존 판정을 소급 변경하지
+   않는다. 품질은 합성 데이터 범위로, 자율성은 관측된 사람 개입으로, 비용은 확인된 시간/token과
+   가능한 실비만으로 설명한다. 논문·웹 기능은 이 판단 뒤의 별도 로드맵으로 둔다.
