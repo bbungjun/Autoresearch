@@ -6,6 +6,8 @@
 실패 evidence를 제공한다. 승인 정책은 never로 고정하고 Windows에서는 elevated
 sandbox 구현을 명시하되 요청의 read-only/workspace-write 범위는 유지한다.
 반환 JSON의 업무 스키마 검증은 호출자가 담당한다.
+검증된 candidate 입력 identity가 전달된 Windows coding prepare에만 비상속 READ
+ACE를 추가하며, 권한 준비가 실패하면 CLI를 시작하지 않고 실패 증거를 남긴다.
 [비책임] Git 변경·commit, final grant·정답, Controller 재개와 REPORT는 각각 workspace,
 local trial adapter와 Controller가 소유한다. 동일 OS 사용자에 대한 보안 격리는 아니다.
 """
@@ -27,6 +29,7 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, field_validator
 
 from autoresearch.research_harness.ledger import LedgerArtifactEvidence
+from autoresearch.research_harness._windows_sandbox_inputs import CandidateInputIdentity, InputAccessError, grant_input_read
 from autoresearch.research_harness.runner import (
     _PipeReader,
     _TailBuffer,
@@ -79,6 +82,7 @@ class CodingAgentRequest:
     output_schema: dict[str, JsonValue] = field(repr=False)
     artifact_root: Path = field(repr=False)
     mode: Literal["workspace-write", "read-only"]
+    candidate_inputs: CandidateInputIdentity | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +161,10 @@ def _validate_request(config: CodexAgentConfig, request: CodingAgentRequest) -> 
         if not isinstance(config, CodexAgentConfig) or not isinstance(request, CodingAgentRequest):
             raise ValueError
         if request.mode not in {"workspace-write", "read-only"}:
+            raise ValueError
+        if request.candidate_inputs is not None and (
+            request.mode != "workspace-write" or not isinstance(request.candidate_inputs, CandidateInputIdentity)
+        ):
             raise ValueError
         if not isinstance(request.prompt, str) or not 0 < len(request.prompt.encode("utf-8")) <= _LIMIT:
             raise ValueError
@@ -304,7 +312,7 @@ def _read_response(path: Path) -> bytes:
 
 def _evidence(root: Path) -> tuple[LedgerArtifactEvidence, ...]:
     result = []
-    for name in ("prompt.txt", "schema.json", "stdout.log", "stderr.log", "response.json", "receipt.json"):
+    for name in ("prompt.txt", "schema.json", "stdout.log", "stderr.log", "response.json", "receipt.json", "input-access.json"):
         path = root / name
         try:
             payload = _read_response(path)
@@ -312,6 +320,27 @@ def _evidence(root: Path) -> tuple[LedgerArtifactEvidence, ...]:
             continue
         result.append(LedgerArtifactEvidence("coding-agent-" + name, path.as_uri(), hashlib.sha256(payload).hexdigest()))
     return tuple(result)
+
+
+def _prepare_input_access(request: CodingAgentRequest) -> None:
+    if os.name != "nt" or request.candidate_inputs is None:
+        return
+    if request.mode != "workspace-write":
+        raise CodingAgentError("agent_invalid_request", "input_access")
+    try:
+        receipt = grant_input_read(request.cwd, request.candidate_inputs)
+    except InputAccessError as error:
+        _write(request.artifact_root / "input-access.json", _json_bytes(error.receipt))
+        raise CodingAgentError("agent_input_access_failed", "input_access") from None
+    except (KeyboardInterrupt, SystemExit) as interruption:
+        receipt = getattr(interruption, "input_access_receipt", None)
+        if receipt is not None:
+            try:
+                _write(request.artifact_root / "input-access.json", _json_bytes(receipt))
+            except (OSError, ValueError):
+                interruption.add_note("input_access_evidence_failed")
+        raise
+    _write(request.artifact_root / "input-access.json", _json_bytes(receipt))
 
 
 def _run(config: CodexAgentConfig, request: CodingAgentRequest) -> CodingAgentReceipt:
@@ -330,6 +359,7 @@ def _run(config: CodexAgentConfig, request: CodingAgentRequest) -> CodingAgentRe
         created = True
         _write(root / "prompt.txt", request.prompt.encode("utf-8"))
         _write(root / "schema.json", _json_bytes(request.output_schema))
+        _prepare_input_access(request)
         worker = Path(__file__).with_name("_agent_worker.py").resolve(strict=True)
         owner = _new_tree_owner()
         process = subprocess.Popen(

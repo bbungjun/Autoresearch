@@ -1871,6 +1871,50 @@ v1 호환 golden은 수정 전 `5025926` 구현으로 record/prompt/Markdown의 
 208개도 변경되지 않았다. 실제 기록의 연결된 12쌍을 파일 게시 없이 메모리에 투영해
 세 trial의 scope와 원래 수치를 확인했다. 전체 Ruff와 `git diff --check`도 통과했다.
 
+### Windows 입력 읽기(A)·임시 산출물 회수(B) — #54
+
+**문제:** 실제 agent가 테스트와 candidate 저장까지 마친 뒤 sandbox 전용 pytest 임시
+폴더 때문에 host cleanup이 실패했다. 별도로 candidate-safe 입력 읽기 거부도 관측됐다.
+이 문제는 agent가 원본을 직접 탐색하고 일반적인 테스트를 실행하는 자율성의 제약이다.
+
+**승인 범위:** 입력 읽기(A)와 회수(B)를 분리한다. A는 내용 검증 뒤 제한된 입력 공개의
+계약을 확인하고, B는 소유권·회수 실패를 증거 손실 없이 처리한다. 기존 module 내부에서
+다루며 새 실행 framework나 자동 sandbox 약화는 도입하지 않는다. spec의 #54 계약 중
+A의 새 candidate-safe 입력 한정 읽기 공개·합성 검증을 사용자가 승인했다.
+새 임시 산출물 소유권 변경과 기존 실패 폴더 정리는 아직 승인된 상태가 아니다.
+
+- [x] #54 및 기존 실패 기록·게시/회수 소스 읽기, 이슈 연결 브랜치 생성
+- [x] 공식 Windows sandbox 문서 확인 및 기존 spec에 승인 전 설계 초안 반영
+- [x] 독립 설계 검토: 공개 처리를 coding prepare에 한정하고 잔여 workspace와 외부 증거 보존을 구분
+- [x] A의 candidate-safe 입력 한정 추가 읽기 권한에 대한 사용자 승인
+- [x] 설치된 CLI의 지원 방식 확인, 새 합성 입력으로 재현·계약 테스트 작성
+- [x] 최소 구현 및 새 합성 입력 Windows native 읽기·권한 보존 검증
+- [x] 최종 관련 회귀 122개 통과 및 독립 코드·문서·native 증거 리뷰
+- [ ] B의 새 임시 산출물 소유권·회수 계약을 별도로 확정
+
+**승인 전 조사:** source에서 private staging rename은 확인했다. 보존된 실패
+workspace에는 `harness_in`이 없어 당시 입력 ACL은 확정하지 못했다. 기존 폴더·권한·
+전역 설정·실험 원본은 변경하지 않았다. 이 초기 조사만으로 원인이나 해결 성과를
+확정하지 않았으며, 사용자 승인 후 아래의 새 합성 재현으로 진행했다.
+
+**A 재현 갱신:** 현재 CLI 0.153.0-alpha.5의 실제 workspace-write/elevated agent가 새
+candidate view 읽기에서 UnauthorizedAccessException(0x80070005)으로 blocked를 반환했다
+(31.594초). 입력/소유자/부모 ACL은 보존됐고 새 workspace는 회수됐다. 보조 sandbox CLI의
+profile 인자 누락 종료, 원인 없는 blocked 응답과 구분하여 기록했다. 첫 mock 계약
+12개 RED 뒤 최소 helper 12개 GREEN을 확인하고 호출 범위·실패 전파를 추가했다.
+
+**A native 검증 결과:** 파일 identity의 32/64비트 차이와 Windows AUTO_INHERITED
+control 정규화를 각각 재현·수정했다. 새 합성 입력 12개 객체에 비상속 READ만 추가하고
+agent가 파일 6개를 모두 읽어 manifest SHA를 대조했다(32.045초). CLI 시작 전 별도 ACL
+대조에서 기존 ACE 바이트·순서·owner 및 입력 밖 ACL이 같았고, 실행 후 파일 내용·owner·
+부모 ACL 보존과 새 workspace 회수를 확인했다. 기존 증거 208개 SHA도 동일하다.
+추가 권한은 실제 Windows coding prepare에만 적용하며 shared materializer, prediction,
+Judge에는 적용하지 않는다. 부분 권한 실패에서는 CLI 미실행·실패 sidecar를 보존한다.
+관련 문제 해결·검증·한계는 E2E 포트폴리오 보고서 §9에 함께 기록했다.
+최신 helper·coding agent·local trial·report 통합 회귀는 122 passed(194.84초),
+전체 Ruff·diff 검사도 통과했다. Linux 전체 CI와 최종 merge 상태는 #54에 연결된
+부분 PR의 checks/merge 기록을 정본으로 한다. B가 남아 있어 #54를 자동 종료하지 않는다.
+
 ### Task 7 전체 완료 체크리스트
 
 - [x] **지표별 baseline σ 측정** (D5) — validation slate에서 Task 6의 Harness baseline 설정을 seed

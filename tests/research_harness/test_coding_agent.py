@@ -127,6 +127,73 @@ def test_environment_drops_credentials_and_preserves_explicit_auth_location(
     assert json.loads((request.artifact_root / "receipt.json").read_text())["cost_usd"] is None
 
 
+@pytest.mark.parametrize("platform,has_inputs,mode,expected", [
+    ("nt", True, "workspace-write", 1), ("nt", False, "workspace-write", 0),
+    ("nt", False, "read-only", 0), ("posix", True, "workspace-write", 0),
+])
+def test_candidate_input_access_is_windows_codex_prepare_only(tmp_path, monkeypatch, platform, has_inputs, mode, expected):
+    request = replace(_request(tmp_path), mode=mode,
+                      candidate_inputs=agent.CandidateInputIdentity("a" * 64, "eval_" + "b" * 64) if has_inputs else None)
+    request.artifact_root.mkdir()
+    calls = []
+    monkeypatch.setattr(agent, "grant_input_read", lambda *args: calls.append(args) or {"status": "complete"})
+    monkeypatch.setattr(agent, "os", SimpleNamespace(**{**vars(os), "name": platform}))
+    agent._prepare_input_access(request)
+    assert len(calls) == expected
+    assert (request.artifact_root / "input-access.json").exists() == bool(expected)
+
+
+def test_read_only_request_cannot_receive_input_access_authority(tmp_path, monkeypatch):
+    request = replace(_request(tmp_path), mode="read-only", candidate_inputs=agent.CandidateInputIdentity("a" * 64, "eval_" + "b" * 64))
+    monkeypatch.setattr(agent, "_run", lambda *args: pytest.fail("invalid request must not start"))
+    with pytest.raises(agent.CodingAgentError, match="agent_invalid_request"):
+        agent.CodexCodingAgent(_config()).run(request)
+
+
+def test_input_grant_failure_is_receipted_without_any_process(tmp_path, monkeypatch):
+    request = _request(tmp_path)
+    def fail_before_process(request):
+        agent._write(request.artifact_root / "input-access.json", b'{"status":"failed","applied_count":1}')
+        raise agent.CodingAgentError("agent_input_access_failed", "input_access")
+    monkeypatch.setattr(agent, "_prepare_input_access", fail_before_process)
+    monkeypatch.setattr(agent, "_new_tree_owner", lambda: pytest.fail("process ownership must not start"))
+    monkeypatch.setattr(agent.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("CLI must not start"))
+    with pytest.raises(agent.CodingAgentError) as caught:
+        agent.CodexCodingAgent(_config()).run(request)
+    assert caught.value.code == "agent_input_access_failed"
+    receipt = json.loads((request.artifact_root / "receipt.json").read_bytes())
+    assert receipt["exit_code"] is None and receipt["usage"]["input_tokens"] is None
+    assert any(item.uri.endswith("input-access.json") for item in caught.value.artifacts)
+
+
+def test_input_access_sidecar_preserves_partial_native_failure(tmp_path, monkeypatch):
+    request = replace(_request(tmp_path), candidate_inputs=agent.CandidateInputIdentity("a" * 64, "eval_" + "b" * 64))
+    request.artifact_root.mkdir()
+    def failed_grant(*args):
+        raise agent.InputAccessError("acl_apply", {"status": "failed", "applied_count": 1})
+    monkeypatch.setattr(agent, "grant_input_read", failed_grant)
+    monkeypatch.setattr(agent, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
+    with pytest.raises(agent.CodingAgentError, match="agent_input_access_failed"):
+        agent._prepare_input_access(request)
+    assert json.loads((request.artifact_root / "input-access.json").read_bytes()) == {"status": "failed", "applied_count": 1}
+
+
+@pytest.mark.parametrize("kind", [KeyboardInterrupt, SystemExit])
+def test_input_access_interruption_publishes_partial_sidecar_and_rethrows(tmp_path, monkeypatch, kind):
+    request = replace(_request(tmp_path), candidate_inputs=agent.CandidateInputIdentity("a" * 64, "eval_" + "b" * 64))
+    request.artifact_root.mkdir()
+    interruption = kind()
+    interruption.input_access_receipt = {"status": "failed", "applied_count": 1, "interrupted": True}
+    def interrupted_grant(*args):
+        raise interruption
+    monkeypatch.setattr(agent, "grant_input_read", interrupted_grant)
+    monkeypatch.setattr(agent, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
+    with pytest.raises(kind) as caught:
+        agent._prepare_input_access(request)
+    assert caught.value is interruption
+    assert json.loads((request.artifact_root / "input-access.json").read_bytes())["applied_count"] == 1
+
+
 @pytest.mark.parametrize("body,code", [
     ("print('private-log'); sys.exit(3)\n", "agent_crash"),
     ("out.write_text('not-json')\n", "agent_invalid_response"),

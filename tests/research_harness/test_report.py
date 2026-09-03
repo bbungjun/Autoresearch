@@ -56,6 +56,7 @@ class FakeJudge:
     def run(self, request):
         self.requests.append(request)
         assert request.mode == "read-only" and list(request.cwd.iterdir()) == []
+        assert request.candidate_inputs is None
         assert not request.cwd.is_relative_to(request.artifact_root.parent)
         request.artifact_root.mkdir()
         response = {"status": "consistent", "summary": "관측 결과와 일치합니다.",
@@ -391,3 +392,15 @@ def test_report_output_drift_never_reuses_or_calls_judge_again(finished):
     with pytest.raises(module().ReportError):
         publish(finished, judge)
     assert len(judge.requests) == 1
+
+
+def test_input_access_sidecar_is_preserved_as_source_evidence(finished):
+    root = finished[0]
+    attempt = root / "attempts" / ("c" * 32)
+    write_json(attempt / "attempt.json", {"stage": "prepare", "trial_id": "trial-0001", "seed": None, "started_at_unix_ns": 1})
+    sidecar = attempt / "agent/input-access.json"
+    write_json(sidecar, {"version": "candidate-input-access-v1", "status": "failed", "applied_count": 1,
+                        "principal": {"name": "CodexSandboxUsers", "sid_sha256": "a" * 64}})
+    publish(finished)
+    record = json.loads((root / "research-record.json").read_bytes())
+    assert record["sources"][sidecar.relative_to(root).as_posix()] == sha256(sidecar.read_bytes()).hexdigest()
