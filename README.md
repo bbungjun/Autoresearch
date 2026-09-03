@@ -28,8 +28,9 @@ Autoresearch의 최종 목표는 ML 리서처·엔지니어를 위한 **자율 �
 학습한 뒤, origin(champion) 모델과의 비교·A/B 테스트까지 스스로 판단해
 수행합니다. 구현된 일일 폐루프는 이 에이전트가 실험을 돌리기 위한
 기반 테스트베드입니다. 현재는 사람이 준비한 가설·데이터·예산으로 동작하는 로컬
-Research Harness의 핵심 구현과 제한된 실제 E2E를 완료했습니다. 깨진 candidate의
-자동 수정·복구, 더 넓은 피처/모델 선택과 자율성·비용의 추가 실증은 남아 있습니다.
+Research Harness의 핵심 구현과 제한된 실제 E2E를 완료했습니다. 사전 주입한 속성명
+오류 한 건은 실제 agent의 수정 한 번으로 재학습·평가까지 복구했습니다. 더 넓은
+피처/모델 선택과 자율성·비용의 추가 실증은 남아 있습니다.
 논문 자동 발견·가설 변환·웹 제품 연결은 MVP 이후 로드맵입니다.
 최신 상태와 근거는 [MVP 완료 조건](docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md#12-mvp-완료-조건)과
 [실측·포트폴리오 기록](docs/reports/2026-09-03-local-autonomous-experiment-e2e.md)을 따릅니다.
@@ -204,8 +205,12 @@ final은 기존 단일 소비 계약을 유지합니다. 별도 baseline 5-seed 
 2-trial feedback·checkpoint 재개·final·REPORT·새 문맥 Judge 검토를 실측했습니다.
 해당 합성 실험에서는 validation 승격 후 final의 사전 채택 기준에 미달해 baseline을
 유지했습니다. 시간·토큰은 관측했지만 달러 비용·사람 개입 횟수는 미측정입니다.
-실패 candidate의 실제 자동 복구, 피처/임베딩 모델 교체 실증과 최신 #62/#54 변경을 모두
-반영한 새 통합 E2E는 남아 있습니다. 개별 검증을 새 통합 완주로 합산하지 않습니다.
+별도 #69 실행에서는 #62/#54 변경을 반영해 사전 주입 오류 → 실제 agent 수정 한 번 →
+재학습·final·REPORT·새 문맥 Judge까지 완주했습니다. Recall@10의 σ=0을 유지했으므로
+최종 품질 결론은 `inconclusive / insufficient_baseline_noise`이며 baseline을 유지했습니다.
+실행 구간의 중간 개입 0은 운영자 수동 관측이지 자동 계측값이 아닙니다. 구조화 기록
+Judge는 원본 편집 과정의 가시성 한계를 지적했습니다. 일반적인 복구 능력이나 품질
+개선을 입증한 것은 아니며, 피처/임베딩 모델 교체와 자율성·비용의 확대 실증은 남습니다.
 자세한 계약은 [Harness spec §4.9·§10.1.1](docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md)를 따릅니다.
 
 사전 수동 측정 도구는 `python -m scripts.research_harness.calibrate_baseline --help`와
