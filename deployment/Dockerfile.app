@@ -15,17 +15,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM python:3.12-slim
 
-ARG VCS_REF=unknown
-
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    AUTORESEARCH_REVISION=${VCS_REF} \
     PYTHONPATH=/app \
     PATH="/app/.venv/bin:$PATH"
-
-LABEL org.opencontainers.image.source="https://github.com/SKYAHO/Autoresearch" \
-      org.opencontainers.image.revision="${VCS_REF}" \
-      io.autoresearch.batch-contract.version="batch-contract-v1"
 
 WORKDIR /app
 
@@ -47,6 +40,13 @@ COPY scripts/gcs_code_bootstrap.sh /usr/local/bin/gcs_code_bootstrap.sh
 # builder의 bind mount로만 쓰인다) 아카이브가 덮어쓸 root 소유 파일이 없다.
 # 새 엔트리를 만들 디렉토리 쓰기 권한만 있으면 되므로 -R을 쓰지 않는다.
 RUN chown appuser:appuser /app
+
+# 커밋별 메타데이터는 설치·복사 뒤에 기록해 의존성 레이어 캐시를 보존한다.
+ARG VCS_REF=unknown
+ENV AUTORESEARCH_REVISION=${VCS_REF}
+LABEL org.opencontainers.image.source="https://github.com/SKYAHO/Autoresearch" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      io.autoresearch.batch-contract.version="batch-contract-v1"
 
 USER appuser
 

@@ -8,6 +8,12 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  # PR은 새 커밋이 이전 실행을 대체한다. main은 각 push의 변경 범위가 다르므로
+  # run별 그룹으로 분리해 실행 중·대기 중 검증이 다른 push에 밀려 사라지지 않게 한다.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
   # dorny/paths-filter 가 pull_request 이벤트에서 변경 파일 목록을 GitHub API
@@ -20,27 +26,31 @@ jobs:
     name: Detect changed image dependencies
     runs-on: ubuntu-latest
     outputs:
-      app: ${{ github.event_name != 'pull_request' || steps.filter.outputs.app }}
-      train: ${{ github.event_name != 'pull_request' || steps.filter.outputs.train }}
-      mlflow: ${{ github.event_name != 'pull_request' || steps.filter.outputs.mlflow }}
-      feast: ${{ github.event_name != 'pull_request' || steps.filter.outputs.feast }}
-      serving: ${{ github.event_name != 'pull_request' || steps.filter.outputs.serving }}
-      experiment_platform: ${{ github.event_name != 'pull_request' || steps.filter.outputs.experiment_platform }}
+      app: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.app }}
+      train: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.train }}
+      mlflow: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.mlflow }}
+      feast: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.feast }}
+      serving: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.serving }}
+      experiment_platform: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.experiment_platform }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
 
       - name: Filter changed paths
         id: filter
-        # PR 이벤트에서만 사용한다. main push는 위 outputs에서 필터를 우회해 항상
-        # 전체 빌드한다(배포 대상 이미지 최신성 보장).
-        if: github.event_name == 'pull_request'
+        # PR은 GitHub API, main push는 before..sha 전체 구간을 비교한다.
+        # 수동 실행은 outputs에서 모든 이미지를 선택한다.
+        if: github.event_name != 'workflow_dispatch'
         uses: dorny/paths-filter@v3
         with:
-          # '.github/workflows/ci.yml'과 '.dockerignore'는 5개 이미지 전부의 빌드
+          # 최초 main push의 0 SHA는 base와 ref 모두 같은 기본 브랜치로 주어
+          # dorny의 초기 push 분기에서 전체 파일을 검사한다.
+          base: ${{ github.event_name == 'push' && (github.event.before == '0000000000000000000000000000000000000000' && github.ref || github.event.before) || '' }}
+          ref: ${{ github.event_name == 'push' && (github.event.before == '0000000000000000000000000000000000000000' && github.ref || github.sha) || '' }}
+          # '.github/workflows/ci.yml'과 '.dockerignore'는 9개 이미지 전부의 빌드
           # 인자·컨텍스트를 결정하므로 모든 필터에 공통으로 넣는다(누락 시 이
           # 워크플로우 자체를 고친 PR이 어떤 이미지 검증도 없이 통과한다 — 이 PR의
-          # 최초 버전이 그 사례였다). 새 공용 의존 경로를 추가할 때는 5개 목록을
+          # 최초 버전이 그 사례였다). 새 공용 의존 경로를 추가할 때는 6개 목록을
           # 모두 갱신해야 한다.
           filters: |
             app:
@@ -76,6 +86,7 @@ jobs:
               - '.github/workflows/ci.yml'
               - '.dockerignore'
               - 'deployment/serving/**'
+              - 'applications/__init__.py'
               - 'applications/reranking_api/**'
               - 'autoresearch/**'
               - 'feature_repo/**'
@@ -84,8 +95,12 @@ jobs:
             experiment_platform:
               - '.github/workflows/ci.yml'
               - '.dockerignore'
+              - '.streamlit/**'
+              - 'applications/__init__.py'
               - 'applications/experiment_platform/**'
               - 'deployment/experiment_platform/**'
+              - 'tools/__init__.py'
+              - 'tools/auto_research_issue_branch.py'
               - 'pyproject.toml'
               - 'uv.lock'
 
@@ -228,14 +243,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build Docker image
         # uv.lock 기반 canonical application image만 검증한다.
-        run: |
-          docker build \
-            --build-arg VCS_REF="${{ github.sha }}" \
-            -f deployment/Dockerfile.app \
-            --tag autoresearch:ci \
-            .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deployment/Dockerfile.app
+          tags: autoresearch:ci
+          build-args: VCS_REF=${{ github.sha }}
+          load: true
+          push: false
+          cache-from: type=gha,scope=ci-app
+          # 캐시는 최적화 수단이다. export 지연/실패가 이미지 실행 검증을 막지 않는다.
+          cache-to: type=gha,scope=ci-app,mode=max,timeout=5m,ignore-error=true
 
       - name: Verify the image ships no application source
         # #750: 코드는 GCS 아카이브로 배포한다. 소스가 이미지에 남으면
@@ -284,16 +307,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build training image
         # CTR 학습 파이프라인을 담는 이미지. deployment/Dockerfile.app과 별도로 관리한다 —
         # 배치 CLI(autoresearch/jobs/)와 학습 코드(autoresearch/model_training/)는
         # 책임이 다르다.
-        run: |
-          docker build \
-            --build-arg VCS_REF="${{ github.sha }}" \
-            -f deployment/Dockerfile.train \
-            --tag autoresearch-training:ci \
-            .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deployment/Dockerfile.train
+          tags: autoresearch-training:ci
+          build-args: VCS_REF=${{ github.sha }}
+          load: true
+          push: false
+          cache-from: type=gha,scope=ci-train
+          cache-to: type=gha,scope=ci-train,mode=max,timeout=5m,ignore-error=true
 
       - name: Run training image smoke check
         # 코드가 이미지에 없으므로 로컬 아카이브 주입 모드로 부트스트랩
@@ -328,15 +358,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build MLflow runtime image
         # deployment/mlflow/runtime의 uv.lock 기반 최소 파생 이미지를 검증한다.
-        # Dockerfile 안의 psycopg2/boto3/google-cloud-storage import 스모크 체크가
-        # 이 빌드를 통해서만 실행된다.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deployment/mlflow/Dockerfile
+          tags: mlflow-runtime:ci
+          load: true
+          push: false
+          cache-from: type=gha,scope=ci-mlflow
+          cache-to: type=gha,scope=ci-mlflow,mode=max,timeout=5m,ignore-error=true
+
+      - name: Run MLflow runtime import smoke check
+        # Dockerfile RUN이 캐시에서 복원되어도 실제 로드한 이미지에서 import를 검증한다.
         run: |
-          docker build \
-            -f deployment/mlflow/Dockerfile \
-            --tag mlflow-runtime:ci \
-            .
+          docker run --rm --entrypoint python mlflow-runtime:ci \
+            -c "import psycopg2; import boto3; import google.cloud.storage"
 
   docker-build-feast:
     name: Docker build (feast)
@@ -347,14 +388,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build Feast Docker image
         # feast 그룹 파생 이미지 (materialize 실행·GKE 검증용)
-        run: |
-          docker build \
-            --build-arg VCS_REF="${{ github.sha }}" \
-            -f deployment/Dockerfile.feast \
-            --tag autoresearch-feast:ci \
-            .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deployment/Dockerfile.feast
+          tags: autoresearch-feast:ci
+          build-args: VCS_REF=${{ github.sha }}
+          load: true
+          push: false
+          cache-from: type=gha,scope=ci-feast
+          cache-to: type=gha,scope=ci-feast,mode=max,timeout=5m,ignore-error=true
 
       - name: Run Feast Docker image smoke check
         # 코드가 이미지에 없으므로 로컬 아카이브 주입 모드로 부트스트랩
@@ -393,12 +441,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build serving Docker image
-        run: |
-          docker build \
-            -f deployment/serving/Dockerfile \
-            --tag autoresearch-serving:ci \
-            .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deployment/serving/Dockerfile
+          tags: autoresearch-serving:ci
+          load: true
+          push: false
+          cache-from: type=gha,scope=ci-serving
+          cache-to: type=gha,scope=ci-serving,mode=max,timeout=5m,ignore-error=true
 
       - name: Run serving image import smoke check
         run: |
@@ -451,24 +506,52 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Build Agent Orchestration API, Runner, UI, and Executor images
-        run: |
-          docker build \
-            -f deployment/experiment_platform/api.Dockerfile \
-            --tag autoresearch-agent-orchestration-api:ci \
-            .
-          docker build \
-            -f deployment/experiment_platform/runner.Dockerfile \
-            --tag autoresearch-agent-orchestration-runner:ci \
-            .
-          docker build \
-            -f deployment/experiment_platform/workbench.Dockerfile \
-            --tag autoresearch-agent-orchestration-ui:ci \
-            .
-          docker build \
-            -f deployment/experiment_platform/executor.Dockerfile \
-            --tag autoresearch-agent-orchestration-executor:ci \
-            .
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Agent Orchestration API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deployment/experiment_platform/api.Dockerfile
+          tags: autoresearch-agent-orchestration-api:ci
+          load: true
+          push: false
+          cache-from: type=gha,scope=ci-agent-api
+          cache-to: type=gha,scope=ci-agent-api,mode=max,timeout=5m,ignore-error=true
+
+      - name: Build Agent Orchestration Runner image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deployment/experiment_platform/runner.Dockerfile
+          tags: autoresearch-agent-orchestration-runner:ci
+          load: true
+          push: false
+          cache-from: type=gha,scope=ci-agent-runner
+          cache-to: type=gha,scope=ci-agent-runner,mode=max,timeout=5m,ignore-error=true
+
+      - name: Build Agent Orchestration UI image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deployment/experiment_platform/workbench.Dockerfile
+          tags: autoresearch-agent-orchestration-ui:ci
+          load: true
+          push: false
+          cache-from: type=gha,scope=ci-agent-workbench
+          cache-to: type=gha,scope=ci-agent-workbench,mode=max,timeout=5m,ignore-error=true
+
+      - name: Build Agent Orchestration Executor image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deployment/experiment_platform/executor.Dockerfile
+          tags: autoresearch-agent-orchestration-executor:ci
+          load: true
+          push: false
+          cache-from: type=gha,scope=ci-agent-executor
+          cache-to: type=gha,scope=ci-agent-executor,mode=max,timeout=5m,ignore-error=true
 
       - name: Run Agent Orchestration image smoke checks
         run: |
