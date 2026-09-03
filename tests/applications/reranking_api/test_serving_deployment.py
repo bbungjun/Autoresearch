@@ -1,5 +1,13 @@
+"""학습 결과를 제공하는 서빙 이미지와 배포 전 CI 실행 계약을 검증한다.
+
+의존성·소스 포함 및 캐시 이미지의 smoke 연결을 검사한다. 모델 학습과 실제
+서빙 요청 처리는 autoresearch 및 applications.reranking_api가 담당한다.
+"""
+
 from pathlib import Path
 import tomllib
+
+import yaml
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -63,14 +71,24 @@ def test_serving_image_embeds_source_revision_and_runs_non_root() -> None:
 def test_ci_builds_serving_image_and_runs_import_smoke() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "-f deployment/serving/Dockerfile" in workflow
-    assert "--tag autoresearch-serving:ci" in workflow
+    job = yaml.safe_load(workflow)["jobs"]["docker-build-serving"]
+    build = next(
+        step
+        for step in job["steps"]
+        if step.get("with", {}).get("file") == "deployment/serving/Dockerfile"
+    )
+    assert build["uses"].startswith("docker/build-push-action@")
+    assert build["with"]["tags"] == "autoresearch-serving:ci"
+    assert build["with"]["load"] is True
     assert (
         "import lightgbm, feast, fastapi, feature_repo.redis_iam, applications.reranking_api.app"
         in workflow
     )
     assert "tests/applications/reranking_api/test_serving_feast_reader.py" in workflow
-    assert "tests/applications/reranking_api/test_serving_feast_reader_feast.py" in workflow
+    assert (
+        "tests/applications/reranking_api/test_serving_feast_reader_feast.py"
+        in workflow
+    )
     assert "tests/applications/reranking_api/test_serving_api.py" in workflow
     assert "tests/applications/reranking_api/test_serving_deployment.py" in workflow
 

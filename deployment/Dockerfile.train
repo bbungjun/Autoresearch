@@ -15,16 +15,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM python:3.12-slim
 
-ARG VCS_REF=unknown
-
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    AUTORESEARCH_REVISION=${VCS_REF} \
     PATH="/app/.venv/bin:$PATH"
-
-LABEL org.opencontainers.image.source="https://github.com/SKYAHO/Autoresearch" \
-      org.opencontainers.image.revision="${VCS_REF}" \
-      io.autoresearch.training-contract.version="training-contract-v1"
 
 WORKDIR /app
 
@@ -47,6 +40,13 @@ COPY scripts/gcs_code_bootstrap.sh /usr/local/bin/gcs_code_bootstrap.sh
 # 재귀적으로 넘길 필요 없이 /app 디렉토리 소유권만 appuser에게 주면
 # 아카이브가 새 엔트리(src/, pyproject.toml, uv.lock 등)를 그 아래에 풀 수 있다.
 RUN chown appuser /app
+
+# 커밋별 메타데이터는 설치·복사 뒤에 기록해 의존성 레이어 캐시를 보존한다.
+ARG VCS_REF=unknown
+ENV AUTORESEARCH_REVISION=${VCS_REF}
+LABEL org.opencontainers.image.source="https://github.com/SKYAHO/Autoresearch" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      io.autoresearch.training-contract.version="training-contract-v1"
 
 USER appuser
 
