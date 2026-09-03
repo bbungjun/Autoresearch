@@ -2,12 +2,56 @@
 
 import importlib
 import json
+from pathlib import Path
 
 import pytest
 
 
 def module():
     return importlib.import_module("scripts.research_harness.benchmark_parser")
+
+
+def test_observer_and_ingestion_share_the_resource_contract() -> None:
+    from autoresearch.research_harness import prediction_ingestion as ingestion
+    m = module()
+    assert m.OUTPUT_LIMIT == ingestion._MAX_PARSED_BYTES == 104 * 1024 * 1024
+    assert m.INPUT_LIMIT == ingestion.MAX_PREDICTION_BYTES
+    assert m.MEMORY_LIMIT == ingestion.PARSER_MEMORY_BYTES
+    assert m.TIMEOUT == ingestion.PARSER_TIMEOUT_SECONDS
+    assert m.ROWS == ingestion.MAX_PREDICTION_ROWS
+
+
+def test_max_json_expansion_preserves_226_byte_csv_and_360_byte_jsonl(tmp_path: Path) -> None:
+    m = module()
+    source = tmp_path / "max.csv"
+    generated = m.generate_csv(source, rows=3, escaped=True, max_json_expansion=True)
+    assert generated["size_bytes"] == 39 + 226 * 3
+    assert generated["expected_parsed_bytes"] == 360 * 3
+    assert generated["unique_ids"] is False
+    assert b",+1.2345678901234567e-100\r\n" in source.read_bytes()
+    observed = m.observe_worker(source, tmp_path / "observed")
+    ingested = m.measure_ingestion(source, tmp_path / "ingested")
+    assert observed["returncode"] == 0 and ingested["status"] == "success"
+    assert observed["parsed_bytes"] == ingested["parsed_bytes"] == 360 * 3
+    assert observed["parsed_sha256"] == ingested["parsed_sha256"]
+
+
+def test_benchmark_keeps_existing_cases_and_adds_max_expansion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    m = module()
+    generated_cases = []
+    def generate(path: Path, **kwargs: object) -> dict:
+        generated_cases.append((path.parent.name, kwargs))
+        path.touch()
+        return {}
+    monkeypatch.setattr(m, "generate_csv", generate)
+    monkeypatch.setattr(m, "INPUT_LIMIT", 3)
+    monkeypatch.setattr(m, "measure_ingestion", lambda *args: {"status": "observed"})
+    monkeypatch.setattr(m, "observe_worker", lambda *args: {})
+    result = m.run_benchmark(tmp_path / "benchmark", rows=3)
+    assert [case["name"] for case in result["cases"]] == [
+        "max-alnum", "max-backslash", "max-json-expansion", "too-many-rows", "row-too-long", "over-65mib",
+    ]
+    assert generated_cases[2][1]["max_json_expansion"] is True
 
 
 def test_max_row_generator_preserves_csv_schema_and_escape_expansion(tmp_path):

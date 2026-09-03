@@ -1,7 +1,8 @@
 """합성 prediction으로 실제 ingestion과 별도 parser 자원 관측을 수동 수행한다.
 
 [파이프라인] 실험 전 parser의 300k행·226byte·65MiB·10초·256MiB 가정을 측정한다.
-[기능] 최대 길이 두 종류와 음성 입력, 기존 ingestion, 같은 worker의 관측 실행을
+[기능] 기존 두 최대 길이 사례와 최대 JSON 확장 사례·음성 입력을 만들고,
+104 MiB parsed 상한의 실제 ingestion 및 같은 worker의 관측 실행을
 새 출력에 기록한다. 측정 장치는 표준 라이브러리만 사용하며 모르는 실패 원인은 unknown이다.
 [비책임] 실제 평가 dataset 품질·학습·Judge 판정이나 상한 변경은 수행하지 않는다.
 """
@@ -24,7 +25,7 @@ from time import perf_counter
 HEADER = b"evaluation_id,slate_id,video_id,score\r\n"
 ROWS = 300_000
 MEMORY_LIMIT = 256 * 1024 * 1024
-OUTPUT_LIMIT = 80 * 1024 * 1024
+OUTPUT_LIMIT = 104 * 1024 * 1024
 INPUT_LIMIT = 65 * 1024 * 1024
 TIMEOUT = 10.0
 WORKER = Path(__file__).resolve().parents[2] / "autoresearch/research_harness/prediction_parser_worker.py"
@@ -44,30 +45,42 @@ def _digest(path: Path) -> str:
     return value.hexdigest()
 
 
-def generate_csv(path: Path, *, rows: int, escaped: bool) -> dict:
-    """각 row 226 bytes인 unique slate ID 합성 CSV를 streaming 작성한다."""
+def generate_csv(path: Path, *, rows: int, escaped: bool, max_json_expansion: bool = False) -> dict:
+    """226-byte CSV를 작성한다. 최대 JSON 사례만 중복 ID인 parser 전용 입력이다.
+
+    Args:
+        path: 새 합성 CSV 경로.
+        rows: 생성할 행 수; parser 음성 검증을 위해 300k 초과도 허용한다.
+        escaped: 기존 backslash-heavy identifier 사례를 선택한다.
+        max_json_expansion: 두 ID를 64 backslash로 채우고 긴 score를 사용한다.
+
+    Returns:
+        파일 digest·CSV/예상 JSONL byte 수와 합성 입력의 제한된 의미.
+    """
     if type(rows) is not int or not 0 < rows <= 16**6:
         raise ValueError("invalid benchmark rows")
+    escaped = escaped or max_json_expansion
     prefix = b"\\" if escaped else b"s"
     video = (b"\\" if escaped else b"v") * 64
     evaluation = b"eval_" + b"a" * 64
-    score = b"0.5" + b"0" * 21
+    score = b"+1.2345678901234567e-100" if max_json_expansion else b"0.5" + b"0" * 21
     digest, total, parsed_length = sha256(), len(HEADER), 0
     with path.open("xb") as stream:
         stream.write(HEADER)
         digest.update(HEADER)
         for index in range(rows):
-            slate = prefix * 58 + f"{index:06x}".encode("ascii")
+            slate = prefix * 64 if max_json_expansion else prefix * 58 + f"{index:06x}".encode("ascii")
             row = b",".join((evaluation, slate, video, score)) + b"\r\n"
             assert len(row) == 226
             stream.write(row)
             digest.update(row)
             total += len(row)
             if not parsed_length:
-                parsed_length = len(json.dumps([evaluation.decode(), slate.decode(), video.decode(), 0.5],
+                parsed_length = len(json.dumps([evaluation.decode(), slate.decode(), video.decode(), float(score)],
                                                separators=(",", ":")).encode("ascii")) + 1
     return {"rows": rows, "row_bytes": 226, "size_bytes": total, "sha256": digest.hexdigest(),
             "escaped_identifiers": escaped, "expected_parsed_bytes": parsed_length * rows,
+            "unique_ids": not max_json_expansion,
             "data_scope": "synthetic parser input, not evaluation metric evidence"}
 
 
@@ -209,11 +222,12 @@ def run_benchmark(out: Path, *, rows: int = ROWS) -> dict:
         raise ValueError("new absolute benchmark output required")
     out.mkdir()
     cases = []
-    for name, escaped in (("max-alnum", False), ("max-backslash", True)):
+    for name, escaped, max_json in (("max-alnum", False, False), ("max-backslash", True, False),
+                                  ("max-json-expansion", True, True)):
         directory = out / name
         directory.mkdir()
         source = directory / "input.csv"
-        generated = generate_csv(source, rows=rows, escaped=escaped)
+        generated = generate_csv(source, rows=rows, escaped=escaped, max_json_expansion=max_json)
         _write_json(directory / "input.json", generated)
         cases.append({"name": name, "input": generated, "ingestion": measure_ingestion(source, directory / "ingestion"),
                       "observer": observe_worker(source, directory / "observed")})

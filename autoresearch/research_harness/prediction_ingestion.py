@@ -5,6 +5,8 @@
 
 [기능] source를 no-follow·non-blocking 방식으로 한 번만 열어 exclusive Judge 사본을 만들고,
 격리 parser가 만든 정규화 행만 scoring에 전달하는 opaque receipt를 반환한다.
+허용 ASCII의 JSON escaping 확장을 104 MiB parsed 상한으로 수용하며 CSV·시간·메모리
+상한은 각각 65 MiB·10초·256 MiB로 유지한다.
 
 [비책임] candidate 프로세스 실행·회수는 Task 5a LocalRunner가, target·metric 계산은
 ``judge``가, coverage·sigma 판정은 ``judge_decision``이 담당한다.
@@ -33,7 +35,9 @@ from autoresearch.research_harness.prediction_parser import (
 MAX_PREDICTION_BYTES = 65 * 1024 * 1024
 PARSER_TIMEOUT_SECONDS = 10.0
 PARSER_MEMORY_BYTES = 256 * 1024 * 1024
-_MAX_PARSED_BYTES = 80 * 1024 * 1024
+# 69 + 2*128 escaped identifier bytes + 24 float bytes + 11 JSON syntax + LF
+# = at most 361 bytes/row; 300k rows fit below 104 MiB.
+_MAX_PARSED_BYTES = 104 * 1024 * 1024
 _MAX_PARSED_ROW_BYTES = 512
 _COPY_CHUNK_BYTES = 1024 * 1024
 

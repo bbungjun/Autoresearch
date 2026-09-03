@@ -1646,7 +1646,7 @@ worker 자원 관측을 구분한다. 독립 설계 리뷰에서 유효 표본 5
 - [x] baseline 5회 독립 fit·raw metrics·sigma·모델/입력/seed identity·calibration ledger
 - [x] 최대 길이/escaping 및 상한 초과 입력의 parser wall time·메모리·결과 측정
 - [x] 실제 관측과 계산상 추정 구분, 문제/해결/결과 및 남은 gate 기록
-- [ ] 독립 리뷰·CI·PR·merge
+- [x] 독립 리뷰·CI·PR·merge
 
 **결과(2026-09-03):** seed 101~105의 실제 새 학습·예측·workspace 회수·trusted validation
 채점을 각각 한 번 완료했다. 각 측정 구간은 23.164/22.343/21.590/21.891/21.048초였다.
@@ -1699,6 +1699,53 @@ RED→GREEN으로 보완했다. 실제 parser 상한 변경은 이 측정 PR에 
 서로 다른 학습 split/모델 hash 5개와 benchmark 파일 hash 7건이 일치했다.
 parser 상한 보정은 [#58](https://github.com/bbungjun/Autoresearch/issues/58)로 분리했다.
 
+#59는 독립 리뷰·전체 Harness 1,010 passed / 13 skipped(328.83초), Python 3.11/3.12·
+Feast/Postgres/lock/Ruff CI 및 Docker 집계 성공 후 `e89155e6`으로 squash merge되었다.
+이미지별 build는 의존성 변경 탐지에 따라 생략됐다. 불필요하게 이미지 빌드를 수행했다고
+표현하지 않는다.
+
+### Parser 상한 보정 PR — #58
+
+**문제:** #57에서 외부 CSV 계약에 맞는 escape-heavy 입력이 내부 JSONL 80MiB
+상한에서 거부됐다. 코드와 실패 위치가 JSON escaping 확장 설명과 일치한다.
+
+**해결:** 허용 문자 축소는 기존 유효 입력을 깨므로 선택하지 않는다. 내부 출력만
+허용 입력에서 도출한 유한 104MiB로 보정한다(spec §4.10). 96MiB는 기존 측정 입력은
+수용해도 두 ID 전체 escape·긴 score의 최대 경우를 수용하지 못한다. 기존 10초/256MiB와
+외부 65MiB/300k행은 유지하며 새 최대 확장 사례와 음성 입력을 재측정한다.
+
+- [x] 상한 도출·실제 escape/긴 score roundtrip·작은 worker 초과 경계 RED
+- [x] 내부 cap/docstring과 benchmark 동일 상한, 최대 확장 입력 추가
+- [x] 실제 300k 재측정·자원 및 원본 evidence 보존
+- [ ] 독립 리뷰·회귀·CI·PR·merge 및 전후 결과 기록
+
+**결과:** 상한/측정 사례 부재의 4 RED를 확인한 뒤 최소 수정했다. 실제 작은 파일로
+CSV 226byte→JSONL 360byte와 worker 출력 720byte 정확 허용/719byte 제한 거부를
+검증했다. ingestion/benchmark/Judge/판정 회귀는 80 passed, 3 skipped(8.86초)이며
+Ruff·diff check를 통과했다. 이 수정은 parser 용량 정합성에 한정되며 metric/판정이나
+학습 설정·calibration 기준선을 바꾸지 않는다.
+
+Windows/Python 3.12.13의 실제 300k행 재측정은 다음과 같다. 모두 CSV
+67,800,039byte이며 실제 ingestion과 별도 관측 프로세스 시간은 합산하지 않는다.
+
+| 입력 | 실제 ingestion | 별도 worker 시작~종료 | parsed bytes | peak working set bytes | peak commit bytes |
+|---|---:|---:|---:|---:|---:|
+| 일반 문자 | 성공 / 3.968초 | 3.933초 | 63,600,000 | 25,362,432 | 13,561,856 |
+| 기존 unique backslash | 성공 / 4.417초 | 4.014초 | 100,200,000 | 25,477,120 | 13,737,984 |
+| 전체 backslash + 긴 score | 성공 / 4.525초 | 4.547초 | 108,000,000 | 25,493,504 | 13,754,368 |
+
+기존 backslash 사례는 #57과 입력 hash가 같고, 80MiB에서 실패하던 파일이 이제 전체
+300k행을 처리했다. 가장 큰 JSONL의 SHA256은
+`00cf40662b94434b4f99f0b3c441482916970fcca4c463f27571191b43d5b14c`로 실제 ingestion과
+별도 worker가 일치했다. 300,001행, 물리 행 227byte, 65MiB+1byte 음성 입력은 모두
+계속 거부됐다. 원본 `benchmark.json` SHA256은
+`49fdb55e2acc1d84df985c058ce717389bd157ebfbf5f5b50e61776414455bef`다.
+
+한 환경에서 각 사례를 한 번씩 측정한 것이므로 운영 부하·다른 장비의 SLA를 주장하지
+않는다. 최대 확장 사례의 중복 key는 parser 검증용이며 metric 유효 dataset이 아니다.
+이번에는 외부 입력 한도·시간·메모리를 유지할 근거를 확보했고, 실제 Controller E2E는
+[#60](https://github.com/bbungjun/Autoresearch/issues/60)에서 이어간다.
+
 ### Task 7 전체 완료 체크리스트
 
 - [x] **지표별 baseline σ 측정** (D5) — validation slate에서 Task 6의 Harness baseline 설정을 seed
@@ -1709,7 +1756,7 @@ parser 상한 보정은 [#58](https://github.com/bbungjun/Autoresearch/issues/58
 - [ ] 5-seed 실측 분포와 의도된 개선·무변경 candidate 경로를 보고 `2σ/-1σ`,
       `σ > 1e-6`, 지표별 20%·30개 coverage 하한이 실용적인지 재조정한다. 변경이 필요하면
       승격 판정을 열기 전에 spec과 plan을 먼저 갱신한다
-- [ ] 최악 길이 300,000행 predictions fixture로 parser wall-clock 10초·메모리 256 MiB와
+- [x] 최악 길이 300,000행 predictions fixture로 parser wall-clock 10초·메모리 256 MiB와
       65 MiB artifact 상한을 실측한다. 시간·메모리 안에서 안정적으로 처리하지 못하거나
       실사용 slate 규모와 맞지 않으면 행 상한을 포함한 세 초기값을 함께 낮춰 spec과 plan을
       먼저 갱신한다

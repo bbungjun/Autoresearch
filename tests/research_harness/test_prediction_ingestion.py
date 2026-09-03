@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
@@ -18,6 +20,51 @@ from autoresearch.research_harness.prediction_ingestion import (
 
 _HEADER = b"evaluation_id,slate_id,video_id,score\n"
 _ROW = b"eval_" + b"a" * 64 + b",slate,video,0.5\n"
+
+
+def _maximum_expansion_row() -> bytes:
+    return b",".join((b"eval_" + b"a" * 64, b"\\" * 64, b"\\" * 64,
+                      b"+1.2345678901234567e-100")) + b"\r\n"
+
+
+def test_parsed_cap_covers_worst_case_without_changing_external_limits() -> None:
+    assert ingestion._MAX_PARSED_BYTES == 104 * 1024 * 1024
+    assert ingestion._MAX_PARSED_BYTES >= 361 * ingestion.MAX_PREDICTION_ROWS
+    assert ingestion.MAX_PREDICTION_BYTES == 65 * 1024 * 1024
+    assert ingestion.PARSER_MEMORY_BYTES == 256 * 1024 * 1024
+    assert ingestion.PARSER_TIMEOUT_SECONDS == 10.0
+
+
+def test_maximum_ascii_expansion_roundtrips_through_sealed_ingestion(tmp_path: Path) -> None:
+    row = _maximum_expansion_row()
+    assert len(row) == 226
+    source = tmp_path / "source.csv"
+    source.write_bytes(_HEADER + row)
+    destination = tmp_path / "sealed.csv"
+    receipt = seal_prediction_copy(source, destination)
+    payload = destination.with_name("sealed.csv.parsed.jsonl").read_bytes()
+    assert len(payload) == 360
+    assert json.loads(payload) == ["eval_" + "a" * 64, "\\" * 64, "\\" * 64, 1.2345678901234567e-100]
+    rows = list(ingestion.iter_sealed_prediction_rows(receipt))
+    assert len(rows) == 1 and rows[0].score == 1.2345678901234567e-100
+    assert rows[0].slate_id == rows[0].video_id == "\\" * 64
+
+
+@pytest.mark.parametrize(("limit", "returncode", "parsed_bytes"), [(720, 0, 720), (719, 1, 360)])
+def test_worker_output_limit_accepts_exact_boundary_and_rejects_one_byte_less(
+    tmp_path: Path, limit: int, returncode: int, parsed_bytes: int,
+) -> None:
+    source, output = tmp_path / "source.csv", tmp_path / "parsed.jsonl"
+    source.write_bytes(_HEADER + _maximum_expansion_row() * 2)
+    output.touch()
+    identity = output.stat()
+    completed = subprocess.run([
+        sys.executable, str(Path(ingestion.__file__).with_name("prediction_parser_worker.py")),
+        str(ingestion.PARSER_MEMORY_BYTES), str(limit), str(source), str(output),
+        str(identity.st_dev), str(identity.st_ino),
+    ], capture_output=True, timeout=ingestion.PARSER_TIMEOUT_SECONDS, check=False)
+    assert completed.returncode == returncode
+    assert output.stat().st_size == parsed_bytes
 
 
 def _valid_prediction(path: Path) -> bytes:
