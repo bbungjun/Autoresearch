@@ -897,6 +897,13 @@ root 결과와 같다. 기존 view 재사용과 symlink·junction/reparse·hardl
 #71의 새 피처 학습을 다시 시작하기 위한 준비 gate이며 모델 품질이나 자율 실험 성공의
 증거로 기록하지 않는다.
 
+독립 리뷰에서 validation 경로와 공유되지 않는 final consumption registry가 306자 snapshot을
+raw `Path.resolve(strict=True)`로 처리해 final view 진입을 막는 사실을 추가 확인했다. 이 경계는
+새 합성 fixture와 별도 marker로 검증하며, 내부 registry I/O에만 `_io_path`를 적용하고 공개
+grant evidence는 canonical 절대 경로로 유지한다. 기존 실험의 marker를 재사용하거나 초기화하지
+않는다. 긴 candidate destination의 게시 I/O는 별도 #90 범위이며 #77의 지원 주장에 포함하지
+않는다.
+
 agent는 initial card와 validation feedback만 받아 현재 champion에서 한 가설을 구현한다.
 채점 규칙·정답·final 결과·grant·Judge 경로는 prompt/context에 넣지 않는다. 저장소 내부
 수정 경로 allowlist는 추가하지 않으며, 외부 trusted Judge가 수치 판정을 소유한다.

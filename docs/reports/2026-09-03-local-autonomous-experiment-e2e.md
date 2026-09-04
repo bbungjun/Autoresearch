@@ -998,4 +998,15 @@ view 게시·재사용까지 완주한다. 이번 작업은 새 final grant·평
 실제 coding agent·22열 학습·품질 판정을 실행하지 않았다. 따라서 #71의 피처 실증은 여전히
 미완료다. 임의 UNC/device 경로와 hostile filesystem 경쟁도 검증 범위가 아니다. 원격
 Python 3.11/3.12, Feast/Postgres, lock drift, Ruff와 선택 이미지 CI는 PR #89에서 통과했다.
-구현 비참여 리뷰는 아직 남아 있다.
+구현 비참여 독립 리뷰는 P1 1건과 P2 1건을 찾았다. P1은 긴 snapshot을 가진 fixture에서
+final consumption registry가 raw `Path.resolve(strict=True)`로 실패해 final candidate view
+전체를 막는 문제였다. 별도 합성 fixture와 marker로 `state_root_validation` 실패를 RED로
+고정하고 registry의 신뢰된 내부 resolve·marker I/O·directory sync에 `_io_path`를 적용했다.
+공개 grant evidence와 handoff 경로에는 extended prefix를 넣지 않았다. 수정 뒤 중첩 fixture,
+consumption registry, final candidate view 3파일은 48 passed였다. 기존 #60/#69/#71의 final
+marker와 관측 파일은 소비하거나 수정하지 않았다.
+
+P2는 250자 candidate destination에서 267자 lock 파일을 raw `os.open()`으로 만들다가
+`candidate_lock_prepare`로 실패하는 별도 게시 경계다. #77의 fixture 입력 범위 밖이므로
+[#90](https://github.com/bbungjun/Autoresearch/issues/90)으로 분리했으며, 긴 destination까지
+지원한다고 주장하지 않는다. 새 head의 전체 관련 회귀와 원격 CI는 다시 확인한다.
