@@ -1116,3 +1116,5 @@ runtime을 분리했으며, non-empty anchor rename은 실패하고 이동된 �
 전체 Ruff와 `git diff --check`도 통과했다. 수정 재리뷰는 P0/P1/P2/P3 모두 0건이었다.
 ACL·소유권 변경이나 동시 악성 inode 교체를 새로 방어하지 않는다. #71의 기존 실패 evidence와
 소비된 final은 수정하지 않았고, 피처의 공식 학습·평가 성능도 아직 입증하지 않았다.
+PR #95의 Linux Python 3.11/3.12, Feast/Postgres, Ruff, lock drift와 선택 Docker 이미지 CI도
+모두 통과했다.

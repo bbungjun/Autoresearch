@@ -2197,7 +2197,7 @@ cleanup은 계속 fail-closed한다.
 - [x] RED 2: fixed sandbox helper가 runtime 부재 receipt를 complete로 반환
 - [x] RED 3: lifecycle host 검증도 같은 부재를 허용
 - [x] 기존 경계 교체·hardlink·reparse·process cleanup 회귀 유지
-- [ ] 포트폴리오 기록, 독립 리뷰, CI, Ready PR
+- [x] 포트폴리오 기록, 독립 리뷰, PR #95 CI 통과, Ready PR
 
 ### Task 7T: 보안 테스트와 등록 temp 회수의 양립 — #73 (구현·로컬 검증 완료)
 
