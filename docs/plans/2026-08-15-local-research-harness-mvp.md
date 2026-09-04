@@ -2272,7 +2272,7 @@ candidate 입력으로 소비하는 공개 경로는 아직 완주하지 못한�
 - [x] RED 3: root 153에서 260자를 넘는 action-log partition을 실제로 열며 source path/handle identity와 receipt digest가 일치함
 - [x] 최소 구현 후 공개 handoff·manifest에 `\\?\`가 없고 snapshot/source/destination 관계 검사가 유지됨
 - [x] 기존 alias/reparse/hardlink·외부 source·중첩 destination·변조·실패 회수 회귀 통과
-- [ ] Windows native 표적·확장 회귀, 전체 Ruff·`git diff --check`, Python 3.11/3.12 및 선택 이미지 CI 통과
+- [x] Windows native 표적·확장 회귀, 전체 Ruff·`git diff --check`, Python 3.11/3.12 및 선택 이미지 CI 통과
 - [ ] spec·plan과 포트폴리오 보고서에 문제·원인·대안·전후 결과·한계를 갱신하고 구현 비참여 독립 리뷰 완료
 
 표적 검증은 `test_fixture_nested_paths.py`, `test_candidate_metadata_view.py`,
@@ -2311,7 +2311,8 @@ candidate source/snapshot/destination 관계 비교와 공용 regular-file ident
 `Path.read_*()` 11건이 시스템 pytest 경로 길이 때문에 실패했다. 같은 fixture 39건을 저장소
 내 짧은 `--basetemp`에서 다시 실행해 37 passed, 2 skipped를 확인했다. 두 결과를 중복 없이
 합치면 272 passed, 3 skipped이며 skip은 기존 플랫폼 조건이다. 전체 Ruff와 diff 검사는
-통과했다. 원격 Python 3.11/3.12 CI와 구현 비참여 리뷰는 아직 남아 있다.
+통과했다. PR #89의 원격 Python 3.11/3.12, Feast/Postgres, lock drift, Ruff와 선택 이미지
+CI도 통과했다. 구현 비참여 리뷰는 아직 남아 있다.
 
 저장소 전체 4,203건도 Windows/Python 3.12, xdist 4 worker와 같은 짧은 basetemp로 실행했다.
 결과는 3,996 passed, 135 skipped, 80 failed / 400.88초였다. 실패는 모두 변경한

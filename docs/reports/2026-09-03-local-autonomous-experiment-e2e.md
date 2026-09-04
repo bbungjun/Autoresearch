@@ -997,4 +997,5 @@ research harness 밖에서 발생했고 `/bin/sh` 부재, symlink 생성 권한,
 view 게시·재사용까지 완주한다. 이번 작업은 새 final grant·평가·소비 marker를 만들지 않았고,
 실제 coding agent·22열 학습·품질 판정을 실행하지 않았다. 따라서 #71의 피처 실증은 여전히
 미완료다. 임의 UNC/device 경로와 hostile filesystem 경쟁도 검증 범위가 아니다. 원격
-Python 3.11/3.12 CI와 구현 비참여 리뷰 결과는 PR 단계에서 추가한다.
+Python 3.11/3.12, Feast/Postgres, lock drift, Ruff와 선택 이미지 CI는 PR #89에서 통과했다.
+구현 비참여 리뷰는 아직 남아 있다.
