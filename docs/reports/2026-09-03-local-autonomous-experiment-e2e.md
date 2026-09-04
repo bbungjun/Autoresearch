@@ -1,8 +1,8 @@
 # 로컬 자율 ML 실험 에이전트: 실행보다 먼저 검증 가능성을 만들기
 
-> 최초 실측 2026-09-03 · MVP 수용 갱신 2026-09-05. #60의 feedback·재개·엄격한 기각,
+> 최초 실측 2026-09-03 · 기반 안정화 갱신 2026-09-05. #60의 feedback·재개·엄격한 기각,
 > #69의 실패 코드 수정·σ=0 판정 불가, #71의 새 피처 학습·offline promote를 순서대로
-> 기록합니다. 최신 MVP 증거 경계와 수용 결론은 §23입니다.
+> 기록합니다. MVP 증거 경계와 수용 결론은 §23, 이후 장경로 기반 안정화는 §24입니다.
 
 ## 1. 해결하려는 문제
 
@@ -1243,3 +1243,36 @@ wall-clock과 token만 사용하고 달러 값은 계속 `null`이다. #69와 #7
 MVP 완료 조건을 충족했다. #16, #90, executor 연결, 논문·웹, production 승격·온라인 A/B와
 자동 비용·외부 개입 계측은 열린 후속 범위로 남긴다. 이번 수용 작업은 새 agent·학습·final을
 실행하지 않으며 기존 marker·원본 evidence·판정을 변경하지 않는다.
+
+## 24. 긴 candidate destination의 게시 경계를 안정화하기 — #90
+
+**문제:** #77 독립 리뷰에서 Windows의 길이 250자 candidate `destination_root`는 경로 관계
+검증을 통과하지만, 267자가 된 `.harness-in.lock`을 일반 경로로 여는 단계에서
+`candidate_view_conflict / candidate_lock_prepare`로 실패했다. Snapshot과 fixture source에는
+긴 경로 adapter가 적용됐지만 candidate 게시의 lock·staging·write·rename·reuse I/O는 논리
+경로를 직접 사용하고 있었다. 이 상태에서는 정상 입력도 workspace 위치에 따라 실패하며,
+게시 중 실패한 staging의 회수까지 같은 경로 한계에 놓인다.
+
+**해결:** 보안 판단과 공개 receipt에는 기존 canonical 논리 경로를 유지하고, 검증된
+destination 아래의 lock·staging·payload copy·manifest write·tree 검증·atomic rename·cleanup에만
+기존 `_io_path()`를 적용했다. 새 공개 API나 Windows 전역 설정은 추가하지 않았다. v1과 v2를
+각각 짧은 destination과 대조해 최초 게시·재사용의 manifest와 모든 artifact digest가 같은지
+확인하고, 부분 write 뒤 `OSError`를 주입해 소유 staging 회수와 정제된 typed error도 별도로
+검증했다. 공개 입력으로 들어온 UNC/device-prefixed path는 device 표현이 receipt로 전파되지
+않도록 `candidate_request_validation`에서 거부한다.
+
+**결과와 한계:** 수정 전 RED 3종은 모두 `candidate_lock_prepare`에서 실패했고, 수정 뒤 세
+시나리오가 통과했다. Candidate 게시·metadata·final grant와 symlink·junction/reparse·hardlink
+fail-closed를 묶은 관련 회귀는 97건 모두 통과했다. 공개 `CandidateDataViewReceipt.root`에는
+`\\?\`가 없고 짧은 경로와 manifest·artifact digest가 일치한다. 지원 범위는 이미 검증된 로컬
+absolute destination이며 UNC/device path를 새 입력 계약으로 허용하거나 동일 OS의 악성 동시
+교체를 추가로 방어하지 않는다. 이 기반 수정은 새 agent·학습·final을 실행하지 않으며 #71의
+기존 evidence와 판정을 변경하지 않는다.
+
+Windows 전체 suite는 4,258 items와 collection-time skip 8건을 수집했고, 최종 결과는
+4,040 passed, 135 skipped, 91 failed였다. 최종 skip에는 collection-time skip 8건이 포함된다.
+실패는 `/bin/sh` 부재,
+POSIX 권한 bit, cp949 subprocess decoding과 candidate destination 밖 fixture 테스트의 raw
+장경로 read에 분포했다. 마지막 fixture 실패는 변경 전 `bc96685`에서도 같은 테스트와
+`Path.read_bytes()` 위치로 재현했으므로 #90의 회귀로 분류하지 않는다. Linux 전체 결과는
+GitHub CI에서 별도로 판정한다.
