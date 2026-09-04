@@ -9,6 +9,7 @@ sandbox 구현을 명시하되 요청의 read-only/workspace-write 범위는 유
 검증된 candidate 입력 identity가 전달된 Windows coding prepare에만 비상속 READ
 ACE를 추가하며, 권한 준비가 실패하면 CLI를 시작하지 않고 실패 증거를 남긴다.
 등록된 Windows coding temp는 candidate 증거 보존 뒤 동일 sandbox 주체로 회수한다.
+삭제될 수 있는 OS temp root는 등록 anchor 아래 runtime 자식으로 분리한다.
 [비책임] Git 변경·commit, final grant·정답, Controller 재개와 REPORT는 각각 workspace,
 local trial adapter와 Controller가 소유한다. 동일 OS 사용자에 대한 보안 격리는 아니다.
 """
@@ -216,7 +217,7 @@ def _codex_argv(config: CodexAgentConfig, request: CodingAgentRequest) -> tuple[
 def _temp_settings(request: CodingAgentRequest) -> tuple[str, ...]:
     if os.name != "nt" or request.candidate_inputs is None:
         return ()
-    path = str(request.cwd / "harness_out/.agent-tmp")
+    path = str(request.cwd / _agent_temp._RUNTIME)
     return tuple(value for name in ("TEMP", "TMP", "TMPDIR", "PYTEST_DEBUG_TEMPROOT")
                  for value in ("-c", f"shell_environment_policy.set.{name}=" + json.dumps(path)))
 
@@ -497,7 +498,7 @@ def _run(config: CodexAgentConfig, request: CodingAgentRequest) -> CodingAgentRe
         created = True
         prompt = request.prompt
         if os.name == "nt" and request.candidate_inputs is not None:
-            prompt += ("\n임시 파일과 pytest 기본 임시 산출물은 harness_out/.agent-tmp를 사용하십시오. "
+            prompt += ("\n임시 파일과 pytest 기본 임시 산출물은 harness_out/.agent-tmp/runtime을 사용하십시오. "
                        "TEMP/TMP/TMPDIR/PYTEST_DEBUG_TEMPROOT는 이 경로로 설정되어 있습니다. "
                        "별도 --basetemp나 등록 경로 밖 private 임시 폴더를 만들지 마십시오.\n")
         _write(root / "prompt.txt", prompt.encode("utf-8"))

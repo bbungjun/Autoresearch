@@ -38,10 +38,33 @@ def test_clean_only_anchor_children_preserves_boundaries_and_sentinels(tmp_path:
     (tree / "cache").write_text("scratch")
     receipt = _receipt()
     temp.clean(cwd, registration, receipt)
-    assert receipt == {"status": "complete", "removed_count": 3, "object_count": 3}
+    assert receipt == {"status": "complete", "removed_count": 4, "object_count": 4}
     temp.validate(cwd, registration, empty=True)
     assert sentinel.read_text() == "untouched"
     assert (cwd / ".git").read_text() == "gitdir: sentinel"
+
+
+def test_missing_runtime_root_is_already_clean_when_anchor_matches(tmp_path: Path) -> None:
+    cwd, registration = _workspace(tmp_path)
+    (cwd / "harness_out/.agent-tmp/runtime").rmdir()
+    receipt = _receipt()
+
+    temp.clean(cwd, registration, receipt)
+
+    assert receipt == {"status": "complete", "removed_count": 0, "object_count": 0}
+
+
+def test_renamed_nonempty_anchor_fails_without_deleting_leftover(tmp_path: Path) -> None:
+    cwd, registration = _workspace(tmp_path)
+    anchor = cwd / "harness_out/.agent-tmp"
+    (anchor / "runtime/leftover.bin").write_text("preserved")
+    renamed = cwd / "harness_out/renamed-agent-tmp"
+    anchor.rename(renamed)
+
+    with pytest.raises(FileNotFoundError):
+        temp.clean(cwd, registration, _receipt())
+
+    assert (renamed / "runtime/leftover.bin").read_text() == "preserved"
 
 
 @pytest.mark.parametrize("name", [".git", "harness_out", "harness_out/.agent-tmp"])
@@ -120,7 +143,7 @@ def test_object_limit_preflight_deletes_nothing(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setattr(temp, "_LIMIT", 1)
     with pytest.raises(ValueError, match="temp_object_limit"):
         temp.clean(cwd, registration, _receipt())
-    assert len(list(anchor.iterdir())) == 2
+    assert len(list(anchor.iterdir())) == 3
 
 
 def test_partial_failure_counts_successful_deletions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -142,7 +165,7 @@ def test_partial_failure_counts_successful_deletions(tmp_path: Path, monkeypatch
     receipt = _receipt()
     with pytest.raises(PermissionError):
         temp.clean(cwd, registration, receipt)
-    assert receipt["removed_count"] == 1 and len(list(anchor.iterdir())) == 1
+    assert receipt["removed_count"] == 2 and len(list(anchor.iterdir())) == 1
 
 
 def test_isolated_worker_consumes_stdin_without_importing_candidate_code(tmp_path: Path) -> None:
@@ -152,7 +175,7 @@ def test_isolated_worker_consumes_stdin_without_importing_candidate_code(tmp_pat
     result = subprocess.run((sys.executable, "-I", "-S", str(Path(temp.__file__).resolve())),
                             cwd=cwd, input=json.dumps(registration), text=True, capture_output=True, check=False)
     assert result.returncode == 0
-    assert json.loads(result.stdout)["removed_count"] == 1
+    assert json.loads(result.stdout)["removed_count"] == 2
     assert (cwd / "json.py").exists()
 
 

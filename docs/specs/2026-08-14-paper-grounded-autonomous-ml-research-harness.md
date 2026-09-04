@@ -766,6 +766,11 @@ OS 실행에 필요한 환경과 Codex 로그인 위치만 전달하고 GitHub/G
   잔여 workspace 보존과 외부 attempt 증거 보존을 구분한다.
   B 진행 요청에 따른 회수 방법은 아래 계약으로 제한한다. 소유권 변경은 허용하지 않으며,
   cleanup 실패를 성공으로 바꾸거나 Controller에 실패 후보를 전달하지 않는다.
+  등록 temp anchor 아래 disposable `runtime` root를 만들고 agent child의 TEMP/TMP/TMPDIR 및
+  PYTEST_DEBUG_TEMPROOT만 이 자식으로 지정한다. 임시 도구가 빈 runtime root를 제거해도 anchor
+  identity를 검증한 뒤 잔여물 0건으로 처리한다. 등록 anchor 자체가 사라지거나 다른 객체로
+  교체됐거나 부모 경계가 달라진 경우는 기존처럼 실패하며, anchor의 자식만 bounded preflight
+  뒤 삭제한다.
 
 [OpenAI Windows sandbox 문서](https://learn.chatgpt.com/docs/windows/windows-sandbox)는
 별도 저권한 사용자와 파일 권한 경계를 설명하고, 세션의 특정 디렉터리 읽기 허용 기능을
@@ -814,9 +819,10 @@ elevated 구현·managed constraints를 유지하며 새 profile이나 전역 �
 받는다. 이 실행 경로가 거부되면 다른 shell·권한으로 재시도하지 않는다.
 
 - 적용은 Windows의 candidate 입력 identity가 있는 coding prepare뿐이다. Host가 새
-  `harness_out/.agent-tmp` anchor를 만들고 cwd·`.git`·output·anchor identity를 등록한다.
+  `harness_out/.agent-tmp` anchor와 disposable `runtime` 자식을 만들고 cwd·`.git`·output·anchor
+  identity를 등록한다.
   Codex 자체의 host 임시 환경은 유지하고, 명령 child의 TEMP/TMP/TMPDIR 및
-  PYTEST_DEBUG_TEMPROOT만 등록 root로 지정한다. agent에 이 경로를 안내한다.
+  PYTEST_DEBUG_TEMPROOT만 disposable runtime root로 지정한다. agent에 이 경로를 안내한다.
   이는 [공식 shell environment 설정](https://learn.chatgpt.com/docs/config-file/config-reference)의
   `shell_environment_policy.set` 호출별 override를 사용하며 전역 설정은 수정하지 않는다.
 - 작은 호출 수명 관리 interface로 temp 회수를 candidate 증거 게시 뒤로 미룬다.

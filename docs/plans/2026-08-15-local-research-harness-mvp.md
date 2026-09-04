@@ -2182,6 +2182,23 @@ REPORT 결속에서도 허용한다. 한 번 실패한 뒤 다음 candidate가 s
 - [x] PR #93 Linux Python 3.11/3.12, Feast/Postgres, Ruff, lock drift와 선택 이미지 CI 통과
 - [x] Ready PR; 최종 squash merge는 사람의 기존 위임에 따라 진행
 
+### Task 7F-3: 사라진 빈 agent temp anchor 회수 — #94
+
+**문제:** #71 재실행 첫 agent가 표적 112 tests와 Ruff를 통과한 뒤 timeout됐지만, 등록 temp
+anchor가 사라져 cleanup preflight도 `FileNotFoundError`로 실패했다. Agent 명령에는 anchor 삭제가
+없었고 candidate SHA와 공식 validation은 남지 않았다.
+
+**해결 계약:** 등록 temp anchor 아래 disposable `runtime` root를 만들고 agent의 OS temp 변수는
+그 자식만 가리킨다. 임시 도구가 runtime을 제거해도 고정 anchor identity와 부모 경계를 helper와
+host가 검증할 수 있다. anchor 부재·교체·alias·부모 경계 변경과 존재하는 자식의 기존 bounded
+cleanup은 계속 fail-closed한다.
+
+- [x] RED 1: disposable runtime 부재를 clean 0건 완료로 처리
+- [x] RED 2: fixed sandbox helper가 runtime 부재 receipt를 complete로 반환
+- [x] RED 3: lifecycle host 검증도 같은 부재를 허용
+- [x] 기존 경계 교체·hardlink·reparse·process cleanup 회귀 유지
+- [x] 포트폴리오 기록, 독립 리뷰, PR #95 CI 통과, Ready PR
+
 ### Task 7T: 보안 테스트와 등록 temp 회수의 양립 — #73 (구현·로컬 검증 완료)
 
 사용자가 #73 진행을 승인했다. #71 원본·실패 workspace·consumed final은 보존하고

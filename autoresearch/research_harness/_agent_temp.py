@@ -1,8 +1,9 @@
 """Coding prepare의 등록된 임시 산출물을 생성 주체에서 회수한다.
 
 [파이프라인] Agent 프로세스 종료와 candidate 증거 보존 이후, workspace 회수 직전이다.
-[기능] 고정 temp anchor identity 등록과 bounded 전체 사전 검증, 자식만 삭제하는
-stdlib-only trusted worker를 제공한다. 실행 시 cwd가 등록 workspace와 일치해야 한다.
+[기능] 고정 temp anchor identity 등록과 disposable runtime root 생성, bounded 전체
+사전 검증, 자식만 삭제하는 stdlib-only trusted worker를 제공한다. 실행 시 cwd가
+등록 workspace와 일치해야 한다.
 [비책임] Sandbox 실행·timeout은 coding_agent, 전체 workspace 회수는 workspace 소유다.
 ACL·소유권 변경이나 동시 악성 파일 교체에 대한 별도 격리는 제공하지 않는다.
 """
@@ -17,6 +18,7 @@ import sys
 
 
 _ANCHOR = "harness_out/.agent-tmp"
+_RUNTIME = f"{_ANCHOR}/runtime"
 _LIMIT = 10000
 _BOUNDARIES = (".", ".git", "harness_out", _ANCHOR)
 
@@ -51,6 +53,7 @@ def register(cwd: Path) -> dict[str, object]:
     _identity(cwd / ".git", directory=False)
     _identity(cwd / "harness_out", directory=True)
     (cwd / _ANCHOR).mkdir()
+    (cwd / _RUNTIME).mkdir()
     return {"version": "agent-temp-v1", "git_sha256": _git_digest(cwd), "identities": {
         name: _identity(cwd / name, directory=name != ".git") for name in _BOUNDARIES
     }}
