@@ -1090,3 +1090,5 @@ Controller와 같은 predicate를 사용하도록 연결하고, 유효 validatio
 5회와 candidate SHA를 직접 단언하지 않은 테스트 공백이었다. 두 단언을 추가한 뒤 위 73 tests를
 재실행했다. 독립 재리뷰는 P0/P1/P2/P3 0건이었고 Controller·REPORT·context 83 tests와 변경
 Python 파일 Ruff, `git diff --check`를 다시 확인했다.
+PR #93의 Linux Python 3.11/3.12, Feast/Postgres, Ruff, lock drift와 선택 Docker 이미지 CI도
+모두 통과했다.

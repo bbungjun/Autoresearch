@@ -2179,7 +2179,8 @@ REPORT 결속에서도 허용한다. 한 번 실패한 뒤 다음 candidate가 s
       `/bin/sh`·260자 raw Path 실패는 포트폴리오 §19에 분리
 - [x] 포트폴리오 결과 기록
 - [x] 독립 재리뷰 P0/P1/P2/P3 0건, reviewer 83 tests·Ruff·diff 확인
-- [ ] CI, Ready PR
+- [x] PR #93 Linux Python 3.11/3.12, Feast/Postgres, Ruff, lock drift와 선택 이미지 CI 통과
+- [x] Ready PR; 최종 squash merge는 사람의 기존 위임에 따라 진행
 
 ### Task 7T: 보안 테스트와 등록 temp 회수의 양립 — #73 (구현·로컬 검증 완료)
 
