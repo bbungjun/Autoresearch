@@ -2340,7 +2340,7 @@ final metadata·grant·view를 잇는 신규 회귀가 GREEN이 됐고, 기존 #
 POSIX 경로 구분자·파일 모드 가정과 cp949 decode 등 로컬 플랫폼 차이다. 이를 전체 통과로
 기록하지 않으며 Linux Python 3.11/3.12 CI를 별도 최종 근거로 사용한다.
 
-### Task 7J: Snapshot/Judge 오류의 Python 전달 계약 — #79 (계획 확정)
+### Task 7J: Snapshot/Judge 오류의 Python 전달 계약 — #79 (구현·로컬 영향 검증 완료)
 
 `EvaluationSnapshotError`와 `JudgeError`는 `frozen=True, slots=True` dataclass다. 최신 main
 `271b148`의 Windows/Python 3.12에서 각 예외를 no-op generator context manager 안에서
@@ -2369,10 +2369,11 @@ dataclass equality/hash/repr/`replace()` 계약은 유지한다. 공용 오류 �
 
 - [x] #79 이슈 연결 브랜치 `fix/79-snapshot-judge-error-propagation`을 최신 main `271b148`에서 생성
 - [x] 파일 I/O 없는 최소 재현에서 두 예외가 각각 `TypeError`로 바뀌는 현재 동작 확인
-- [ ] 제품 코드 변경 전 위 RED 3종을 작성하고 예상 실패와 기존 통과 대조를 분리 기록
-- [ ] `evaluation_errors.py`와 `judge_errors.py`에만 최소 필드 보호 패턴을 적용하고 module docstring 갱신
-- [ ] 신규 오류 계약, snapshot publisher/slate, Judge/prediction ingestion, local runtime·controller 인접 회귀 실행
-- [ ] 전체 Ruff·`git diff --check`, Linux Python 3.11/3.12 CI와 필요한 선택 이미지 검증
+- [x] 제품 코드 변경 전 위 RED 3종을 작성하고 예상 실패와 기존 통과 대조를 분리 기록
+- [x] `evaluation_errors.py`와 `judge_errors.py`에만 최소 필드 보호 패턴을 적용하고 module docstring 갱신
+- [x] 신규 오류 계약, snapshot publisher/slate, Judge/prediction ingestion, local runtime·controller 인접 회귀 실행
+- [x] 전체 Research Harness, Ruff·`git diff --check` 로컬 검증
+- [ ] Linux Python 3.11/3.12 CI와 필요한 선택 이미지 검증
 - [ ] 문제·대안·RED/GREEN·한계를 spec/plan/포트폴리오에 반영하고 구현 비참여 독립 리뷰 수행
 - [ ] P0/P1 미해결 0건과 CI 성공을 확인한 뒤 Ready 전환; 최종 squash merge는 사람이 판정
 
@@ -2381,6 +2382,17 @@ dataclass equality/hash/repr/`replace()` 계약은 유지한다. 공용 오류 �
 연쇄·traceback은 Python 표준 동작을 따른다. 실제 coding agent, 모델 학습·품질 판정, final
 holdout 소비와 기존 #60/#69/#71 증거 변경은 수행하지 않는다. 이 완료는 오류 전달 신뢰성의
 근거이며 자율 복구율이나 모델 성능 개선의 증거가 아니다.
+
+제품 코드 변경 전 신규 36건은 22 failed, 14 passed였다. 모든 Snapshot code, 두 Judge code,
+실제 `_run_lock`, runtime metadata와 cause/context 전달이 `TypeError`로 바뀌었고 구조 필드
+불변성·builtin metadata 타입 거부·dataclass value 계약은 통과했다. 기존 Snapshot/Judge 소비
+대조는 79 passed, 3 skipped였다. 최소 구현과 optional `None` 필드 회귀 보강 뒤 신규 38건은
+모두 GREEN이며, 두 오류를 직접 참조하는 테스트 전체는 짧은 `--basetemp`에서 260 passed,
+5 skipped였다. 기본 pytest temp에서는 기존 `test_fixture.py`의 raw `Path.read_*()` 11건이
+260자 초과 경로로 실패했으며 같은 테스트의 짧은 경로 통과와 구분한다. 전체 Ruff와
+`git diff --check`는 통과했다. 전체 Research Harness도 CI와 같은 xdist 4 worker 및 짧은
+basetemp에서 1,302 passed, 13 skipped / 228.42초였다. skip은 기존 플랫폼 조건이다. 독립
+리뷰와 원격 CI는 남아 있다.
 
 ### 잔여 검증 우선순위 — 2026-09-03 권고
 
