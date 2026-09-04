@@ -4,6 +4,7 @@
 > 코드 반영 상태는 [PR #70](https://github.com/bbungjun/Autoresearch/pull/70)을 따르며 전체 MVP 수용 완료는 아니다. 아래 종합 체크리스트와
 > 잔여 검증 우선순위를 따른다. 과거 Task의 문제·결과는 해당 구현 시점 기록이다.
 > 후속 #71은 coding 2회 뒤 prepare 회수 실패로 피처 학습 실증이 막혔다. Task 7F와 #73을 따른다.
+> #76은 PR #80으로 merge됐고, #77의 중첩 fixture candidate 입력 소비는 아래 Task 7I 계획을 따른다.
 
 **Goal:** 현행 executor를 수정하지 않고 정적 allowlist를 사용하지 않는 독립 로컬 Research
 Harness(봉인된 사후 판정 + 자가 피드백) 경로를 만든다. 사람이 준 가설·`ExperimentCard`로
@@ -2230,6 +2231,60 @@ CI·PR·merge 상태는 [#76의 연결 PR](https://github.com/bbungjun/Autoresea
 기존 #60/#69/#71 증거와 final marker·실패 workspace를 보존한다. 실제 LLM coding·새 품질
 실험·final 소비는 수행하지 않는다. 오류 전달 수정으로 실패 작업 자체가 성공한 것으로
 기록하지 않는다.
+
+### Task 7I: 중첩 fixture의 candidate 입력 소비 — #77 (계획 확정)
+
+#74에서 길이 130·153자의 state root에 fixture를 생성·재사용할 수 있게 했지만, 그 결과를
+candidate 입력으로 소비하는 공개 경로는 아직 완주하지 못한다. #76이 반영된 main
+`40c1f928d92ffd7203a3b470083d9846eb1a3b9c`에서 seed 1937, T=2026-09-01을 새로 생성해
+다음 실패를 다시 확인했다.
+
+| 조건 | 경로 길이와 관측 | 현재 결과 |
+| --- | --- | --- |
+| state root 130자 | snapshot root 306자, 첫 action-log partition 252자 | partition open 성공; metadata는 `fixture_source_provenance`, v1 view는 `judge_snapshot_layout` 실패 |
+| state root 153자 | snapshot root 329자, 첫 action-log partition 275자 | `FixtureActionLogSource.open_partition`이 `FileNotFoundError/WinError 3`; metadata와 view는 위 두 선행 경계에서 실패 |
+
+따라서 snapshot `resolve()` 한 곳만 바꾸면 root 153자의 source read가 다음 실패가 된다.
+구현 전에 각 경계를 별도 RED로 고정하여 앞선 실패가 뒤의 미검증 경로를 가리지 않게 한다.
+
+**구현 원칙:**
+
+- 공개 `JudgeSnapshotHandoff`, fixture receipt와 candidate manifest에는 기존 canonical 절대
+  경로를 유지하고 Windows extended path를 직렬화하지 않는다.
+- `local_evaluation_fixture.py`의 기존 `_io_path`를 trusted local I/O 경계에서 재사용한다.
+  resolve/lstat/regular-file identity와 `FixtureActionLogSource.open_partition()`이 같은 규칙을
+  사용하도록 최소 내부 helper를 정리한다. 별도 범용 filesystem 추상화는 만들지 않는다.
+- `candidate_data_view.py`의 snapshot layout, source/destination 및 Judge state disjoint 검사와
+  source identity/read 경계도 같은 canonical 결과를 비교한다. `Path.is_relative_to()` 기반
+  관계 판정과 fail-closed 오류 code/stage를 유지한다.
+- symlink·junction/reparse·hardlink, source 교체, descriptor/snapshot digest 불일치와 destination
+  중첩 거부를 완화하지 않는다. Windows 전역 설정·ACL을 바꾸거나 temp를 다른 신뢰 경계로
+  옮기지 않는다.
+- final과 validation이 공유하는 metadata 준비는 모두 검증하지만 새 final grant·평가·소비
+  marker는 만들지 않는다. #60/#69/#71 원본과 기존 실패 workspace를 수정하지 않는다.
+
+**작업 순서와 완료 조건:**
+
+- [x] #77 연결 브랜치 `fix/77-nested-candidate-paths`를 최신 main `40c1f92`에서 생성
+- [x] Windows/Python 3.12 공개 호출로 root 130·153의 실패 단계와 경로 길이를 재확인
+- [ ] RED 1: root 130의 fixture로 validation/final metadata 준비가 짧은 root와 같은 receipt·bytes를 냄
+- [ ] RED 2: root 130의 별도 destination에 validation v1/v2 view를 게시·재사용하고 짧은 root와 manifest·파일 hash가 같음
+- [ ] RED 3: root 153에서 260자를 넘는 action-log partition을 실제로 열며 source path/handle identity와 receipt digest가 일치함
+- [ ] 최소 구현 후 공개 handoff·manifest에 `\\?\`가 없고 snapshot/source/destination 관계 검사가 유지됨
+- [ ] 기존 alias/reparse/hardlink·외부 source·중첩 destination·변조·실패 회수 회귀 통과
+- [ ] Windows native 표적·확장 회귀, 전체 Ruff·`git diff --check`, Python 3.11/3.12 및 선택 이미지 CI 통과
+- [ ] spec·plan과 포트폴리오 보고서에 문제·원인·대안·전후 결과·한계를 갱신하고 구현 비참여 독립 리뷰 완료
+
+표적 검증은 `test_fixture_nested_paths.py`, `test_candidate_metadata_view.py`,
+`test_candidate_data_view.py`, `test_final_candidate_data_view.py`,
+`test_fixture_consumption_state.py`부터 시작한다. 공유 경계를 바꾸므로 local feature view,
+local runtime, run inputs, workspace 회귀까지 넓힌다. 전체 suite는 CI의
+`pytest -n 4 --dist loadfile`로 Python 3.11/3.12를 확인하고, Windows 고유 성공 근거와 Linux
+CI를 구분해 기록한다.
+
+성공의 의미는 동일한 합성 입력의 candidate metadata/view 준비가 긴 로컬 경로에서도
+완주한다는 것이다. 이 결과만으로 #71의 실제 22열 학습·품질 판정이나 피처 promote가
+완료됐다고 처리하지 않는다. 구현과 검증이 끝난 뒤 #79를 처리하고 새 #71 실험으로 돌아간다.
 
 ### 잔여 검증 우선순위 — 2026-09-03 권고
 
