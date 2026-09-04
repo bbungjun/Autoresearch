@@ -1143,15 +1143,19 @@ I/O의 legacy path 경계 문제다. #90은 candidate destination 게시를 다�
 #96으로 분리했다.
 
 Windows 전역 설정이나 temp 위치를 바꾸지 않고, helper가 보안 판단에 쓰는 논리 경로와 등록
-identity는 유지한다. 실제 local filesystem 연산에만 extended path를 적용하고 directory listing의
-이름을 다시 논리 자식 경로에 결합한다. 이 방식은 공개 evidence에 device path를 노출하지 않으며,
-symlink·junction/reparse·hardlink와 등록 경계 교체를 허용하지 않는다.
+identity는 유지한다. 실제 filesystem 연산에만 extended path를 적용하고 UNC는
+`\\?\UNC\server\share` 형식으로 변환한다. Directory entry는 논리 자식 경로로 하나씩 반환해
+10,000개 object limit 전에 전체 목록을 메모리에 적재하지 않는다. 이 방식은 공개 evidence에
+device path를 노출하지 않으며, symlink·junction/reparse·hardlink와 등록 경계 교체를 허용하지 않는다.
 
 **결과와 한계:** 구현 전 신규 계약은 `_agent_temp.py:87`에서 1 failed였다. 최소 변경 뒤 direct
-clean과 `python -I -S` 격리 helper를 포함한 temp 보안 테스트 16건이 통과했다. 실제 실패를
+clean과 `python -I -S` 격리 helper, streaming 제한, UNC 변환을 포함한 temp 보안 테스트 18건이
+통과했다. 실제 실패를
 재현한 candidate temp tree에도 수정 helper를 적용해 826개 객체를 전부 회수했고 등록 anchor가
 비었음을 확인한 뒤 진단 worktree를 제거했다. Coding agent·runner·workspace·hardlink 확장 회귀는
-146 passed, 1 skipped였으며 skip은 기존 POSIX 실행권한 전용이다. 사후 재해시에서 기존 #60
+148 passed, 1 skipped였으며 skip은 기존 POSIX 실행권한 전용이다. 구현 비참여 독립 리뷰는
+초기 eager directory listing과 UNC 접두사 오류를 발견했고, streaming·UNC 수정 뒤
+P0/P1/P2/P3 모두 0건으로 종료했다. 사후 재해시에서 기존 #60
 208개, #69 128개, 원 #71 112개, seed 7102 119개 파일과 기존 final marker가 모두 일치했다.
 이 결과는 장경로 회수 결함의 수정 근거이며,
 seed 7103 후보의 공식 22열 학습이나 성능 결과가 아니다. 두 coding 기회는 이미 소진됐고 patch와

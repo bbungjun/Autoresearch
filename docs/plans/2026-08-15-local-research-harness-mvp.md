@@ -2199,7 +2199,7 @@ cleanup은 계속 fail-closed한다.
 - [x] 기존 경계 교체·hardlink·reparse·process cleanup 회귀 유지
 - [x] 포트폴리오 기록, 독립 리뷰, PR #95 CI 통과, Ready PR
 
-### Task 7F-4: agent temp의 Windows 장경로 회수 — #96 (구현 진행)
+### Task 7F-4: agent temp의 Windows 장경로 회수 — #96 (구현·독립 리뷰 완료)
 
 **문제:** #71 seed 7103은 새 fixture·서로 다른 validation/final ID, 표준 candidate view
 preflight와 baseline seed 101~105 calibration을 통과했다. Validation NDCG@10 baseline은
@@ -2212,16 +2212,19 @@ final fit은 0회이며 결과는 `inconclusive / no_valid_validation_candidate`
 `runtime`도 남아 있었다. 실제 candidate와 같은 temp 환경의 독립 재현에서 pytest는 통과했지만,
 helper가 길이 266자의 정상 fixture 파일을 `Path.lstat()`할 때 `FileNotFoundError`가 발생했다.
 같은 파일은 Windows extended path로 조회할 때 존재했다. 논리 경로·등록 identity·공개 evidence는
-유지하고, helper의 local `mkdir/open/iterdir/lstat/unlink/rmdir` I/O에만 extended path를 적용한다.
-경계 교체·reparse·hardlink·object limit의 fail-closed 정책은 완화하지 않는다.
+유지하고, helper의 `mkdir/open/iterdir/lstat/unlink/rmdir` I/O에만 extended path를 적용한다.
+UNC는 Windows의 `\\?\UNC\server\share` 형식으로 보존하고, directory entry는 iterator로
+순회해 object limit 전에 전체 목록을 메모리에 적재하지 않는다. 경계 교체·reparse·hardlink·
+object limit의 fail-closed 정책은 완화하지 않는다.
 
 - [x] #71 seed 7103 agent 2회, candidate SHA 2개, cleanup 실패 2회와 final 미소비 증거 보존
 - [x] 실제 candidate test tree에서 266자 `lstat()` 실패를 독립 재현
 - [x] Windows 장경로 회수 RED 1건 확인, 최소 내부 adapter 구현 뒤 GREEN
-- [x] direct clean과 격리 subprocess helper, 기존 보안 회귀 16 tests 통과
+- [x] direct clean·격리 subprocess helper·streaming 제한·UNC 변환과 기존 보안 회귀 18 tests 통과
 - [x] 실패 재현 tree 826개 객체를 수정 helper로 전부 회수하고 anchor empty 확인
-- [x] coding agent·runner·workspace·hardlink 확장 회귀 146 passed/1 skipped, 전체 Ruff·diff 검증
-- [ ] 구현 비참여 독립 리뷰, PR, Linux CI, squash merge
+- [x] coding agent·runner·workspace·hardlink 확장 회귀 148 passed/1 skipped, 전체 Ruff·diff 검증
+- [x] 구현 비참여 독립 리뷰 P0/P1/P2/P3 0건
+- [ ] PR #97 갱신 HEAD Linux CI, Ready 전환, squash merge
 
 #96은 이미 소비된 seed 7103 coding 기회를 되돌리거나 피처 품질을 입증하지 않는다. 수정이 main에
 반영된 뒤 새 seed·fixture·evaluation/final과 별도 비용 승인을 고정해 #71을 다시 실행한다.

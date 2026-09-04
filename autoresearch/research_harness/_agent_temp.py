@@ -11,8 +11,10 @@ ACL·소유권 변경이나 동시 악성 파일 교체에 대한 별도 격리�
 
 from __future__ import annotations
 
-import json
+from collections.abc import Iterator
 import hashlib
+import json
+import os
 from pathlib import Path
 import stat
 import sys
@@ -26,14 +28,21 @@ _BOUNDARIES = (".", ".git", "harness_out", _ANCHOR)
 
 def _io_path(path: Path) -> Path:
     """Windows local I/O에만 extended path를 적용하고 논리 경로는 유지한다."""
-    if sys.platform == "win32" and not str(path).startswith("\\\\?\\"):
-        return Path(f"\\\\?\\{path.absolute()}")
+    if sys.platform == "win32":
+        absolute = str(path.absolute())
+        if absolute.startswith("\\\\?\\"):
+            return Path(absolute)
+        if absolute.startswith("\\\\"):
+            return Path(f"\\\\?\\UNC\\{absolute[2:]}")
+        return Path(f"\\\\?\\{absolute}")
     return path
 
 
-def _children(path: Path) -> list[Path]:
+def _children(path: Path) -> Iterator[Path]:
     """장경로 directory entry를 논리 자식 경로로 반환한다."""
-    return [path / child.name for child in _io_path(path).iterdir()]
+    with os.scandir(_io_path(path)) as entries:
+        for child in entries:
+            yield path / child.name
 
 
 def _identity(path: Path, *, directory: bool) -> list[int]:
