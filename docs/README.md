@@ -95,8 +95,8 @@
 - [Spec — 가설 수신부터 `[AR]` 이슈 발행까지](specs/2026-08-04-hypothesis-to-auto-research-issue.md) — 필드 소유권 3분할, 시드 고정, `gh` 발행 경계, 멱등성 (#516)
 - [Plan — 가설 수신부터 `[AR]` 이슈 발행까지 구현](plans/2026-08-04-hypothesis-to-auto-research-issue.md) (#516)
 - [Spec — 자율 ML 연구 Harness 기반 MVP와 논문 로드맵](specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md) — 저장소 전체 수정·외부 Sealed Judge·σ 기반 판정·local-first 반복 연구 계약과 §12의 구현/회귀·실측·수용 판단 구분 (#17; 최초 설계는 이전 조직 #769). 현재 유효 계약이므로 유지한다.
-- [Plan — 로컬 Research Harness MVP](plans/2026-08-15-local-research-harness-mvp.md) — Task 1~6 핵심 구현·Task 7 주요 실측·#69 단일 실패 candidate 자동 수정 실측 완료. 코드 반영 상태는 PR #70을 따르며 피처 추가 실증, 사람 개입 계측·판정 기준 수용 판단이 남아 archive하지 않는다 (#17, 2026-09-03 갱신).
-- [실측·포트폴리오 기록 — 로컬 자율 ML 실험 E2E](reports/2026-09-03-local-autonomous-experiment-e2e.md) — 실제 agent 피드백 수정·재학습·중단 복구·final/REPORT (#60), 설명 개선 (#62), Windows 입력 읽기·등록 temp 회수 (#54A/B), 중간점검 (§11, #67), 실제 실패 코드 단일 수정과 σ=0 판정 불가·기록 Judge의 증거 한계 (§12, #69), 피처 입력 증거 보완·양수 sigma calibration·coding 2회 뒤 회수 실패 (§13, #71 실증 미완료), 보안 테스트 하드링크 수명 보완 (§14, #73), 중첩 fixture 생성·재사용과 내용 동일성 (§15, #74), Stage C 오류 전달·구조 필드 보호와 후속 #77·#79 (§16, #76), 중첩 fixture의 candidate metadata/view 소비 (§17, #77), Snapshot/Judge 오류 전달·필드 보호 (§18, #79).
+- [Plan — 로컬 Research Harness MVP](archive/plans/2026-08-15-local-research-harness-mvp.md) — Task 1~6 구현, Task 7의 feedback·재개·복구·단일 피처 실증과 ADR 0003 수용 결정을 완료해 archive했다 (#17, 2026-09-05).
+- [실측·포트폴리오 기록 — 로컬 자율 ML 실험 E2E](reports/2026-09-03-local-autonomous-experiment-e2e.md) — #60 feedback·재개·엄격한 기각, #69 실패 코드 수정·σ=0 판정 불가, #71 새 22번째 피처의 offline promote와 §23 MVP 정책 수용까지 기록한다.
 - [Spec — Research Harness P0-1 평가 snapshot](specs/2026-08-31-research-harness-evaluation-snapshot.md) — 완료된 P0-1 구현의 현재 유효 계약: `slate_id`, 평가 기간·click 귀속, label 봉인, split·fingerprint, 독립 재생성과 candidate-safe data view (#17, #22). 후속 Judge/Controller가 계속 소비하는 정본이므로 archive하지 않는다.
 - `applications/experiment_platform/` (FastAPI + Codex CLI/OpenAI + PostgreSQL 실험 API)
 - [Spec — Agent Orchestration GKE 내부 배포](specs/2026-07-30-agent-orchestration-gke-internal-deployment.md)
@@ -122,6 +122,7 @@
 - [문제 해결 기록 — CI Docker 반복 빌드 개선](runbooks/ci-docker-cache.md) — 병목 근거, 대안·트레이드오프, 구현·리뷰·검증, 포트폴리오 초안과 후속 측정 (#81)
 - [문제 해결 기록 — CI pytest 병렬 실행](runbooks/ci-pytest-parallel.md) — 직렬 실행 병목 근거, xdist 선택과 로컬 비교, PR·main 원격 최종 실측 (#85, #87)
 - [ADR 0002 — 저장소 책임 경계](adr/0002-repository-responsibility-boundaries.md)
+- [ADR 0003 — 로컬 Research Harness MVP 수용 경계](adr/0003-local-research-harness-mvp-acceptance.md)
 - [Spec — 저장소 구조 재정리](specs/2026-07-15-repo-restructure.md)
 - [Spec — 머지된 PR 리포트 아카이브](specs/2026-07-26-pr-report-archive-design.md)
 
@@ -129,6 +130,7 @@
 
 - [0001 — YouTube 프록시의 목적](adr/0001-youtube-proxy-purpose.md)
 - [0002 — 저장소 책임 경계](adr/0002-repository-responsibility-boundaries.md)
+- [0003 — 로컬 Research Harness MVP 수용 경계](adr/0003-local-research-harness-mvp-acceptance.md)
 
 ## 유효한 Spec (살아있는 계약)
 
@@ -172,10 +174,6 @@
 - [Research Harness P0-1 평가 snapshot](specs/2026-08-31-research-harness-evaluation-snapshot.md) —
   원천 `slate_id`, multi-day click 귀속, validation/final 분리, label 봉인과
   content-addressed write-once snapshot, 독립 두 root 재생성과 candidate-safe data view 계약 (#17, #22; P0-1 완료, 현재 유효 계약)
-- [로컬 Research Harness MVP 구현 계획](plans/2026-08-15-local-research-harness-mvp.md) —
-  사람이 준 가설·ExperimentCard부터 봉인 평가·반복 실행·ledger·REPORT까지의 구현 순서
-  (#17, Task 1~6 핵심 구현·Task 7 주요 실측·#69 단일 복구 실측 완료. 코드 반영은 PR #70 참조; 잔여 피처 실증·자율성 계측·수용 판단을 추적하므로 archive하지 않음)
-
 ## 가이드
 
 - [전체 파이프라인 개요](guides/pipeline-overview.md) — 배치·서빙·시뮬레이션 폐루프 mermaid 다이어그램

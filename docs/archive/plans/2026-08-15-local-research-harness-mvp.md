@@ -1,8 +1,8 @@
 # 로컬 Research Harness MVP — 독립 실행 경로 Implementation Plan
 
-> **현황 2026-09-05 (#71): Task 1~6 핵심 구현·Task 7의 복구 및 단일 피처 추가 실측 완료.**
-> #71 결과는 PR #98로 main에 반영됐으며 전체 MVP 수용 완료는 아니다. 아래 종합 체크리스트와
-> 잔여 검증 우선순위를 따른다. 과거 Task의 문제·결과는 해당 구현 시점 기록이다.
+> **완료 2026-09-05 (#17): Task 1~6 구현과 Task 7의 복구·단일 피처 실증·정책 수용 완료.**
+> #71 결과는 PR #98로 main에 반영됐다. 판정·비용·자율성의 MVP 증거 경계는 ADR 0003으로
+> 수용했으며 이 계획은 완료 상태로 archive한다. 과거 Task의 문제·결과는 해당 시점 기록이다.
 > #76은 PR #80, #77은 PR #89, #79는 PR #91, #96은 PR #97로 merge됐다. #71 seed 7104의
 > 새 평가 대상 재실행은 Task 7F 계약에 따라 offline promote까지 완주했다.
 
@@ -22,15 +22,15 @@ worktree 바깥의 Judge 소유 디렉터리와 별도 프로세스에 둔다. �
 
 **Tech Stack:** Python 3.11/3.12, uv, pytest, ruff, pandas/pyarrow, typer
 
-**Spec:** [`docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md`](../specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md)
+**Spec:** [`docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md`](../../specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md)
 (최초 설계는 이전 조직 #769에서 시작했으며, 현재 개인 저장소 추적은 #17)
 
 **Issue:** [#17](https://github.com/bbungjun/Autoresearch/issues/17)
 
-**현재 판독 기준:** [spec §12](../specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md#12-mvp-완료-조건)의
-상태 표가 구현·회귀, 실제 측정, 남은 수용 판단, 제품 로드맵을 구분한다. Task 7의 남은
-시나리오와 전체 완료 조건이 있으므로 이 plan은 archive하지 않는다. 최신 실측과 후속 수정은
-[포트폴리오 기록 §5·§7~12](../reports/2026-09-03-local-autonomous-experiment-e2e.md)에 연결한다.
+**최종 판독 기준:** [spec §12](../../specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md#12-mvp-완료-조건)의
+상태 표가 구현·회귀, 실제 측정, 수용한 증거 경계와 제품 로드맵을 구분한다. Task 7의 수용
+판단까지 끝났으므로 이 plan은 archive한다. 최신 실측과 후속 수정은
+[포트폴리오 기록 §5·§7~23](../../reports/2026-09-03-local-autonomous-experiment-e2e.md)에 연결한다.
 
 ---
 
@@ -1019,7 +1019,7 @@ adapter, 재학습 `harness-predict` CLI, baseline sigma 실측은 없으며 각
       NVIDIA 드라이버 591.86, Python 3.12.13을 확인했다. 조회한 프로젝트 가상환경에는
       LightGBM·PyArrow가 있고 PyTorch·Sentence Transformers는 없었다. 이는 최초 조회 기록이다.
       이후 #46에서 별도 환경의 CUDA tensor와 실제 모델 추론을 검증했다
-- [x] [evaluation snapshot spec §18](../specs/2026-08-31-research-harness-evaluation-snapshot.md)에
+- [x] [evaluation snapshot spec §18](../../specs/2026-08-31-research-harness-evaluation-snapshot.md)에
       두 metadata 파일의 컬럼·시점·cold-start·v2 manifest·final 전달·재개 identity 목표를 확정했다
 - [x] CUDA 지원 실행 의존성을 준비하고 작은 텐서 연산과 실제 모델 추론을 검증한 뒤
       소형 로컬 모델 ID/revision·배치 크기·trial 시간 상한을 정한다. 초기 실험에 GCP는 사용하지 않는다.
@@ -1825,7 +1825,7 @@ Final은 같은 후보를 5-seed paired 10 fit으로 한 번 평가했다. NDCG 
 2σ에 미달해 `discard / primary_threshold_not_met`, 사용자 결론은 `no_improvement`다.
 관측 수치 향상과 채택 기준 충족을 구분하며 baseline을 유지했다. 이는 p-value 기반
 통계 유의성 판정이 아니다. 전체 7개 지표·seed 분포·해석은
-[실측 보고서](../reports/2026-09-03-local-autonomous-experiment-e2e.md)에 남겼다.
+[실측 보고서](../../reports/2026-09-03-local-autonomous-experiment-e2e.md)에 남겼다.
 
 세 호출 runtime은 156.511초(중단), 866.336초(재개·종료), 3.023초(종료 재호출)다.
 최초 두 호출 합은 1,022.847초이며 Python cold import와 호출 사이 대기 시간은 제외한다.
@@ -1964,20 +1964,19 @@ B 검증은 통합 회귀 94개와 이후 추가 중단/로그 실패를 포함�
       표준편차를 각각 구하고 ledger에 기록한다. 측정 전에는 `compare()`가 판정할 수 없다
 - [x] 측정된 지표별 σ map과 baseline 지표 절대값을 이 plan과 spec에 기록한다 — 이후
       실험의 기준선이다
-- [ ] 5-seed 실측 분포와 의도된 개선·무변경 candidate 경로를 보고 `2σ/-1σ`,
+- [x] 5-seed 실측 분포와 의도된 개선·무변경 candidate 경로를 보고 `2σ/-1σ`,
       `σ > 1e-6`, 지표별 20%·30개 coverage 하한이 실용적인지 수용 판단한다.
-      유지 또는 조정 근거를 명시해야 하며, 측정이 끝났다는 이유만으로 완료하지 않는다.
-      변경이 필요하면 해당 새 실험의 승격 판정을 열기 전에 spec과 plan을 먼저 갱신한다.
-      이번 문서 갱신에서는 기준을 바꾸지 않으며 #60의 판정도 재해석하지 않는다
+      #60의 근소한 기각, #69의 σ=0 판정 불가, #71의 명확한 승격을 근거로 기존 정책을
+      유지한다. 통계적 최적성이나 실제 사용자 효과를 주장하지 않으며 ADR 0003에 기록한다
 - [x] 최악 길이 300,000행 predictions fixture로 parser wall-clock 10초·메모리 256 MiB와
       65 MiB artifact 상한을 실측한다. 시간·메모리 안에서 안정적으로 처리하지 못하거나
       실사용 slate 규모와 맞지 않으면 행 상한을 포함한 세 초기값을 함께 낮춰 spec과 plan을
       먼저 갱신한다
 - [x] 로컬 end-to-end 1회 완주 — slate 조립 → baseline 점수화 → Judge 판정 → ledger 기록
       → 피드백 반환 → 2차 trial
-- [ ] **promote 경로 검증** — 일부러 개선된 candidate(유효한 피처 1개 추가)로 `promote`가
-      실제 발생하는지 확인한다. 일반적인 실제 validation promote는 #60의 class weight·트리
-      설정 변경으로 확인했다. 이 항목은 더 구체적인 피처 추가 실험 의무여서 미완료로 둔다
+- [x] **promote 경로 검증** — #71 seed 7104에서 실제 agent가 `mean_topic_similarity`를
+      22번째 피처로 추가했고 validation과 single-use final이 모두
+      `promote / promotion_threshold_met`으로 끝났다. 합성 fixture의 offline 결과다
 - [x] 중단 후 checkpoint 재개 1회 확인 — 첫 validation durable append 후 주입 중단
 - [x] validation loop가 끝난 뒤 final holdout을 정확히 1회 평가하고 feedback 없이 종료되는지,
       새 run·새 ledger·동시 Controller에서도 온전한 같은 Judge 상태 루트의 registry가
@@ -2003,7 +2002,7 @@ B 검증은 통합 회귀 94개와 이후 추가 중단/로그 실패를 포함�
 
 ## MVP 완료 조건
 
-실행·실측 의무는 위 Task 7과 [spec §12](../specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md#12-mvp-완료-조건)를
+실행·실측 의무는 위 Task 7과 [spec §12](../../specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md#12-mvp-완료-조건)를
 함께 따른다. 아래 완료는 구현 경계와 관련 회귀, 필요한 실제 측정 근거가 확보됐다는 뜻이다.
 
 - [x] 에이전트의 수정 위치를 path allowlist로 제한하지 않는다. 시크릿·산출물 위생 계약은 유지한다
@@ -2073,7 +2072,7 @@ Final은 기존 5-seed paired batch이며 판정 정책이나 baseline을 성공
 **사전 측정 중간 결과:** 5 fit은 완료했으나 Recall@10이 5회 모두 1.0으로 σ=0이다.
 현재 positive-noise gate를 만족하지 않으므로 실제 agent·final 실행 전에 제약을 보고했다.
 다른 6개 지표의 σ는 유효하며 raw 값·평균·σ는 별도 calibration 원본에 보존했다.
-평균·σ와 문제 해석은 [포트폴리오 §12](../reports/2026-09-03-local-autonomous-experiment-e2e.md#12-실패한-코드를-고쳤는가-정상-코드에서-다시-시작했는가--69)에 기록했다.
+평균·σ와 문제 해석은 [포트폴리오 §12](../../reports/2026-09-03-local-autonomous-experiment-e2e.md#12-실패한-코드를-고쳤는가-정상-코드에서-다시-시작했는가--69)에 기록했다.
 σ를 그대로 유지하고 기존 `inconclusive / insufficient_baseline_noise` 경로로 복구 실증과
 품질 채택을 분리할 수 있다. 이후 사용자가 이 방향의 계속 진행을 승인했다.
 **실행 조건 확정:** 측정된 σ=0과 기존 판정 기준을 유지한다. 복구 여부는 실패 코드·
@@ -2116,7 +2115,7 @@ Judge는 `concerns`를 남겼다. 구조화 기록으로 복구 후 학습·평�
 원본 감사에서 검증했으며, Judge가 모든 과정을 독립 확인했다고 표현하지 않는다. 독립 감사는
 차단 사항 없이 source 연결 118건·ledger 연결 169건·manifest/binding·Judge 증거 6건과
 기존 #60 관측 파일 208개 hash 일치를 확인했다. 상세 문제·
-해결·결과와 감사 근거는 [포트폴리오 §12](../reports/2026-09-03-local-autonomous-experiment-e2e.md#12-실패한-코드를-고쳤는가-정상-코드에서-다시-시작했는가--69)를 따른다.
+해결·결과와 감사 근거는 [포트폴리오 §12](../../reports/2026-09-03-local-autonomous-experiment-e2e.md#12-실패한-코드를-고쳤는가-정상-코드에서-다시-시작했는가--69)를 따른다.
 피처 추가 promote, σ=0을 포함한 정책 수용 판단, 범용 자율성·비용 측정은 남아 있다.
 
 ### Task 7F: 실제 피처 하나 추가·학습·평가 — #71 (seed 7104 실증·반영 완료)
@@ -2536,14 +2535,10 @@ basetemp에서 1,302 passed, 13 skipped / 228.42초였다. skip은 기존 플랫
 비참여 독립 리뷰는 P0/P1/P2/P3 모두 0건이었고 관련 회귀 260 passed, 5 skipped를 재확인했다.
 PR #91의 Linux Python 3.11/3.12, Feast/Postgres, lock drift, Ruff와 선택 이미지 CI도 통과했다.
 
-### 잔여 검증 우선순위 — 2026-09-03 권고
+### 후속 로드맵 우선순위 — 2026-09-05 MVP 수용 뒤
 
-아래는 #68 문서 갱신 당시의 권고안이며 당시에는 실험 실행 승인이 포함되지 않았다.
-이후 첫 권고는 위 Task 7R (#69)에서 승인·실측했고, 코드 반영·CI·merge 상태는 PR #70을 따른다.
-2번 피처 추가는 처음 #71에서 회수 실패했으나 #73·#74·#76·#77·#79·#92·#94·#96의 기반
-보완 뒤 seed 7104로 offline promote까지 완주했다. 다음 우선순위는 3번 정책 수용 판단과 자동
-사람 개입·달러 비용 계측이다.
-실행 전 별도 이슈에서 실패 주입 위치·관측 범위·예산·종료 조건을 고정한다.
+아래 1~3은 #68 당시의 권고안이다. 1번은 #69, 2번은 #71, 3번은 ADR 0003과 보고서 §23에서
+완료했다. 자동 사람 개입·달러 비용 계측과 더 넓은 품질 검증은 MVP 이후 별도 이슈다.
 
 1. **최소 자동 복구 시나리오(실측 완료):** 새 disposable candidate에 원인이 명확한 실패 하나를
    주입한다. 실패 기록 → 구조화 feedback → 새 agent의 수정 한 번 → 실제 학습·평가·REPORT까지
