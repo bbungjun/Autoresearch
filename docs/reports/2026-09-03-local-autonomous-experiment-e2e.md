@@ -1118,3 +1118,42 @@ ACL·소유권 변경이나 동시 악성 inode 교체를 새로 방어하지 �
 소비된 final은 수정하지 않았고, 피처의 공식 학습·평가 성능도 아직 입증하지 않았다.
 PR #95의 Linux Python 3.11/3.12, Feast/Postgres, Ruff, lock drift와 선택 Docker 이미지 CI도
 모두 통과했다.
+
+## 21. 통과한 agent 테스트의 장경로 temp를 회수하기 — #96
+
+**문제와 근거:** #71 seed 7103은 최신 main `9ede758`, 새 fixture와 고유 validation/final ID,
+표준 candidate view 게시·재사용·회수 preflight를 통과했다. Baseline 5회도 모두 완료됐고
+Validation NDCG@10은 평균 0.7593417171, 표본 표준편차 0.0261002885였다. 두 coding agent는
+각각 약 374.842초와 381.454초 동안 피처 patch와 candidate commit을 만들고 관련 140 tests와
+Ruff를 통과했다. 관측 token은 첫 호출 input 1,319,670/cached 1,243,520/output 8,367/reasoning
+1,777, 둘째 input 1,673,347/cached 1,580,032/output 10,383/reasoning 2,750이었다. 그러나 두
+candidate 모두 prepare의 `workspace_cleanup_failed`로 끝나 공식 validation 학습·평가는 0회였다.
+Controller 호출은 811.034초였고 `inconclusive / no_valid_validation_candidate`로 종료됐다.
+#92 gate에 따라 새 final marker와 final fit은 생성되지 않았다. 새 문맥 기록 Judge 1회는
+18.187초, input 44,580/output 792/reasoning 119 token이었으며 달러 비용과 자동 사람 개입 값은
+계속 `null`이다.
+
+**원인과 선택:** 두 cleanup sidecar는 `FileNotFoundError`, object/removed count 0을 남겼다.
+Agent 명령에는 temp anchor를 삭제하는 동작이 없고 `.agent-tmp/runtime`도 존재했다. 두 번째
+candidate SHA를 별도 worktree에 열어 실제 temp 변수와 pytest 명령을 재생하자 테스트는 통과했지만,
+`_agent_temp.clean()`이 pytest fixture의 길이 266자 파일을 `Path.lstat()`하는 순회 단계에서
+동일하게 실패했다. 같은 파일은 일반 Python 경로로 존재하지 않는 것처럼 보였고 Windows
+extended path로는 존재했다. 따라서 파일 소실이나 #94의 빈 runtime 사례가 아니라 helper 내부
+I/O의 legacy path 경계 문제다. #90은 candidate destination 게시를 다루므로 coding temp 수명은
+#96으로 분리했다.
+
+Windows 전역 설정이나 temp 위치를 바꾸지 않고, helper가 보안 판단에 쓰는 논리 경로와 등록
+identity는 유지한다. 실제 local filesystem 연산에만 extended path를 적용하고 directory listing의
+이름을 다시 논리 자식 경로에 결합한다. 이 방식은 공개 evidence에 device path를 노출하지 않으며,
+symlink·junction/reparse·hardlink와 등록 경계 교체를 허용하지 않는다.
+
+**결과와 한계:** 구현 전 신규 계약은 `_agent_temp.py:87`에서 1 failed였다. 최소 변경 뒤 direct
+clean과 `python -I -S` 격리 helper를 포함한 temp 보안 테스트 16건이 통과했다. 실제 실패를
+재현한 candidate temp tree에도 수정 helper를 적용해 826개 객체를 전부 회수했고 등록 anchor가
+비었음을 확인한 뒤 진단 worktree를 제거했다. Coding agent·runner·workspace·hardlink 확장 회귀는
+146 passed, 1 skipped였으며 skip은 기존 POSIX 실행권한 전용이다. 사후 재해시에서 기존 #60
+208개, #69 128개, 원 #71 112개, seed 7102 119개 파일과 기존 final marker가 모두 일치했다.
+이 결과는 장경로 회수 결함의 수정 근거이며,
+seed 7103 후보의 공식 22열 학습이나 성능 결과가 아니다. 두 coding 기회는 이미 소진됐고 patch와
+원래 failure evidence를 보존한다. #96의 확장 회귀·독립 리뷰·CI·merge 뒤, #71은 새 seed와 새
+single-use final 계약 및 별도 비용 승인으로 다시 실행해야 한다.
