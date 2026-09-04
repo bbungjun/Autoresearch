@@ -2167,9 +2167,21 @@ validation/worktree preflight를 다시 통과해야 coding을 시작한다. Cod
 - [x] agent/training/final 0회와 새 final registry 미생성 확인
 - [x] #60 208개·#69 128개·원 #71 112개 및 seed 7102 run 119개 evidence 전후 보존
 - [x] validation/final ID 10개 유일성 및 전체 preflight 독립 재리뷰 P0/P1/P2/P3 0건
-- [ ] 비용 실행 직전 GPU gate 재확인 — 2026-09-04 관측 시 Ollama가 6.6/8.2GB를 사용해 대기
-- [ ] 승인 뒤 baseline seed 101~105 calibration부터 비용 구간 실행
-- [ ] coding 최대 2회, 공식 22열 validation/final, REPORT·Judge·감사 완료
+- [x] 비용 실행 직전 GPU gate와 Ollama 종료 승인 확인
+- [x] baseline seed 101~105 calibration과 양수 sigma gate 통과
+- [x] coding 최대 2회 실행 — 두 candidate 모두 Windows 장경로 cleanup 실패, validation/final 0회
+- [x] 원인 #96 수정·독립 리뷰·PR #97 CI·squash merge
+- [ ] 공식 22열 validation/final, REPORT·Judge·감사 완료
+
+**seed 7104 준비 상태:** #96 merge commit
+`0957792ba276af33fbea0549f09446ffcf2284d0`을 새 baseline으로 고정했다. 새 fixture와
+validation/final ID를 만들고 표준 candidate view 게시·재사용·회수 preflight를 통과했다.
+기존 #60/#69/#71과 seed 7102/7103 evidence를 재해시했으며 validation/final ID 12개가 모두
+고유하다. 독립 preflight 리뷰는 P0/P1/P2/P3 0건이었다. Baseline seed 101~105는 21열로 모두
+완료됐고 NDCG@10 평균 0.7697717746, 표본 표준편차 0.0064497224로 양수 sigma gate를 통과했다.
+Run config SHA는 `e8b11f9c097a0d7a1800b757eaaf128e38ba11c3ab091267da0f08da853288e6`이며
+final registry는 비어 있고 marker는 없다. Coding 최대 2회와 Judge 1회의 별도 비용 승인을 받은
+뒤 이 config를 한 번 실행한다.
 
 - [x] #71 발행과 이슈 연결 브랜치 생성, 기존 입력/21개 피처 및 학습 receipt 검토
 - [x] 클릭 비중의 학습 cold-start·조회수/나이의 순서 중복을 입력 구조에서 확인하고

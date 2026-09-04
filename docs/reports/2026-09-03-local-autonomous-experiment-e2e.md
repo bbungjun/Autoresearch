@@ -1161,3 +1161,23 @@ P0/P1/P2/P3 모두 0건으로 종료했다. 사후 재해시에서 기존 #60
 seed 7103 후보의 공식 22열 학습이나 성능 결과가 아니다. 두 coding 기회는 이미 소진됐고 patch와
 원래 failure evidence를 보존한다. #96의 확장 회귀·독립 리뷰·CI·merge 뒤, #71은 새 seed와 새
 single-use final 계약 및 별도 비용 승인으로 다시 실행해야 한다.
+
+## 22. seed 7104를 새 baseline에 결속해 비용 실행 직전까지 준비하기 — #71
+
+**문제와 선택:** seed 7103의 coding 기회 2회는 장경로 temp 회수 실패로 소진됐고 공식
+validation/final은 0회였다. #96을 PR #97로 merge한 뒤 결과를 보지 않고 다음 정수 seed 7104와
+merge commit `0957792ba276af33fbea0549f09446ffcf2284d0`을 새 baseline으로 고정했다. 이전 fixture나
+미소비 final ID를 재사용하지 않았다.
+
+**검증 결과:** 무비용 preflight에서 새 fixture·snapshot을 만들고 candidate view 최초/재사용 hash
+`7ed47dbfe745d6e0c0ef27edcd59560c4ec809f288e16352d1327ee2a9ff52a5`가 일치했다. Workspace와
+worktree 등록은 제거됐고 `candidate_lock_prepare`는 재현되지 않았다. 기존 #60 208개, #69
+128개, 원 #71 112개, seed 7102 119개, seed 7103 55개 evidence를 재해시했고 validation/final
+ID 12개가 모두 고유했다. 이 단계의 agent·training·final 호출은 모두 0회였으며 독립 리뷰는
+P0/P1/P2/P3 0건이었다.
+
+Baseline seed 101~105는 21개 피처로 모두 완료됐다. NDCG@10은 평균 0.7697717746, 표본
+표준편차 0.0064497224였고 7개 metric 모두 valid count 5와 양수 sigma를 만족했다. 준비한 run
+config SHA는 `e8b11f9c097a0d7a1800b757eaaf128e38ba11c3ab091267da0f08da853288e6`이다. Final registry는
+생성됐지만 비어 있고 marker는 없다. 남은 단계는 별도 비용 승인 뒤 coding 최대 2회, 유효 후보가
+있을 때만 공식 validation과 single-use final, REPORT·새 문맥 Judge·22열 감사를 수행하는 것이다.
