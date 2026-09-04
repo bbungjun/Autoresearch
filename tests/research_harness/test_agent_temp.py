@@ -9,6 +9,7 @@ assertion 실패 시에도 해제하여 바깥 coding temp에 잔류하지 않�
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -146,6 +147,47 @@ def test_object_limit_preflight_deletes_nothing(tmp_path: Path, monkeypatch: pyt
     assert len(list(anchor.iterdir())) == 3
 
 
+def test_object_limit_stops_streaming_directory_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cwd, registration = _workspace(tmp_path)
+    runtime = cwd / "harness_out/.agent-tmp/runtime"
+    for name in ("one", "two", "three"):
+        (runtime / name).write_text(name)
+    original_scandir = os.scandir
+    consumed = 0
+
+    class GuardedScan:
+        def __init__(self, path: Path) -> None:
+            self._entries = original_scandir(path)
+
+        def __enter__(self) -> "GuardedScan":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self._entries.close()
+
+        def __iter__(self) -> "GuardedScan":
+            return self
+
+        def __next__(self) -> os.DirEntry[str]:
+            nonlocal consumed
+            entry = next(self._entries)
+            consumed += 1
+            if consumed > 2:
+                raise AssertionError("object limit 뒤의 entry를 읽음")
+            return entry
+
+    monkeypatch.setattr(temp.os, "scandir", GuardedScan)
+    monkeypatch.setattr(temp, "_LIMIT", 1)
+
+    with pytest.raises(ValueError, match="temp_object_limit"):
+        temp.clean(cwd, registration, _receipt())
+
+    assert consumed == 2
+    assert sorted(path.name for path in runtime.iterdir()) == ["one", "three", "two"]
+
+
 def test_partial_failure_counts_successful_deletions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cwd, registration = _workspace(tmp_path)
     anchor = cwd / "harness_out/.agent-tmp"
@@ -167,6 +209,64 @@ def test_partial_failure_counts_successful_deletions(tmp_path: Path, monkeypatch
         temp.clean(cwd, registration, receipt)
     assert receipt["removed_count"] == 2 and len(list(anchor.iterdir())) == 1
 
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows extended path regression")
+def test_clean_removes_registered_file_beyond_legacy_max_path(tmp_path: Path) -> None:
+    cwd, registration = _workspace(tmp_path)
+    logical_parent = cwd / "harness_out/.agent-tmp/runtime"
+    for index in range(4):
+        logical_parent /= f"segment-{index}-" + "x" * 64
+    logical_file = logical_parent / "part-0.parquet"
+    extended_runtime = Path("\\\\?\\" + str(cwd / "harness_out/.agent-tmp/runtime"))
+    extended_file = Path("\\\\?\\" + str(logical_file))
+    extended_file.parent.mkdir(parents=True)
+    extended_file.write_bytes(b"fixture")
+    assert len(str(logical_file)) > 260
+    receipt = _receipt()
+
+    try:
+        temp.clean(cwd, registration, receipt)
+    finally:
+        if extended_runtime.exists():
+            shutil.rmtree(extended_runtime)
+
+    assert receipt["status"] == "complete"
+    assert receipt["removed_count"] == receipt["object_count"]
+    temp.validate(cwd, registration, empty=True)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows extended path regression")
+def test_io_path_uses_extended_unc_prefix() -> None:
+    path = Path(r"\\server\share\workspace")
+
+    assert str(temp._io_path(path)) == r"\\?\UNC\server\share\workspace"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows extended path regression")
+def test_isolated_worker_removes_file_beyond_legacy_max_path(tmp_path: Path) -> None:
+    cwd, registration = _workspace(tmp_path)
+    logical_parent = cwd / "harness_out/.agent-tmp/runtime"
+    for index in range(4):
+        logical_parent /= f"segment-{index}-" + "x" * 64
+    logical_file = logical_parent / "part-0.parquet"
+    extended_file = Path("\\\\?\\" + str(logical_file))
+    extended_file.parent.mkdir(parents=True)
+    extended_file.write_bytes(b"fixture")
+
+    result = subprocess.run(
+        (sys.executable, "-I", "-S", str(Path(temp.__file__).resolve())),
+        cwd=cwd,
+        input=json.dumps(registration),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    receipt = json.loads(result.stdout)
+    assert receipt["status"] == "complete"
+    assert receipt["removed_count"] == receipt["object_count"]
+    temp.validate(cwd, registration, empty=True)
 
 def test_isolated_worker_consumes_stdin_without_importing_candidate_code(tmp_path: Path) -> None:
     cwd, registration = _workspace(tmp_path)
