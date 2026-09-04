@@ -862,6 +862,16 @@ manifest identity와 산출물 bytes를 변경하지 않는다. alias/reparse/re
 StageCError 가림은 [#76](https://github.com/bbungjun/Autoresearch/issues/76)이며 이번에
 예외 클래스 자체를 바꾸지 않는다. 실제 sandbox·피처 실험 성공 여부와도 구분한다.
 
+**#76 Stage C 오류 전달:** 후속 수정에서는 `StageCError`의 code·stage·dt·count·
+identifier_prefix를 초기화 후 일반 대입·삭제로 바꿀 수 없도록 유지하면서, Exception의
+traceback·context·cause·suppress_context 등 런타임 메타데이터 갱신은 허용한다. 실제
+with/contextmanager를 거쳐도 동일 예외 객체와 구조화 필드가 전달되어야 한다. 생성자 필드,
+필드 기반 equality/hash, 식별자의 UTF-8 16바이트 축약과 식별자 자체를 노출하지 않는
+문자열 계약은 유지한다. 알려진 하위 오류를 `raise ... from None`으로 전달하는 기존 경계의
+출력 억제도 유지한다. 원본 context를 삭제하거나 실패를 성공으로 바꾸지 않는다.
+이 보호는 일반 필드 대입·삭제 계약이며, Python 내부 접근을 통한 적대적 변조 방어가 아니다.
+다른 frozen exception이나 #77 경로 소비까지 일괄 수정하지 않는다.
+
 agent는 initial card와 validation feedback만 받아 현재 champion에서 한 가설을 구현한다.
 채점 규칙·정답·final 결과·grant·Judge 경로는 prompt/context에 넣지 않는다. 저장소 내부
 수정 경로 allowlist는 추가하지 않으며, 외부 trusted Judge가 수치 판정을 소유한다.
