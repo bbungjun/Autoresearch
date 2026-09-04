@@ -2167,6 +2167,7 @@ validation/worktree preflight를 다시 통과해야 coding을 시작한다. Cod
 - [x] agent/training/final 0회와 새 final registry 미생성 확인
 - [x] #60 208개·#69 128개·원 #71 112개 및 seed 7102 run 119개 evidence 전후 보존
 - [x] validation/final ID 10개 유일성 및 전체 preflight 독립 재리뷰 P0/P1/P2/P3 0건
+- [ ] 비용 실행 직전 GPU gate 재확인 — 2026-09-04 관측 시 Ollama가 6.6/8.2GB를 사용해 대기
 - [ ] 승인 뒤 baseline seed 101~105 calibration부터 비용 구간 실행
 - [ ] coding 최대 2회, 공식 22열 validation/final, REPORT·Judge·감사 완료
 
