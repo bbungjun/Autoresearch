@@ -4,7 +4,7 @@
 > 코드 반영 상태는 [PR #70](https://github.com/bbungjun/Autoresearch/pull/70)을 따르며 전체 MVP 수용 완료는 아니다. 아래 종합 체크리스트와
 > 잔여 검증 우선순위를 따른다. 과거 Task의 문제·결과는 해당 구현 시점 기록이다.
 > 후속 #71은 coding 2회 뒤 prepare 회수 실패로 피처 학습 실증이 막혔다. Task 7F와 #73을 따른다.
-> #76은 PR #80, #77은 PR #89로 merge됐고, #79의 Snapshot/Judge 오류 전달은 PR #91에서 검증을 마치고 사람의 최종 판정을 기다린다.
+> #76은 PR #80, #77은 PR #89, #79는 PR #91로 merge됐다. #71의 새 평가 대상 재실행은 아래 Task 7F 재실행 계약을 따른다.
 
 **Goal:** 현행 executor를 수정하지 않고 정적 allowlist를 사용하지 않는 독립 로컬 Research
 Harness(봉인된 사후 판정 + 자가 피드백) 경로를 만든다. 사람이 준 가설·`ExperimentCard`로
@@ -2123,6 +2123,27 @@ Judge는 `concerns`를 남겼다. 구조화 기록으로 복구 후 학습·평�
 
 사용자가 승인한 단일 실행은 종료됐다. 계약은 spec §4.8.1이며 실제 결과는 보고서 §13에
 보존한다. PR #72는 준비 코드·실패 결과 기록이며 피처 실증 이슈 #71은 닫지 않는다.
+
+**2026-09-04 재실행 계약:** #73·#74·#76·#77·#79가 main에 반영된 뒤 사용자가 새 실행을
+승인했다. 결과를 보지 않고 이전 seed 7101의 다음 정수인 **7102**와 최신 main
+`0680e16b66dabde1e639600647c226b8ee6edf39`를 새 fixture·baseline으로 고정한다. 이전 #71의
+소비된 final을 초기화하거나 재사용하지 않고 새 evaluation ID와 final registry를 만든다.
+먼저 coding agent·학습·final 호출 없이 실제 표준 경로의 validation metadata/view 게시와
+disposable worktree 회수를 수행한다. 이 preflight에서 #90의 `candidate_lock_prepare`가
+재현되면 비용 있는 실행 전에 중단하고 #90으로 분기한다.
+
+- [ ] seed 7102의 새 fixture와 이전 #60/#69/#71 증거 hash 보존 기록
+- [ ] 표준 경로 validation v2 게시·재사용, 입력 identity와 worktree 회수 preflight
+- [ ] baseline 0680e16의 고정 seed 101~105 calibration 및 양수 sigma gate
+- [ ] coding agent 최대 2회와 공식 validation 학습·평가 최소 1회
+- [ ] 실제 `mean_topic_similarity`가 유한·비상수이고 22열 모델/receipt/manifest가 일치하는지 감사
+- [ ] 새 final 단일 소비, REPORT·새 문맥 Judge, 시간/token/사람 개입 기록
+- [ ] 독립 리뷰 P0/P1 0건, CI 통과, Ready PR; 최종 squash merge는 사람이 판정
+
+재실행의 성공은 피처 후보가 공식 학습·평가와 증거 기록을 완주했다는 뜻이다. 수치 기준에
+미달하면 `discard`를 그대로 완료 결과로 보존한다. infrastructure 오류는 final 전에 멈추고
+원래 오류·patch·미소비 상태를 기록한다. 기존 threshold·seed·모델·embedding·split·label과
+피처 계산 계약은 사후 변경하지 않는다.
 
 - [x] #71 발행과 이슈 연결 브랜치 생성, 기존 입력/21개 피처 및 학습 receipt 검토
 - [x] 클릭 비중의 학습 cold-start·조회수/나이의 순서 중복을 입력 구조에서 확인하고
