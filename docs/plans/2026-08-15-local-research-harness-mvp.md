@@ -4,7 +4,7 @@
 > 코드 반영 상태는 [PR #70](https://github.com/bbungjun/Autoresearch/pull/70)을 따르며 전체 MVP 수용 완료는 아니다. 아래 종합 체크리스트와
 > 잔여 검증 우선순위를 따른다. 과거 Task의 문제·결과는 해당 구현 시점 기록이다.
 > 후속 #71은 coding 2회 뒤 prepare 회수 실패로 피처 학습 실증이 막혔다. Task 7F와 #73을 따른다.
-> #76은 PR #80, #77은 PR #89로 merge됐고, #79의 Snapshot/Judge 오류 전달은 아래 Task 7J 계획을 따른다.
+> #76은 PR #80, #77은 PR #89로 merge됐고, #79의 Snapshot/Judge 오류 전달은 PR #91에서 검증을 마치고 사람의 최종 판정을 기다린다.
 
 **Goal:** 현행 executor를 수정하지 않고 정적 allowlist를 사용하지 않는 독립 로컬 Research
 Harness(봉인된 사후 판정 + 자가 피드백) 경로를 만든다. 사람이 준 가설·`ExperimentCard`로
@@ -2340,7 +2340,7 @@ final metadata·grant·view를 잇는 신규 회귀가 GREEN이 됐고, 기존 #
 POSIX 경로 구분자·파일 모드 가정과 cp949 decode 등 로컬 플랫폼 차이다. 이를 전체 통과로
 기록하지 않으며 Linux Python 3.11/3.12 CI를 별도 최종 근거로 사용한다.
 
-### Task 7J: Snapshot/Judge 오류의 Python 전달 계약 — #79 (구현·로컬 영향 검증 완료)
+### Task 7J: Snapshot/Judge 오류의 Python 전달 계약 — #79 (구현·독립 리뷰·CI 완료)
 
 `EvaluationSnapshotError`와 `JudgeError`는 `frozen=True, slots=True` dataclass다. 최신 main
 `271b148`의 Windows/Python 3.12에서 각 예외를 no-op generator context manager 안에서
@@ -2373,9 +2373,9 @@ dataclass equality/hash/repr/`replace()` 계약은 유지한다. 공용 오류 �
 - [x] `evaluation_errors.py`와 `judge_errors.py`에만 최소 필드 보호 패턴을 적용하고 module docstring 갱신
 - [x] 신규 오류 계약, snapshot publisher/slate, Judge/prediction ingestion, local runtime·controller 인접 회귀 실행
 - [x] 전체 Research Harness, Ruff·`git diff --check` 로컬 검증
-- [ ] Linux Python 3.11/3.12 CI와 필요한 선택 이미지 검증
-- [ ] 문제·대안·RED/GREEN·한계를 spec/plan/포트폴리오에 반영하고 구현 비참여 독립 리뷰 수행
-- [ ] P0/P1 미해결 0건과 CI 성공을 확인한 뒤 Ready 전환; 최종 squash merge는 사람이 판정
+- [x] Linux Python 3.11/3.12 CI와 필요한 선택 이미지 검증
+- [x] 문제·대안·RED/GREEN·한계를 spec/plan/포트폴리오에 반영하고 구현 비참여 독립 리뷰 수행
+- [x] P0/P1 미해결 0건과 CI 성공을 확인한 뒤 Ready 전환; 최종 squash merge는 사람이 판정
 
 **종료 조건:** 두 오류가 generator context manager와 실제 소비 경계에서 원본 타입·객체·필드를
 유지하고 다른 `TypeError`로 바뀌지 않는다. 구조 필드 불변성과 안전한 메시지가 유지되며 예외
@@ -2391,8 +2391,9 @@ holdout 소비와 기존 #60/#69/#71 증거 변경은 수행하지 않는다. �
 5 skipped였다. 기본 pytest temp에서는 기존 `test_fixture.py`의 raw `Path.read_*()` 11건이
 260자 초과 경로로 실패했으며 같은 테스트의 짧은 경로 통과와 구분한다. 전체 Ruff와
 `git diff --check`는 통과했다. 전체 Research Harness도 CI와 같은 xdist 4 worker 및 짧은
-basetemp에서 1,302 passed, 13 skipped / 228.42초였다. skip은 기존 플랫폼 조건이다. 독립
-리뷰와 원격 CI는 남아 있다.
+basetemp에서 1,302 passed, 13 skipped / 228.42초였다. skip은 기존 플랫폼 조건이다. 구현
+비참여 독립 리뷰는 P0/P1/P2/P3 모두 0건이었고 관련 회귀 260 passed, 5 skipped를 재확인했다.
+PR #91의 Linux Python 3.11/3.12, Feast/Postgres, lock drift, Ruff와 선택 이미지 CI도 통과했다.
 
 ### 잔여 검증 우선순위 — 2026-09-03 권고
 

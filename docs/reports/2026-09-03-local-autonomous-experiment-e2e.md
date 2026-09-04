@@ -1047,4 +1047,6 @@ Judge code의 중첩 context manager 전달, 실제 `_run_lock`, runtime metadat
 필드·traceback과 원인 연쇄를 유지한다. 오류 전달 신뢰성만 검증했으며 자율 복구율이나 모델
 품질이 향상됐다고 주장하지 않는다. 실제 coding agent·학습·평가·final 소비를 실행하지 않았고
 기존 #60/#69/#71 증거도 수정하지 않았다. 전체 Research Harness는 CI와 같은 xdist 4 worker와
-짧은 basetemp에서 1,302 passed, 13 skipped / 228.42초였다. 독립 리뷰와 원격 CI는 남아 있다.
+짧은 basetemp에서 1,302 passed, 13 skipped / 228.42초였다. 구현 비참여 독립 리뷰는
+P0/P1/P2/P3 모두 0건이었고 관련 회귀 260 passed, 5 skipped를 재확인했다. PR #91의 Linux
+Python 3.11/3.12, Feast/Postgres, lock drift, Ruff와 선택 이미지 CI도 통과했다.
