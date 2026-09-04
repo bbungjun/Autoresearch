@@ -34,6 +34,9 @@ COMPARISON_ARMS: Final[tuple[str, ...]] = (
     "personalized_lgbm",
     "oracle_upper_bound",
 )
+WORLD_SEEDS: Final[tuple[int, ...]] = (1601, 1602, 1603)
+TRAINING_SEEDS: Final[tuple[int, ...]] = (101, 102, 103)
+EVALUATION_SPLITS: Final[tuple[str, ...]] = ("validation", "final_holdout")
 
 VIDEO_ONLY_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "category_id",
@@ -189,6 +192,38 @@ def summarize_observations(observations: Sequence[dict[str, object]]) -> dict[st
             raise ValueError("personalization_ablation_observations_invalid")
         indexed[key] = observation
 
+    expected_keys = {
+        (world_seed, split, training_seed, arm)
+        for world_seed in WORLD_SEEDS
+        for split in EVALUATION_SPLITS
+        for training_seed in TRAINING_SEEDS
+        for arm in (*COMPARISON_ARMS, *ABLATION_FEATURE_GROUPS)
+    }
+    if indexed.keys() != expected_keys:
+        raise ValueError("personalization_ablation_observations_invalid")
+    for world_seed in WORLD_SEEDS:
+        for split in EVALUATION_SPLITS:
+            group = [
+                observation
+                for key, observation in indexed.items()
+                if key[0] == world_seed and key[1] == split
+            ]
+            evaluation_ids = {
+                str(observation["metrics"].get("evaluation_id"))
+                for observation in group
+            }
+            row_counts = {
+                observation["metrics"].get("row_count") for observation in group
+            }
+            if (
+                len(group) != len(TRAINING_SEEDS) * len((*COMPARISON_ARMS, *ABLATION_FEATURE_GROUPS))
+                or len(evaluation_ids) != 1
+                or len(row_counts) != 1
+                or not _valid_evaluation_id(next(iter(evaluation_ids)))
+                or not _positive_exact_int(next(iter(row_counts)))
+            ):
+                raise ValueError("personalization_ablation_observations_invalid")
+
     paired: dict[str, dict[str, object]] = {}
     comparisons = {
         "personalized_minus_trending": ("personalized_lgbm", "trending"),
@@ -287,18 +322,96 @@ def _coverage_is_valid(metrics: object) -> bool:
         assert isinstance(probability, dict)
         grouped = probability["grouped_roc_auc"]
         assert isinstance(grouped, dict)
+        row_count_value = metrics["row_count"]
+        assert _positive_exact_int(row_count_value)
+        row_count = int(row_count_value)
+        ranking_valid = all(
+            _ranking_coverage_is_valid(metrics[name])
+            for name in ("ndcg_at_10", "recall_at_10", "ndcg_at_24")
+        )
+        ranking_counts = {
+            (
+                metrics[name]["total_slates"],
+                metrics[name]["scored_slates"],
+                metrics[name]["skipped_zero_click_slates"],
+            )
+            for name in ("ndcg_at_10", "recall_at_10", "ndcg_at_24")
+        }
+        assert len(ranking_counts) == 1
+        assert all(
+            _nested_metric(metrics, path) >= 0
+            for path in (
+                ("probability", "roc_auc"),
+                ("probability", "pr_auc"),
+                ("probability", "log_loss"),
+                ("probability", "brier"),
+                ("probability", "grouped_roc_auc", "value"),
+            )
+        )
+        count_fields = (
+            probability["row_count"],
+            probability["positive_count"],
+            probability["negative_count"],
+            grouped["total_groups"],
+            grouped["scored_groups"],
+            grouped["skipped_groups"],
+            grouped["null_key_rows"],
+        )
+        assert all(_nonnegative_exact_int(value) for value in count_fields)
+        total_groups = int(grouped["total_groups"])
+        scored_groups = int(grouped["scored_groups"])
+        required_groups = max(30, math.ceil(total_groups * 0.20))
         return (
-            _nested_metric(metrics, ("ndcg_at_10", "coverage")) > 0
-            and _nested_metric(metrics, ("recall_at_10", "coverage")) > 0
-            and _nested_metric(metrics, ("ndcg_at_24", "coverage")) > 0
+            ranking_valid
+            and 0 < total_groups <= row_count
+            and total_groups >= scored_groups >= required_groups
+            and scored_groups + int(grouped["skipped_groups"]) == total_groups
             and int(probability["positive_count"]) > 0
             and int(probability["negative_count"]) > 0
+            and int(probability["row_count"]) == row_count
+            and int(probability["positive_count"]) + int(probability["negative_count"])
+            == row_count
             and _nested_metric(metrics, ("probability", "grouped_roc_auc", "value")) >= 0
-            and int(grouped["scored_groups"]) > 0
             and int(grouped["null_key_rows"]) == 0
         )
     except (AssertionError, KeyError, TypeError, ValueError):
         return False
+
+
+def _ranking_coverage_is_valid(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    try:
+        counts = (
+            value["total_slates"],
+            value["scored_slates"],
+            value["skipped_zero_click_slates"],
+        )
+        if not all(_nonnegative_exact_int(item) for item in counts):
+            return False
+        total, scored, skipped = (int(item) for item in counts)
+        _nested_metric(value, ("value",))
+        coverage = _nested_metric(value, ("coverage",))
+        required = max(30, math.ceil(total * 0.20))
+        return (
+            total >= scored >= required
+            and scored + skipped == total
+            and math.isclose(coverage, scored / total, rel_tol=0.0, abs_tol=1e-12)
+        )
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return False
+
+
+def _valid_evaluation_id(value: str) -> bool:
+    return re.fullmatch(r"eval_[0-9a-f]{64}", value) is not None
+
+
+def _nonnegative_exact_int(value: object) -> bool:
+    return type(value) is int and value >= 0
+
+
+def _positive_exact_int(value: object) -> bool:
+    return type(value) is int and value > 0
 
 
 def _split_delta_positive(

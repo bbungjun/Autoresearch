@@ -88,11 +88,67 @@ def test_synthetic_fixture_trending_rank_is_recovered_from_safe_video_id() -> No
 
 def test_summary_applies_direction_and_two_thirds_rule() -> None:
     m = module()
+    observations = _supported_observations(m)
+
+    summary = m.summarize_observations(observations)
+
+    assert summary["verdict"] == "supported"
+    assert all(summary["checks"].values())
+    assert summary["paired_deltas"]["personalized_minus_video_only"]["log_loss"][
+        "mean_directional_delta"
+    ] == pytest.approx(0.0)
+
+
+def test_summary_rejects_incomplete_fixed_grid() -> None:
+    m = module()
+    observations = []
+    for split in m.EVALUATION_SPLITS:
+        for arm in (*m.COMPARISON_ARMS, *m.ABLATION_FEATURE_GROUPS):
+            observations.append(
+                {
+                    "world_seed": m.WORLD_SEEDS[0],
+                    "split": split,
+                    "training_seed": m.TRAINING_SEEDS[0],
+                    "arm": arm,
+                    "metrics": _metrics(0.7),
+                }
+            )
+
+    with pytest.raises(ValueError, match="personalization_ablation_observations_invalid"):
+        m.summarize_observations(observations)
+
+
+def test_summary_requires_judge_coverage_floor() -> None:
+    m = module()
+    observations = _supported_observations(m)
+    for observation in observations:
+        metrics = observation["metrics"]
+        metrics["ndcg_at_10"] = {
+            **metrics["ndcg_at_10"],
+            "total_slates": 100,
+            "scored_slates": 1,
+            "skipped_zero_click_slates": 99,
+            "coverage": 0.01,
+        }
+
+    assert m.summarize_observations(observations)["checks"]["all_coverage_valid"] is False
+
+
+def test_summary_rejects_mixed_evaluation_identity() -> None:
+    m = module()
+    observations = _supported_observations(m)
+    observations[0]["metrics"]["evaluation_id"] = "eval_" + "b" * 64
+
+    with pytest.raises(ValueError, match="personalization_ablation_observations_invalid"):
+        m.summarize_observations(observations)
+
+
+def _supported_observations(m: ModuleType) -> list[dict[str, object]]:
     observations = []
     arms = (*m.COMPARISON_ARMS, *m.ABLATION_FEATURE_GROUPS)
-    for world_seed in (1, 2, 3):
-        for split in ("validation", "final_holdout"):
-            for training_seed in (1, 2, 3):
+    for world_seed in m.WORLD_SEEDS:
+        for split in m.EVALUATION_SPLITS:
+            for training_seed in m.TRAINING_SEEDS:
                 for arm in arms:
                     ndcg = 0.7
                     if arm == "trending":
@@ -110,42 +166,35 @@ def test_summary_applies_direction_and_two_thirds_rule() -> None:
                             "metrics": _metrics(ndcg),
                         }
                     )
-
-    summary = m.summarize_observations(observations)
-
-    assert summary["verdict"] == "supported"
-    assert all(summary["checks"].values())
-    assert summary["paired_deltas"]["personalized_minus_video_only"]["log_loss"][
-        "mean_directional_delta"
-    ] == pytest.approx(0.0)
+    return observations
 
 
 def _metrics(ndcg: float) -> dict[str, object]:
     ranking = {
         "value": ndcg,
-        "total_slates": 1,
-        "scored_slates": 1,
+        "total_slates": 30,
+        "scored_slates": 30,
         "skipped_zero_click_slates": 0,
         "coverage": 1.0,
     }
     return {
         "evaluation_id": "eval_" + "a" * 64,
-        "row_count": 2,
+        "row_count": 60,
         "ndcg_at_10": ranking,
         "recall_at_10": ranking,
         "ndcg_at_24": ranking,
         "probability": {
-            "row_count": 2,
-            "positive_count": 1,
-            "negative_count": 1,
+            "row_count": 60,
+            "positive_count": 30,
+            "negative_count": 30,
             "roc_auc": 0.7,
             "pr_auc": 0.7,
             "log_loss": 0.4,
             "brier": 0.2,
             "grouped_roc_auc": {
                 "value": 0.7,
-                "total_groups": 1,
-                "scored_groups": 1,
+                "total_groups": 30,
+                "scored_groups": 30,
                 "skipped_groups": 0,
                 "null_key_rows": 0,
             },

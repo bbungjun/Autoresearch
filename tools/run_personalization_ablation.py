@@ -60,6 +60,8 @@ from autoresearch.research_harness.local_training import (
 from autoresearch.research_harness.personalization_ablation import (
     ABLATION_FEATURE_GROUPS,
     COMPARISON_ARMS,
+    TRAINING_SEEDS,
+    WORLD_SEEDS,
     feature_columns_for_arm,
     heuristic_predictions,
     scoring_result_dict,
@@ -68,8 +70,6 @@ from autoresearch.research_harness.personalization_ablation import (
 from autoresearch.research_harness.prediction import _prediction_bytes
 
 
-WORLD_SEEDS = (1601, 1602, 1603)
-TRAINING_SEEDS = (101, 102, 103)
 EVALUATION_DATE = date(2026, 9, 1)
 BASELINE_SHA = "c4e0d07a882bb60c15579346476a410c2f0ffed8"
 LEARNED_ARMS = (
