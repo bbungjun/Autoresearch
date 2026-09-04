@@ -1,5 +1,6 @@
 """중첩된 Judge fixture와 candidate 입력 경계의 content identity를 검증한다."""
 
+from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from hashlib import sha256
 import os
@@ -13,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from autoresearch.action_log_generation.pipeline import ActionLogGenerationError
+import autoresearch.research_harness.candidate_data_view as candidate_view_module
 from autoresearch.research_harness.candidate_data_view import (
     _open_local_identity,
     materialize_candidate_data_view,
@@ -64,6 +66,14 @@ def _nested_root(tmp_path: Path, name: str, minimum_length: int) -> Path:
     return root
 
 
+def _long_destination_root(tmp_path: Path, name: str) -> Path:
+    root = tmp_path / name
+    root /= "x" * max(1, 250 - len(str(root)) - 1)
+    _test_io_path(root).mkdir(parents=True)
+    assert len(str(root)) >= 250
+    return root
+
+
 def _short_root(name: str) -> Path:
     return Path(tempfile.mkdtemp(prefix=f"ar77-{name}-"))
 
@@ -85,7 +95,9 @@ def _materialize_view(
     destination_root: Path,
     metadata: PreparedCandidateMetadata | None,
 ) -> CandidateDataViewReceipt:
-    destination_root.mkdir()
+    io_destination = _test_io_path(destination_root)
+    if not io_destination.exists():
+        io_destination.mkdir()
     request = CandidateDataViewRequest(fixture.judge, destination_root)
     if contract_version == "v1":
         return materialize_candidate_data_view(request, source=source)
@@ -95,6 +107,23 @@ def _materialize_view(
         source=source,
         metadata=metadata,
     )
+
+
+@pytest.fixture(scope="module")
+def long_destination_fixture() -> Iterator[tuple[
+    LocalEvaluationFixtureReceipt,
+    FixtureActionLogSource,
+    PreparedCandidateMetadata,
+]]:
+    root = _short_root("long-destination")
+    try:
+        fixture = build_local_evaluation_fixture(
+            LocalEvaluationFixtureRequest(root, date(2026, 9, 1), 1937)
+        )
+        source = _source(fixture)
+        yield fixture, source, prepare_candidate_metadata(fixture.judge, source=source)
+    finally:
+        _remove_nested_root(root)
 
 
 @pytest.mark.parametrize("minimum_root_length", (130, 153))
@@ -256,6 +285,97 @@ def test_nested_fixture_candidate_view_matches_short_root(
     finally:
         _remove_nested_root(short_root)
         _remove_nested_root(nested_root)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows long-path regression")
+@pytest.mark.parametrize("contract_version", ("v1", "v2"))
+def test_long_candidate_destination_matches_short_root_and_reuses(
+    tmp_path: Path,
+    contract_version: str,
+    long_destination_fixture: tuple[
+        LocalEvaluationFixtureReceipt,
+        FixtureActionLogSource,
+        PreparedCandidateMetadata,
+    ],
+) -> None:
+    fixture, source, prepared_metadata = long_destination_fixture
+    metadata = prepared_metadata if contract_version == "v2" else None
+    short_destination = tmp_path / f"short-candidate-{contract_version}"
+    long_destination = _long_destination_root(
+        tmp_path, f"long-candidate-{contract_version}"
+    )
+    assert len(str(long_destination / ".harness-in.lock")) > 260
+    try:
+        short_view = _materialize_view(
+            contract_version,
+            fixture,
+            source,
+            short_destination,
+            metadata,
+        )
+        long_view = _materialize_view(
+            contract_version,
+            fixture,
+            source,
+            long_destination,
+            metadata,
+        )
+        reused = _materialize_view(
+            contract_version,
+            fixture,
+            source,
+            long_destination,
+            metadata,
+        )
+
+        assert not short_view.reused and not long_view.reused and reused.reused
+        assert long_view.manifest == short_view.manifest
+        assert long_view.manifest_sha256 == short_view.manifest_sha256
+        assert reused.manifest == long_view.manifest
+        assert reused.manifest_sha256 == long_view.manifest_sha256
+        assert _artifact_hashes(long_view.root) == _artifact_hashes(short_view.root)
+        for view in (short_view, long_view, reused):
+            assert not str(view.root).startswith("\\\\?\\")
+    finally:
+        _remove_nested_root(long_destination)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows long-path regression")
+def test_long_candidate_destination_cleans_failed_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    long_destination_fixture: tuple[
+        LocalEvaluationFixtureReceipt,
+        FixtureActionLogSource,
+        PreparedCandidateMetadata,
+    ],
+) -> None:
+    fixture, source, _ = long_destination_fixture
+    destination = _long_destination_root(tmp_path, "long-candidate-failure")
+    generated: list[Path] = []
+
+    def fail_after_partial_write(staging: Path, *_args: object, **_kwargs: object) -> None:
+        generated.append(staging)
+        (_test_io_path(staging) / "partial").write_bytes(b"private-long-path")
+        raise OSError("private-long-path")
+
+    monkeypatch.setattr(candidate_view_module, "_write_staging", fail_after_partial_write)
+    try:
+        with pytest.raises(StageCError) as caught:
+            materialize_candidate_data_view(
+                CandidateDataViewRequest(fixture.judge, destination),
+                source=source,
+            )
+
+        assert generated
+        assert caught.value.code == StageCErrorCode.CANDIDATE_VIEW_CONFLICT
+        assert caught.value.stage == "candidate_view_publish"
+        assert "private-long-path" not in str(caught.value)
+        assert caught.value.__suppress_context__
+        assert all(not _test_io_path(staging).exists() for staging in generated)
+        assert not tuple(_test_io_path(destination).glob(".harness-in-staging-*"))
+    finally:
+        _remove_nested_root(destination)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows long-path regression")
