@@ -406,7 +406,7 @@ action log 데이터 레이크는 **일일 슬라이스 파티션**(`dt=D` = KST
 
 ```bash
 uv sync                                    # .venv 생성 + 의존성 설치 (uv.lock 기준)
-uv run python -m pytest                    # 테스트 실행 (CI와 동일)
+uv run python -m pytest -n 4 --dist loadfile --durations=25 # 테스트 실행 (CI와 동일)
 uv run --no-sync ruff check autoresearch tests tools   # lint (CI와 동일)
 ```
 

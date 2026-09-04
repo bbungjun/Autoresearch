@@ -129,7 +129,9 @@ jobs:
         run: uv sync --frozen
 
       - name: Run pytest
-        run: uv run --no-sync python -m pytest
+        # Public ubuntu-latest의 4 vCPU와 로컬 n=2/n=4 비교를 근거로 worker를 고정한다.
+        # 같은 파일의 테스트 순서는 보존하고, durations는 후속 병목 근거로 남긴다.
+        run: uv run --no-sync python -m pytest -n 4 --dist loadfile --durations=25
 
   pytest-feast:
     name: pytest (feast group)

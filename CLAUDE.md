@@ -1,6 +1,6 @@
 # Coding Guidelines for AI Coding Agents
 
-> Version: 1.3.0 | Last Updated: 2026-08-26
+> Version: 1.3.1 | Last Updated: 2026-09-04
 
 이 문서는 Claude Code 등 AI 코딩 에이전트가 이 저장소에서 작업할 때의 기본
 진입점입니다. 여기에는 규칙·함정·근거만 남깁니다. 저장소 사실(디렉토리 구조,
@@ -131,7 +131,7 @@ Autoresearch의 최종 목표는 **ML 리서처·엔지니어를 위한 자율 �
 
 ```bash
 uv sync                                    # .venv 생성 + 런타임/dev 의존성 (uv.lock 기준)
-uv run python -m pytest                    # CI pytest job과 동일
+uv run python -m pytest -n 4 --dist loadfile --durations=25 # CI pytest job과 동일
 uv run --no-sync ruff check applications autoresearch tests tools   # CI lint job과 동일
 ```
 
@@ -165,7 +165,7 @@ uv run --no-sync ruff check applications autoresearch tests tools   # CI lint jo
 워크플로우에 영향이 있으면 범위를 넓힙니다.
 
 ```bash
-uv run python -m pytest -v                          # CI와 동일
+uv run python -m pytest -n 4 --dist loadfile --durations=25 # CI와 동일
 uv run --no-sync ruff check applications autoresearch tests tools # CI lint와 동일
 docker build -f deployment/Dockerfile.app -t autoresearch:ci . # CI 이미지 빌드 검증
 ```

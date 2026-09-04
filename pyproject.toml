@@ -56,6 +56,7 @@ local-embedding = [
 # 개발/테스트 + virtual_users(실험) 의존성. `uv sync` 기본 포함.
 dev = [
     "pytest>=8.0",
+    "pytest-xdist>=3.8,<4",
     "datasets>=2.19",
     "httpx>=0.28,<0.29",
     "google-cloud-bigquery>=3.20",

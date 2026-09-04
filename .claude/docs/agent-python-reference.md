@@ -94,4 +94,4 @@ docstring 하나로만 합니다.)
 - 외부 API(YouTube, GCS, GLM)는 mock으로 격리합니다. 실제
   네트워크 호출을 테스트에 넣지 않습니다.
 - 파일 산출물은 `tmp_path` 등 임시 디렉터리를 사용합니다.
-- 실행: `python -m pytest -v` (CI와 동일)
+- 실행: `uv run python -m pytest -n 4 --dist loadfile --durations=25` (CI와 동일)
