@@ -1697,8 +1697,12 @@ Judge 경로·구현 코드, final metric·decision은 포함하지 않는다. �
 `experiment_summary`는 새 record에서 card의 canonical 요약을 보존하며, 기존 Task 4 record는
 이 필드가 없는 상태로 계속 읽을 수 있다.
 
-validation 종료 뒤 Controller는 현재 champion을 고정하고 `claim_final_consumption()`으로
-marker를 원자 생성·fsync해 `FinalConsumptionGrant`를 받은 뒤에만 `run_final()`을 한 번 호출한다.
+validation 종료 뒤 Controller는 candidate SHA가 있고 screening까지 완료한 validation record가
+최소 1건인지 먼저 확인한다. 전부 prepare/실행 실패했거나 예산 때문에 validation을 시작하지
+못했다면 final을 claim·실행하지 않고 `inconclusive / no_valid_validation_candidate`로 종료한다.
+이 결과는 같은 ledger에서 결정론적으로 복구하며 final 미소비 상태를 유지한다. 유효 validation
+record가 있으면 현재 champion을 고정하고 `claim_final_consumption()`으로 marker를 원자
+생성·fsync해 `FinalConsumptionGrant`를 받은 뒤에만 `run_final()`을 한 번 호출한다.
 final은 baseline과 고정 champion의 5-seed pair를 같은 `ResearchDomain.compare()` 규칙으로
 판정한다. 유효한 `promote`는 `improved`, `revise|discard`는 `no_improvement`, grant·실행·metric
 실패와 decision 없음은 `inconclusive`다. final 결과와 registry evidence는 ledger와 반환값에만

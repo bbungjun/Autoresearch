@@ -1050,3 +1050,43 @@ Judge code의 중첩 context manager 전달, 실제 `_run_lock`, runtime metadat
 짧은 basetemp에서 1,302 passed, 13 skipped / 228.42초였다. 구현 비참여 독립 리뷰는
 P0/P1/P2/P3 모두 0건이었고 관련 회귀 260 passed, 5 skipped를 재확인했다. PR #91의 Linux
 Python 3.11/3.12, Feast/Postgres, lock drift, Ruff와 선택 이미지 CI도 통과했다.
+
+## 19. 유효 후보가 없는 실행에서 final을 보존하기 — #92
+
+**문제:** #73·#74·#76·#77·#79 반영 뒤 #71을 seed 7102와 baseline `0680e16`에서
+재실행했다. 새 fixture·validation/final ID와 입력 view preflight, baseline seed 101~105의
+7개 양수 sigma calibration은 통과했다. 그러나 coding trial 2회는 모두 prepare에서 끝났다.
+첫 agent는 `mean_topic_similarity` 구현 뒤 표적 112 tests와 Ruff를 통과했지만 420.063초
+timeout 전에 commit을 남기지 못했고 temp cleanup도 실패했다. 두 번째 agent는 제한된 PATH에서
+테스트 interpreter를 실행하지 못해 `agent_blocked`를 반환했다. 따라서 candidate SHA,
+validation metric, 공식 22열 학습은 모두 0건이었다.
+
+기존 Controller는 이 상태에서도 final을 claim해 baseline `0680e16`을 양쪽 역할로 5 pair,
+10 fit 평가했다. 모든 delta는 0이었고 `discard / primary_threshold_not_met`가 기록됐다. 이는
+피처 품질의 증거가 아니며 새 single-use final만 소비한 결과다. 기록 Judge도 candidate가 구현·
+학습·평가되지 않았고 final이 동일 baseline 비교라고 concerns에 남겼다. 관측 실행 7건의 합은
+1,025,464ms였다. 두 coding 호출 중 token receipt가 남은 1건은 input 679,859, cached 604,160,
+output 4,670, reasoning 1,656이며 달러 비용과 사람 개입 횟수는 측정하지 못했다.
+
+**해결:** validation 종료 시 candidate SHA·metric이 있고 실행 실패가 없는 record가 최소 1건인지
+검사한다. 없으면 final registry와 runner를 호출하지 않고
+`inconclusive / no_valid_validation_candidate`를 반환한다. validation 실패 record와 checkpoint는
+그대로 보존해 같은 ledger 재개가 agent·final을 반복하지 않으며, REPORT terminal 검증도 이
+명시적 no-final 사유를 허용한다. 한 trial 실패 뒤 다음 candidate가 screening을 완료한 흐름과
+유효 candidate의 final 단일 소비는 바꾸지 않았다.
+
+**결과와 한계:** 변경 전 RED는 전부 prepare 실패와 validation 0건 두 시나리오에서 final claim을
+호출해 2 failed, 10 passed였다. GREEN 뒤 Controller·REPORT·runtime 73 tests와 전체 Ruff,
+`git diff --check`가 통과했다. Windows 저장소 전체 검증은 `/bin/sh` 부재 등 기존 POSIX 전제
+실패가 나타나 28%에서 중단했고, Research Harness 전체 검증도 기존 260자 fixture 경로의 raw
+`Path.read_bytes()` 실패를 확인한 뒤 중단했다. 이 두 실패는 #92 변경 파일 밖의 기존 로컬 환경
+한계이며 Linux CI 결과와 구분한다. 이 수정은 future final을 보존하지만 이미 소비된 #71 final을
+복구하거나 이번 실행의 22열 피처 효과를 입증하지 않는다.
+
+구현 비참여 첫 리뷰는 P1 1건과 P2 1건을 찾았다. P1은 no-final reason이 실제 ledger의 유효
+candidate 0건 조건과 결속되지 않아 거짓 terminal을 봉인할 수 있다는 문제였다. REPORT 검증이
+Controller와 같은 predicate를 사용하도록 연결하고, 유효 validation record에 해당 reason을
+붙이면 거부하는 회귀를 추가했다. P2는 첫 trial 실패 뒤 두 번째 candidate가 성공했을 때 final
+5회와 candidate SHA를 직접 단언하지 않은 테스트 공백이었다. 두 단언을 추가한 뒤 위 73 tests를
+재실행했다. 독립 재리뷰는 P0/P1/P2/P3 0건이었고 Controller·REPORT·context 83 tests와 변경
+Python 파일 Ruff, `git diff --check`를 다시 확인했다.
