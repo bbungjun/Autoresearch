@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from types import TracebackType
 
 import pytest
@@ -43,7 +44,7 @@ def test_nested_contextmanagers_preserve_every_judge_code(
 
 @pytest.mark.parametrize("code", list(JudgeErrorCode))
 def test_run_lock_propagates_original_judge_error(
-    tmp_path, code: JudgeErrorCode,
+    tmp_path: Path, code: JudgeErrorCode,
 ) -> None:
     original = _error(code)
 

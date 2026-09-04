@@ -62,6 +62,32 @@ def test_structured_fields_remain_immutable(
     assert hash(error) == original_hash
 
 
+@pytest.mark.parametrize(
+    ("error", "optional_fields"),
+    (
+        (
+            EvaluationSnapshotError(
+                SnapshotErrorCode.SNAPSHOT_WRITE_CONFLICT,
+                "snapshot_publish",
+            ),
+            ("dt", "count", "identifier_prefix"),
+        ),
+        (JudgeError(JudgeErrorCode.INVALID_TARGET, "judge_target"), ("row_number",)),
+    ),
+    ids=("snapshot", "judge"),
+)
+def test_optional_fields_initialized_to_none_remain_immutable(
+    error: EvaluationSnapshotError | JudgeError,
+    optional_fields: tuple[str, ...],
+) -> None:
+    for field in optional_fields:
+        with pytest.raises(FrozenInstanceError):
+            setattr(error, field, "replacement")
+        with pytest.raises(FrozenInstanceError):
+            delattr(error, field)
+        assert getattr(error, field) is None
+
+
 def test_exception_runtime_metadata_can_change_without_structured_fields(
     error_factory: ErrorFactory,
 ) -> None:
