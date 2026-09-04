@@ -96,7 +96,7 @@
 - [Plan — 가설 수신부터 `[AR]` 이슈 발행까지 구현](plans/2026-08-04-hypothesis-to-auto-research-issue.md) (#516)
 - [Spec — 자율 ML 연구 Harness 기반 MVP와 논문 로드맵](specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md) — 저장소 전체 수정·외부 Sealed Judge·σ 기반 판정·local-first 반복 연구 계약과 §12의 구현/회귀·실측·수용 판단 구분 (#17; 최초 설계는 이전 조직 #769). 현재 유효 계약이므로 유지한다.
 - [Plan — 로컬 Research Harness MVP](archive/plans/2026-08-15-local-research-harness-mvp.md) — Task 1~6 구현, Task 7의 feedback·재개·복구·단일 피처 실증과 ADR 0003 수용 결정을 완료해 archive했다 (#17, 2026-09-05).
-- [실측·포트폴리오 기록 — 로컬 자율 ML 실험 E2E](reports/2026-09-03-local-autonomous-experiment-e2e.md) — #60 feedback·재개·엄격한 기각, #69 실패 코드 수정·σ=0 판정 불가, #71 새 22번째 피처의 offline promote와 §23 MVP 정책 수용까지 기록한다.
+- [실측·포트폴리오 기록 — 로컬 자율 ML 실험 E2E](reports/2026-09-03-local-autonomous-experiment-e2e.md) — #60 feedback·재개·엄격한 기각, #69 실패 코드 수정·σ=0 판정 불가, #71 새 22번째 피처의 offline promote, §23 MVP 정책 수용과 §24 장경로 candidate 게시 안정화까지 기록한다.
 - [Spec — Research Harness P0-1 평가 snapshot](specs/2026-08-31-research-harness-evaluation-snapshot.md) — 완료된 P0-1 구현의 현재 유효 계약: `slate_id`, 평가 기간·click 귀속, label 봉인, split·fingerprint, 독립 재생성과 candidate-safe data view (#17, #22). 후속 Judge/Controller가 계속 소비하는 정본이므로 archive하지 않는다.
 - `applications/experiment_platform/` (FastAPI + Codex CLI/OpenAI + PostgreSQL 실험 API)
 - [Spec — Agent Orchestration GKE 내부 배포](specs/2026-07-30-agent-orchestration-gke-internal-deployment.md)

@@ -760,6 +760,13 @@ destination sibling staging에 모두 쓴 뒤 `harness_in`을 atomic rename한�
 manifest와 모든 digest가 같을 때만 `reused=true`로 반환하고, partial·상이한 view는
 `candidate_view_conflict`로 거부한다.
 
+Windows에서는 검증을 통과한 `destination_root`가 길이 250자인 경우에도 lock·staging·파일
+쓰기·검증·rename·cleanup을 extended path 내부 표현으로 수행한다. 이 표현은 filesystem I/O에만
+사용하며 `CandidateDataViewReceipt.root`와 manifest에는 `\\?\` prefix를 노출하지 않는다.
+v1/v2 최초 게시와 완전 재검증 재사용은 짧은 destination과 동일한 manifest·artifact digest를
+반환해야 하고, 게시 실패 시 소유한 sibling staging을 회수한 뒤 정제된
+`candidate_view_conflict`를 반환한다. UNC/device path 자체를 공개 입력 계약으로 추가하지 않는다.
+
 ### 13.4 JudgeSnapshotHandoff
 
 Judge handoff는 Stage B receipt의 target을 다시 열어 `_SUCCESS`, typed manifest

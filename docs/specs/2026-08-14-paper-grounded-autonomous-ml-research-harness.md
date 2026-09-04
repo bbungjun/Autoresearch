@@ -912,8 +912,9 @@ root 결과와 같다. 기존 view 재사용과 symlink·junction/reparse·hardl
 raw `Path.resolve(strict=True)`로 처리해 final view 진입을 막는 사실을 추가 확인했다. 이 경계는
 새 합성 fixture와 별도 marker로 검증하며, 내부 registry I/O에만 `_io_path`를 적용하고 공개
 grant evidence는 canonical 절대 경로로 유지한다. 기존 실험의 marker를 재사용하거나 초기화하지
-않는다. 긴 candidate destination의 게시 I/O는 별도 #90 범위이며 #77의 지원 주장에 포함하지
-않는다.
+않는다. 긴 candidate destination의 게시 I/O는 #77의 지원 주장과 분리해 #90에서 보완했다.
+검증된 destination의 lock·staging·copy·검증·rename·cleanup에 같은 내부 Windows I/O 표현을
+적용하되 공개 candidate receipt는 device prefix 없는 canonical 절대 경로를 유지한다.
 
 Registry가 junction이나 `..` alias를 허용한 뒤 marker를 만들 경우에는 검증에 사용한 resolved
 경로를 device prefix 없는 canonical 공개 경로로 되돌려 evidence와 grant에 저장한다. 검증 경로와

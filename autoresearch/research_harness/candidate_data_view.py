@@ -9,7 +9,8 @@ copy를 write-once atomic directory로 materialize한다.
 명시적으로 선택한 v2 경로는 검증된 fixture의 metadata를 한 번 준비하고 동일한 게시
 검증을 거쳐 두 metadata 파일을 추가한다. Final 전용 interface는 실제 소비 grant를
 게시·재사용 직전에 재확인하며, 기존 validation v1/v2 interface는 그대로 유지한다.
-신뢰된 로컬 snapshot/source의 Windows 긴 경로는 내부 I/O 표현으로만 변환한다.
+신뢰된 로컬 snapshot/source와 검증된 candidate destination의 Windows 긴 경로는
+내부 I/O 표현으로만 변환하고 공개 receipt에는 canonical 경로를 유지한다.
 
 [비책임] git worktree·subprocess 구성은 workspace, final 소비 권한 발급은
 consumption_registry, metric/Judge 판정은 judge가 담당한다.
@@ -243,17 +244,19 @@ def _materialize_candidate_data_view(
     manifest_digest = sha256(manifest_bytes).hexdigest()
     target = destination_root / _TARGET_NAME
     lock_path = destination_root / ".harness-in.lock"
+    io_target = _io_path(target)
+    io_lock_path = _io_path(lock_path)
     try:
-        lock_identity = _prepare_descriptor_lock(lock_path)
+        lock_identity = _prepare_descriptor_lock(io_lock_path)
     except StageCError:
         raise _error(StageCErrorCode.CANDIDATE_VIEW_CONFLICT, "candidate_lock_prepare") from None
     try:
-        with lock_path.open("r+b") as lock_file:
-            _lock_checked(lock_path, lock_file, lock_identity)
+        with io_lock_path.open("r+b") as lock_file:
+            _lock_checked(io_lock_path, lock_file, lock_identity)
             try:
-                if target.exists() or target.is_symlink():
+                if io_target.exists() or io_target.is_symlink():
                     if not _view_is_valid(
-                        target,
+                        io_target,
                         candidate_manifest,
                         manifest_bytes,
                         slate_identity,
@@ -272,7 +275,10 @@ def _materialize_candidate_data_view(
                         reused=True,
                     )
                 staging = Path(
-                    mkdtemp(prefix=".harness-in-staging-", dir=destination_root)
+                    mkdtemp(
+                        prefix=".harness-in-staging-",
+                        dir=_io_path(destination_root),
+                    )
                 )
                 try:
                     _write_staging(
@@ -298,7 +304,7 @@ def _materialize_candidate_data_view(
                         ) from None
                     if grant is not None:
                         _require_final_grant(grant, request.judge)
-                    staging.rename(target)
+                    staging.rename(io_target)
                 finally:
                     if staging.exists():
                         shutil.rmtree(staging)
@@ -353,7 +359,7 @@ def _write_staging(
                 artifact.payload, staging / artifact.receipt.relative_path, artifact.receipt,
                 source_identity=None,
             )
-    (staging / _MANIFEST_NAME).write_bytes(manifest_bytes)
+    _io_path(staging / _MANIFEST_NAME).write_bytes(manifest_bytes)
 
 
 def _load_history_payloads(
@@ -417,14 +423,15 @@ def _copy_verified_payload(
     expected_rows = receipt.rows
     if sha256(payload).hexdigest() != expected_digest or _payload_rows(payload) != expected_rows:
         raise _error(StageCErrorCode.JUDGE_HANDOFF_INVALID, "candidate_source_integrity")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(payload)
-    target_identity = _safe_regular_file_identity(target)
+    io_target = _io_path(target)
+    io_target.parent.mkdir(parents=True, exist_ok=True)
+    io_target.write_bytes(payload)
+    target_identity = _safe_regular_file_identity(io_target)
     if (
         target_identity is None
         or target_identity == source_identity
-        or sha256(target.read_bytes()).hexdigest() != expected_digest
-        or pq.read_metadata(target).num_rows != expected_rows
+        or sha256(io_target.read_bytes()).hexdigest() != expected_digest
+        or pq.read_metadata(io_target).num_rows != expected_rows
     ):
         raise _error(StageCErrorCode.CANDIDATE_VIEW_CONFLICT, "candidate_copy_validation")
 
@@ -600,7 +607,7 @@ def _candidate_file_is_valid(
     digest: str,
     source_identity: tuple[int, int] | None,
 ) -> bool:
-    path = root.joinpath(*relative_path.split("/"))
+    path = _io_path(root.joinpath(*relative_path.split("/")))
     candidate_identity = _safe_regular_file_identity(path)
     return (
         candidate_identity is not None
