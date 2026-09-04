@@ -620,6 +620,7 @@ def _candidate_file_is_valid(
 def _require_safe_request(destination_root: Path, snapshot_root: Path) -> None:
     if (
         not destination_root.is_absolute()
+        or (os.name == "nt" and str(destination_root).startswith("\\\\"))
         or not destination_root.is_dir()
         or not _resolved_without_link(destination_root)
     ):

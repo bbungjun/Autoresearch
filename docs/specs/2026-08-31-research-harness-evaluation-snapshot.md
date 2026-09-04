@@ -765,7 +765,8 @@ Windows에서는 검증을 통과한 `destination_root`가 길이 250자인 경�
 사용하며 `CandidateDataViewReceipt.root`와 manifest에는 `\\?\` prefix를 노출하지 않는다.
 v1/v2 최초 게시와 완전 재검증 재사용은 짧은 destination과 동일한 manifest·artifact digest를
 반환해야 하고, 게시 실패 시 소유한 sibling staging을 회수한 뒤 정제된
-`candidate_view_conflict`를 반환한다. UNC/device path 자체를 공개 입력 계약으로 추가하지 않는다.
+`candidate_view_conflict`를 반환한다. UNC/device-prefixed path 자체는 공개 입력에서 명시적으로
+거부한다.
 
 ### 13.4 JudgeSnapshotHandoff
 

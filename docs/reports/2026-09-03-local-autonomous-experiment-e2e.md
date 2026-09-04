@@ -1258,17 +1258,20 @@ destination 아래의 lock·staging·payload copy·manifest write·tree 검증·
 기존 `_io_path()`를 적용했다. 새 공개 API나 Windows 전역 설정은 추가하지 않았다. v1과 v2를
 각각 짧은 destination과 대조해 최초 게시·재사용의 manifest와 모든 artifact digest가 같은지
 확인하고, 부분 write 뒤 `OSError`를 주입해 소유 staging 회수와 정제된 typed error도 별도로
-검증했다.
+검증했다. 공개 입력으로 들어온 UNC/device-prefixed path는 device 표현이 receipt로 전파되지
+않도록 `candidate_request_validation`에서 거부한다.
 
 **결과와 한계:** 수정 전 RED 3종은 모두 `candidate_lock_prepare`에서 실패했고, 수정 뒤 세
 시나리오가 통과했다. Candidate 게시·metadata·final grant와 symlink·junction/reparse·hardlink
-fail-closed를 묶은 관련 회귀는 96건 모두 통과했다. 공개 `CandidateDataViewReceipt.root`에는
+fail-closed를 묶은 관련 회귀는 97건 모두 통과했다. 공개 `CandidateDataViewReceipt.root`에는
 `\\?\`가 없고 짧은 경로와 manifest·artifact digest가 일치한다. 지원 범위는 이미 검증된 로컬
 absolute destination이며 UNC/device path를 새 입력 계약으로 허용하거나 동일 OS의 악성 동시
 교체를 추가로 방어하지 않는다. 이 기반 수정은 새 agent·학습·final을 실행하지 않으며 #71의
 기존 evidence와 판정을 변경하지 않는다.
 
-Windows 전체 suite는 4,040 passed, 135 skipped, 91 failed였다. 실패는 `/bin/sh` 부재,
+Windows 전체 suite는 4,258 items와 collection-time skip 8건을 수집했고, 최종 결과는
+4,040 passed, 135 skipped, 91 failed였다. 최종 skip에는 collection-time skip 8건이 포함된다.
+실패는 `/bin/sh` 부재,
 POSIX 권한 bit, cp949 subprocess decoding과 candidate destination 밖 fixture 테스트의 raw
 장경로 read에 분포했다. 마지막 fixture 실패는 변경 전 `bc96685`에서도 같은 테스트와
 `Path.read_bytes()` 위치로 재현했으므로 #90의 회귀로 분류하지 않는다. Linux 전체 결과는

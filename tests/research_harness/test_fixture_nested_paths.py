@@ -378,6 +378,30 @@ def test_long_candidate_destination_cleans_failed_staging(
         _remove_nested_root(destination)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows device-path regression")
+def test_device_prefixed_candidate_destination_is_rejected(
+    tmp_path: Path,
+    long_destination_fixture: tuple[
+        LocalEvaluationFixtureReceipt,
+        FixtureActionLogSource,
+        PreparedCandidateMetadata,
+    ],
+) -> None:
+    fixture, source, _ = long_destination_fixture
+    destination = tmp_path / "device-prefixed-candidate"
+    destination.mkdir()
+
+    with pytest.raises(StageCError) as caught:
+        materialize_candidate_data_view(
+            CandidateDataViewRequest(fixture.judge, _test_io_path(destination)),
+            source=source,
+        )
+
+    assert caught.value.code == StageCErrorCode.FIXTURE_REQUEST_INVALID
+    assert caught.value.stage == "candidate_request_validation"
+    assert not (destination / "harness_in").exists()
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows long-path regression")
 def test_nested_fixture_source_opens_partition_over_windows_limit(
     tmp_path: Path,
