@@ -4,7 +4,8 @@
 실행 adapter와 ResearchDomain 판정을 반복한 뒤 final holdout 결론을 ledger에 남긴다.
 
 [기능] trial/time budget, ledger-first feedback, promote-only champion 전이, typed 실패 후
-자동 계속, checkpoint 재생과 final 단일 소비를 하나의 ``run`` interface로 제공한다.
+자동 계속, checkpoint 재생과 유효 validation 후보가 있을 때의 final 단일 소비를 하나의
+``run`` interface로 제공한다.
 직전 실패 trial의 candidate만 수정 출발점으로 전달하며 비교 champion은 유지한다.
 
 [비책임] candidate 코드 작성·workspace 생성·LocalRunner 조립·prediction 봉인과 metric
@@ -73,6 +74,13 @@ class ControllerConclusion(StrEnum):
     IMPROVED = "improved"
     NO_IMPROVEMENT = "no_improvement"
     INCONCLUSIVE = "inconclusive"
+
+
+@unique
+class ControllerTerminalReasonCode(StrEnum):
+    """final을 시작하지 않는 Controller 정책의 안정적 종료 사유."""
+
+    NO_VALID_VALIDATION_CANDIDATE = "no_valid_validation_candidate"
 
 
 @unique
@@ -236,6 +244,16 @@ def _repair_candidate_sha(record: TrialRecord | None, champion_sha: str) -> str 
     return None
 
 
+def _is_valid_validation_candidate(record: TrialRecord) -> bool:
+    """공식 screening 결과가 기록된 candidate인지 판별한다."""
+    return (
+        record.split == "validation"
+        and record.candidate_sha is not None
+        and record.failure_reason_code is None
+        and bool(record.metrics)
+    )
+
+
 class ResearchController:
     """예산·판정·복구 정책을 하나의 run interface 뒤에 숨기는 deep module."""
 
@@ -335,6 +353,16 @@ class ResearchController:
                 champion_sha = record.candidate_sha
                 lineage = record.champion_lineage
 
+        if not any(_is_valid_validation_candidate(record) for record in validation_records):
+            return ControllerRunResult(
+                ControllerConclusion.INCONCLUSIVE,
+                champion_sha,
+                len(feedback),
+                tuple(feedback),
+                None,
+                ControllerTerminalReasonCode.NO_VALID_VALIDATION_CANDIDATE.value,
+                None,
+            )
         return self._run_final(request, champion_sha, lineage, feedback, sigmas)
 
     def _run_validation_trial(

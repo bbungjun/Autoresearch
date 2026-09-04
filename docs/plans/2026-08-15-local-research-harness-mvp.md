@@ -2161,6 +2161,27 @@ discard / primary_threshold_not_met이며 피처 효과가 없다는 증거가 �
 달러 비용은 관측 근거가 없으면 null이다. 기록 Judge의 가시성 한계는 원본 기술 감사와
 구분한다. 기존 #60/#69의 final·raw 산출물은 재사용/덮어쓰기하지 않는다.
 
+### Task 7F-2: 유효 validation 후보 없는 final 소비 차단 — #92
+
+**문제:** #71 재실행에서 prepare 2회가 모두 실패해 candidate SHA와 validation metric이
+0건인데도 Controller가 baseline 자기 비교로 single-use final을 소비했다. 이는 infrastructure
+실패를 후보 품질 판정처럼 종료하고 새 final holdout을 재사용할 수 없게 만든다.
+
+**해결:** candidate SHA·metric이 있고 실행 실패가 없는 validation record를 최소 1건 요구한다.
+없으면 final claim과 runner를 호출하지 않고
+`inconclusive / no_valid_validation_candidate` terminal을 반환한다. 같은 결과는 ledger 기반 재개와
+REPORT 결속에서도 허용한다. 한 번 실패한 뒤 다음 candidate가 screening을 완료한 기존 복구와
+유효 candidate의 final 단일 소비는 유지한다.
+
+- [x] 전부 prepare 실패와 validation 0건의 RED 2건으로 기존 final 호출 재현
+- [x] Controller final gate와 no-final terminal/report 재개 GREEN
+- [x] Controller·REPORT·runtime 73 tests, 전체 Ruff·diff 검증. Windows 전체 suite의 기존
+      `/bin/sh`·260자 raw Path 실패는 포트폴리오 §19에 분리
+- [x] 포트폴리오 결과 기록
+- [x] 독립 재리뷰 P0/P1/P2/P3 0건, reviewer 83 tests·Ruff·diff 확인
+- [x] PR #93 Linux Python 3.11/3.12, Feast/Postgres, Ruff, lock drift와 선택 이미지 CI 통과
+- [x] Ready PR; 최종 squash merge는 사람의 기존 위임에 따라 진행
+
 ### Task 7T: 보안 테스트와 등록 temp 회수의 양립 — #73 (구현·로컬 검증 완료)
 
 사용자가 #73 진행을 승인했다. #71 원본·실패 workspace·consumed final은 보존하고

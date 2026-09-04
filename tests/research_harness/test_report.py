@@ -112,6 +112,61 @@ def test_terminal_binding_recovers_missing_result_without_execution(finished):
     assert (root / "controller-result.json").read_bytes() == expected
 
 
+def test_terminal_binding_accepts_no_valid_validation_candidate(finished):
+    root, contract, result, _ = finished
+    result = replace(result, final_reason_code="no_valid_validation_candidate")
+    m = module()
+
+    m.seal_terminal_result(root, contract=contract, result=result)
+
+    assert m.load_terminal_result(root, contract=contract) == result
+
+
+def test_terminal_binding_rejects_no_candidate_reason_with_valid_validation(finished):
+    root, contract, _, _ = finished
+    trial = TrialRecord(
+        "trial-0001",
+        "validation",
+        contract.baseline_sha,
+        "b" * 40,
+        "sha256:" + "d" * 64,
+        str(contract.handoff.validation_id),
+        contract.screening_seed,
+        (LedgerMetric("ndcg_at_10", 0.7),),
+        "promote",
+        "promotion_threshold_met",
+        100,
+        None,
+        (),
+        (contract.baseline_sha, "b" * 40),
+        None,
+        contract.initial_card.canonical_summary(),
+    )
+    ledger = open_trial_ledger(root / "experiment-ledger.jsonl")
+    ledger.append(trial)
+    ledger.append(CheckpointRecord(
+        "trial-0001:validation-recorded",
+        "validation_recorded",
+        trial.trial_id,
+        datetime.now(UTC),
+        (),
+        None,
+    ))
+    feedback = (_feedback_from_record(contract.initial_card, contract.initial_card, trial, []),)
+    result = ControllerRunResult(
+        ControllerConclusion.INCONCLUSIVE,
+        "b" * 40,
+        1,
+        feedback,
+        None,
+        "no_valid_validation_candidate",
+        None,
+    )
+
+    with pytest.raises(module().ReportError, match="terminal_without_final"):
+        module().seal_terminal_result(root, contract=contract, result=result)
+
+
 @pytest.mark.parametrize("mutation", ["result", "ledger", "input", "hardlink"])
 def test_terminal_drift_is_rejected(finished, mutation):
     root, contract, result, _ = finished

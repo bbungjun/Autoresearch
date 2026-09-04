@@ -334,6 +334,53 @@ def test_controller_records_failure_feedback_and_continues(
     assert failure.stderr_tail == "compiler error"
     assert runner.preparations[1].feedback_history[0].failure == failure
     assert runner.preparations[1].repair_candidate_sha is None
+    assert len(runner.final_runs) == 5
+    assert {item.candidate_sha for item in runner.final_runs} == {_CANDIDATE_TWO}
+
+
+def test_controller_skips_final_when_every_validation_candidate_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected_claim(*args: object, **kwargs: object) -> Never:
+        del args, kwargs
+        pytest.fail("final claim must not run without a valid validation candidate")
+
+    class AlwaysFailRunner(FakeRunner):
+        def prepare_candidate(self, request: PrepareCandidateRequest) -> PreparedCandidate:
+            self.preparations.append(request)
+            raise TrialExecutionError("agent_edit", "candidate_generation_failed")
+
+    monkeypatch.setattr(controller_module, "claim_final_consumption", unexpected_claim)
+    runner = AlwaysFailRunner()
+    request = _request(tmp_path)
+
+    result = ResearchController(
+        FakeDomain(),
+        SequencePlanner((_card("card-1"), _card("card-2")), []),
+        runner,
+    ).run(request)
+
+    assert result.conclusion is ControllerConclusion.INCONCLUSIVE
+    assert result.final_reason_code == "no_valid_validation_candidate"
+    assert result.validation_trials == 2
+    assert all(item.decision == "failed" for item in result.feedback_history)
+    assert runner.final_runs == []
+    assert [trial.split for trial in request.ledger.read_state().trials] == [
+        "validation",
+        "validation",
+    ]
+
+    resumed_runner = FakeRunner()
+    resumed = ResearchController(
+        FakeDomain(),
+        SequencePlanner((_card("card-1"), _card("card-2")), []),
+        resumed_runner,
+    ).run(request)
+    assert resumed == result
+    assert resumed_runner.preparations == []
+    assert resumed_runner.validation_runs == []
+    assert resumed_runner.final_runs == []
 
 
 @pytest.mark.parametrize("resume", [False, True])
@@ -441,11 +488,15 @@ def test_controller_resume_replays_feedback_without_repeating_runner(
     assert resumed_runner.final_runs == []
 
 
-def test_controller_time_budget_stops_validation_but_keeps_terminal_final(
+def test_controller_time_budget_stops_validation_without_consuming_final(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _install_final_claim(monkeypatch, tmp_path)
+    def unexpected_claim(*args: object, **kwargs: object) -> Never:
+        del args, kwargs
+        pytest.fail("final claim must not run without a valid validation candidate")
+
+    monkeypatch.setattr(controller_module, "claim_final_consumption", unexpected_claim)
     ticks = iter((0.0, 61.0))
     monkeypatch.setattr(controller_module.time, "monotonic", lambda: next(ticks))
     planner = SequencePlanner((_card("card-1"),), [])
@@ -454,9 +505,11 @@ def test_controller_time_budget_stops_validation_but_keeps_terminal_final(
     result = ResearchController(FakeDomain(), planner, runner).run(_request(tmp_path))
 
     assert result.validation_trials == 0
+    assert result.conclusion is ControllerConclusion.INCONCLUSIVE
+    assert result.final_reason_code == "no_valid_validation_candidate"
     assert planner.calls == []
     assert runner.preparations == []
-    assert len(runner.final_runs) == 5
+    assert runner.final_runs == []
 
 
 def test_controller_does_not_run_final_when_registry_rejects_claim(

@@ -23,7 +23,8 @@ from autoresearch.research_harness._filesystem import sync_directory
 from autoresearch.research_harness.coding_agent import _parse_object
 from autoresearch.research_harness.consumption_registry import ConsumptionRegistryErrorCode
 from autoresearch.research_harness.controller import (
-    ControllerConclusion, ControllerRunResult, _feedback_from_record, _result_from_final,
+    ControllerConclusion, ControllerRunResult, ControllerTerminalReasonCode,
+    _feedback_from_record, _is_valid_validation_candidate, _result_from_final,
 )
 from autoresearch.research_harness.feedback import ExperimentCard, FeedbackPayload
 from autoresearch.research_harness.fixture_errors import StageCError
@@ -208,7 +209,15 @@ def validate_terminal(result: ControllerRunResult, contract: RunInputContract, s
             raise ReportError("terminal_final_result")
     elif (result.conclusion is not ControllerConclusion.INCONCLUSIVE or result.final_decision is not None
           or result.final_consumption is not None
-          or result.final_reason_code not in {code.value for code in ConsumptionRegistryErrorCode}):
+          or result.final_reason_code not in {
+              *(code.value for code in ConsumptionRegistryErrorCode),
+              *(code.value for code in ControllerTerminalReasonCode),
+          }
+          or (
+              result.final_reason_code
+              == ControllerTerminalReasonCode.NO_VALID_VALIDATION_CANDIDATE.value
+              and any(_is_valid_validation_candidate(record) for record in state.trials)
+          )):
         raise ReportError("terminal_without_final")
 
 
