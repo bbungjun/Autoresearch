@@ -872,6 +872,42 @@ with/contextmanager를 거쳐도 동일 예외 객체와 구조화 필드가 전
 이 보호는 일반 필드 대입·삭제 계약이며, Python 내부 접근을 통한 적대적 변조 방어가 아니다.
 다른 frozen exception이나 #77 경로 소비까지 일괄 수정하지 않는다.
 
+**#77 중첩 fixture의 candidate 입력 소비:** #74가 게시한 canonical fixture 경로는
+공개 receipt와 handoff에서 `\\?\` 접두사 없는 절대 경로를 유지한다. Windows trusted
+process가 그 경로를 검증·읽을 때만 기존 `_io_path` 규칙을 적용하며, source provenance,
+snapshot layout, source/destination disjoint 관계는 긴 경로를 처리할 수 있는 canonical
+경로끼리 비교한다. 문자열 prefix 비교로 경계 관계를 대신하지 않는다.
+
+`FixtureActionLogSource`는 길이 260자를 넘는 검증된 fixture partition도 같은 내부 I/O
+표현으로 열어야 한다. metadata 준비와 validation v1/v2 data view는 descriptor,
+snapshot fingerprint, source receipt, regular-file identity와 독립 복사 계약을 그대로
+확인한다. validation과 구현을 공유하는 final metadata 준비도 같은 긴 경로에서 검증하되,
+이 작업만으로 final grant를 발급하거나 holdout을 소비하지 않는다.
+
+길이 130과 153인 합성 state root에서 짧은 root와 같은 fixture를 만들고, 서로 다른
+실패 경계를 가리지 않도록 다음을 독립 검증한다. 첫째, snapshot provenance와 layout
+검증이 성공한다. 둘째, 260자를 넘는 action-log partition을 실제로 열고 receipt와 같은
+bytes를 읽는다. 셋째, metadata와 candidate view의 schema·digest·행 수·공개 경로가 짧은
+root 결과와 같다. 기존 view 재사용과 symlink·junction/reparse·hardlink·경로 중첩 거부도
+유지한다.
+
+지원 범위는 Harness가 검증된 로컬 state root 아래 게시한 fixture와 그 소비 경계다.
+임의 UNC/device path 지원, Windows 전역 long-path 설정·ACL 변경, 등록 경계 밖 임시 경로,
+기존 실패 workspace 강제 회수와 이미 소비한 final 재평가는 포함하지 않는다. 이 수정은
+#71의 새 피처 학습을 다시 시작하기 위한 준비 gate이며 모델 품질이나 자율 실험 성공의
+증거로 기록하지 않는다.
+
+독립 리뷰에서 validation 경로와 공유되지 않는 final consumption registry가 306자 snapshot을
+raw `Path.resolve(strict=True)`로 처리해 final view 진입을 막는 사실을 추가 확인했다. 이 경계는
+새 합성 fixture와 별도 marker로 검증하며, 내부 registry I/O에만 `_io_path`를 적용하고 공개
+grant evidence는 canonical 절대 경로로 유지한다. 기존 실험의 marker를 재사용하거나 초기화하지
+않는다. 긴 candidate destination의 게시 I/O는 별도 #90 범위이며 #77의 지원 주장에 포함하지
+않는다.
+
+Registry가 junction이나 `..` alias를 허용한 뒤 marker를 만들 경우에는 검증에 사용한 resolved
+경로를 device prefix 없는 canonical 공개 경로로 되돌려 evidence와 grant에 저장한다. 검증 경로와
+반환 경로가 달라 marker만 선점하고 grant가 무효가 되는 상태를 허용하지 않는다.
+
 agent는 initial card와 validation feedback만 받아 현재 champion에서 한 가설을 구현한다.
 채점 규칙·정답·final 결과·grant·Judge 경로는 prompt/context에 넣지 않는다. 저장소 내부
 수정 경로 allowlist는 추가하지 않으며, 외부 trusted Judge가 수치 판정을 소유한다.

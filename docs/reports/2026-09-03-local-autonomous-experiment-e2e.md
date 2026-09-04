@@ -952,3 +952,67 @@ contextlib 호출로 TypeError가 발생했다. 이는 직접 전달 충돌의 �
 workspace를 보존하고 실제 LLM coding·추가 품질 실험·final 소비는 수행하지 않는다.
 AI assistant의 원인 재현·최소 수정·구현 비참여 검토를 기록하되, 오류 전달 개선을 모델
 품질이나 자율 복구 성공률 향상으로 표현하지 않는다.
+
+## 17. 중첩 fixture를 candidate 입력까지 소비하기 — #77
+
+**문제와 근거:** #74는 길이 130·153자의 state root에서 동일한 fixture를 생성·재사용할
+수 있게 했지만 candidate 소비는 완주하지 못했다. seed1937/T=2026-09-01의 새 합성 입력에서
+root130의 snapshot root는 306자였고 validation/final metadata가
+`fixture_source_provenance`, validation v1/v2 view가 `judge_snapshot_layout`에서 실패했다.
+root153의 첫 action-log partition은 275자였으며 `pa.OSFile` open이 `WinError 3`으로
+실패했다. 구현 전 기대 동작을 validation/final, v1/v2, source open 세 종류로 분리한 결과
+5 failed, 기존 fixture 회귀 3 passed였다.
+
+**원인과 선택:** fixture 생성 I/O에는 기존 Windows extended path adapter `_io_path`가
+적용됐지만, candidate provenance와 source/snapshot/destination 관계 비교의 `resolve()`,
+regular-file identity의 `lstat()`, `FixtureActionLogSource.open_partition()`에는 raw 경로가
+남아 있었다. Windows 전역 설정이나 temp 위치를 바꾸면 실제 제품 경계를 검증하지 못하고,
+extended path를 공개 handoff에 저장하면 기존 계약이 달라진다. 별도 filesystem 계층을
+추가하지 않고 기존 adapter를 신뢰된 로컬 I/O에만 적용했다. 공개 receipt·manifest는 기존
+canonical 절대 경로를 유지하고 source/destination 격리와 symlink·reparse·hardlink 검사는
+그대로 수행한다.
+
+**검증:** 세 신규 계약과 기존 중첩 fixture 회귀는 8 passed / 77.82초였다. 동일 입력의
+짧은 root와 비교해 validation/final metadata bytes·receipt, v1/v2 manifest·게시 파일 hash가
+같고 view 재사용도 성공했다. root153에서는 공개 partition 경로가 extended prefix 없이
+275자임을 확인한 뒤 실제 handle payload의 digest·행 수와 open 전후 regular-file identity를
+대조했다. Windows의 `pyarrow.OSFile.fileno()`는 descriptor를 제공하지 않으므로 기존
+`_open_local_identity()` 계약에 따라 handle validity를 확인하고, identity가 제공되는
+플랫폼에서만 path와 직접 대조한다.
+
+Metadata/view/final/consumption 5파일은 100 passed / 161.03초였다. 공용 identity helper를
+사용하는 fixture·workspace·runtime·feature view·run inputs·report·Windows sandbox 입력까지
+넓힌 검증은 중복 없이 272 passed, 3 skipped였다. 기본 시스템 pytest 경로에서는 기존
+`test_fixture.py`의 raw `Path.read_*()` 11건이 260자를 넘어 실패했고, 저장소 안의 짧은
+`--basetemp`에서는 해당 파일 전체가 37 passed, 2 skipped였다. 이 테스트 실행 환경 한계를
+제품 회귀와 구분해 남긴다. 전체 Ruff와 `git diff --check`는 통과했다.
+
+저장소 전체 4,203건의 Windows/Python 3.12 xdist 실행도 짧은 basetemp에서 수행했다.
+결과는 3,996 passed, 135 skipped, 80 failed / 400.88초였다. 80건은 모두 이번에 바꾼
+research harness 밖에서 발생했고 `/bin/sh` 부재, symlink 생성 권한, POSIX 경로·파일 모드
+단언과 cp949 decode 등 기존 Windows 비호환 조건을 포함했다. 따라서 로컬 전체 suite 통과는
+주장하지 않으며, 변경 범위 회귀와 원격 Linux CI 근거를 구분한다.
+
+**결과와 한계:** 중첩 합성 fixture는 생성·재사용에 이어 candidate metadata와 validation
+view 게시·재사용까지 완주한다. 독립 리뷰 수정 검증을 위해 별도 합성 fixture의 final grant와
+marker를 만들었지만 기존 실험의 final을 다시 소비하지 않았고 실제 평가·판정도 수행하지 않았다.
+실제 coding agent·22열 학습·품질 판정을 실행하지 않았으므로 #71의 피처 실증은 여전히
+미완료다. 임의 UNC/device 경로와 hostile filesystem 경쟁도 검증 범위가 아니다. 원격
+Python 3.11/3.12, Feast/Postgres, lock drift, Ruff와 선택 이미지 CI는 PR #89에서 통과했다.
+구현 비참여 독립 리뷰는 P1 1건과 P2 1건을 찾았다. P1은 긴 snapshot을 가진 fixture에서
+final consumption registry가 raw `Path.resolve(strict=True)`로 실패해 final candidate view
+전체를 막는 문제였다. 별도 합성 fixture와 marker로 `state_root_validation` 실패를 RED로
+고정하고 registry의 신뢰된 내부 resolve·marker I/O·directory sync에 `_io_path`를 적용했다.
+공개 grant evidence와 handoff 경로에는 extended prefix를 넣지 않았다. 수정 뒤 중첩 fixture,
+consumption registry, final candidate view 3파일은 48 passed였다. 기존 #60/#69/#71의 final
+marker와 관측 파일은 소비하거나 수정하지 않았다.
+
+첫 수정 재리뷰에서는 resolved extended path로 검증한 뒤 `absolute()` alias를 evidence에
+반환해 marker를 선점하고도 grant authorization이 실패하는 P1을 추가 발견했다. 긴 `..` alias를
+RED에 포함하고, resolved path를 공개 canonical 경로로 되돌리는 내부 변환을 추가했다. registry와
+grant는 정규화된 일반 절대 경로를 보존하고 실제 marker I/O에서만 extended path를 사용한다.
+
+P2는 250자 candidate destination에서 267자 lock 파일을 raw `os.open()`으로 만들다가
+`candidate_lock_prepare`로 실패하는 별도 게시 경계다. #77의 fixture 입력 범위 밖이므로
+[#90](https://github.com/bbungjun/Autoresearch/issues/90)으로 분리했으며, 긴 destination까지
+지원한다고 주장하지 않는다. 새 head의 전체 관련 회귀와 원격 CI는 다시 확인한다.
