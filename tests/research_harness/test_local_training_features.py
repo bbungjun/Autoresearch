@@ -40,7 +40,7 @@ def test_extra_feature_reaches_actual_fit_predict_native_model_and_receipt(
     monkeypatch.setattr(m.LGBMModel, 'fit', capture_fit)
     monkeypatch.setattr(m.LGBMModel, 'predict_proba', capture_predict)
     result = m.train_local_candidate(loaded, seed=7, embedding=Embedding(), config=m.LocalTrainingConfig(n_estimators=3))
-    expected = [*MODEL_FEATURE_COLUMNS, 'synthetic_extra']
+    expected = [*MODEL_FEATURE_COLUMNS, 'mean_topic_similarity', 'synthetic_extra']
     booster = lgb.Booster(model_str=result.model_text)
     assert observed['fit'].columns.tolist() == observed['predict'].columns.tolist() == expected
     assert observed['fit'].dtypes.equals(observed['predict'].dtypes)

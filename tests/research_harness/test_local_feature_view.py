@@ -53,7 +53,7 @@ def test_published_fixture_builds_training_and_prediction_features(
         history_start_date=min(item.dt for item in view.manifest.history_partitions),
     )
     predicted = build_local_features(slate, **args)
-    assert predicted.features.column_names == list(MODEL_FEATURE_COLUMNS)
+    assert predicted.features.column_names == [*MODEL_FEATURE_COLUMNS, "mean_topic_similarity"]
     assert len(predicted.features) == len(slate) > 0
     assert all(column.null_count == 0 for column in predicted.features.columns)
     assert not any(predicted.diagnostics["history_7d_complete"].to_pylist())

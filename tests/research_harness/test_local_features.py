@@ -74,7 +74,7 @@ def build(query: pa.Table | None = None, **changes: object) -> object:
     return module().build_local_features(requests() if query is None else query, **args)
 
 
-def test_hand_calculated_all_21_features_and_raw_zero_second_view() -> None:
+def test_hand_calculated_production_prefix_and_mean_similarity() -> None:
     adapter = GoldenEmbedding()
     result = build(
         history=history(
@@ -89,7 +89,7 @@ def test_hand_calculated_all_21_features_and_raw_zero_second_view() -> None:
         videos=normalized_videos({"view_count": 3, "like_count": 1, "comment_count": 2}),
         embedding=adapter,
     )
-    assert result.features.column_names == list(MODEL_FEATURE_COLUMNS)
+    assert result.features.column_names == [*MODEL_FEATURE_COLUMNS, "mean_topic_similarity"]
     assert result.features.to_pylist() == [{
         "age_group": "20s", "occupation": "student", "watch_time_band": "evening",
         "recent_click_count_7d": 1, "recent_view_count_7d": 2, "recent_watch_time_7d": 13,
@@ -99,6 +99,7 @@ def test_hand_calculated_all_21_features_and_raw_zero_second_view() -> None:
         "days_since_upload": 29, "channel_subscriber_count": 40,
         "channel_view_count": 1000, "channel_video_count": 8,
         "topic_similarity": 0.96, "preferred_category_match": 1, "historical_category_match": 1,
+        "mean_topic_similarity": 0.08,
     }]
     assert result.diagnostics.to_pylist() == [{
         "user_metadata_missing": False, "video_metadata_missing": False,
@@ -115,6 +116,25 @@ def test_request_order_duplicates_and_historical_same_day_exclusion() -> None:
     )
     assert result.features["recent_click_count_7d"].to_pylist() == [1, 0, 1]
     assert result.features.to_pylist()[0] == result.features.to_pylist()[2]
+
+
+def test_similarity_exact_dedup_preserves_first_text_and_existing_max() -> None:
+    adapter = GoldenEmbedding()
+    result = build(
+        requests({}, {}),
+        users=normalized_users({
+            "hobby_keywords": ["기타", "기타", " "],
+            "interest_keywords": ["음악", "기타"],
+            "lifestyle_keywords": ["음악"],
+        }),
+        embedding=adapter,
+    )
+    assert result.features["topic_similarity"].to_pylist() == [0.96, 0.96]
+    assert result.features["mean_topic_similarity"].to_pylist() == [0.08, 0.08]
+    assert adapter.calls == [
+        (["기타", "음악"], "query"),
+        ([CATEGORY_DESCRIPTIONS["Music"]], "document"),
+    ]
 
 
 def test_event_category_uses_event_time_not_query_time_and_ties_sort_strings() -> None:
@@ -214,8 +234,9 @@ def test_empty_requests_keep_typed_schema_and_do_not_embed() -> None:
     adapter = GoldenEmbedding()
     result = build(requests().slice(0, 0), embedding=adapter)
     assert result.features.num_rows == result.diagnostics.num_rows == 0
-    assert result.features.column_names == list(MODEL_FEATURE_COLUMNS)
+    assert result.features.column_names == [*MODEL_FEATURE_COLUMNS, "mean_topic_similarity"]
     assert result.features.schema.field("topic_similarity").type == pa.float64()
+    assert result.features.schema.field("mean_topic_similarity").type == pa.float64()
     assert adapter.calls == []
 
 
@@ -225,7 +246,7 @@ def test_zero_denominator_empty_keywords_and_explicit_preference() -> None:
         users=normalized_users({"hobby_keywords": [], "interest_keywords": [], "primary_categories": ["Music"]}),
         videos=normalized_videos({"view_count": 0}), embedding=adapter,
     ).features.to_pylist()[0]
-    assert row["like_ratio"] == row["comment_ratio"] == row["topic_similarity"] == 0
+    assert row["like_ratio"] == row["comment_ratio"] == row["topic_similarity"] == row["mean_topic_similarity"] == 0
     assert row["preferred_category_match"] == 1
     assert adapter.calls == []
 
@@ -233,6 +254,25 @@ def test_zero_denominator_empty_keywords_and_explicit_preference() -> None:
 def test_negative_cosine_is_not_clamped_to_zero() -> None:
     row = build(users=normalized_users({"hobby_keywords": [], "interest_keywords": ["음악"]})).features.to_pylist()[0]
     assert row["topic_similarity"] == -0.8
+    assert row["mean_topic_similarity"] == -0.8
+
+
+def test_future_metadata_does_not_change_past_mean_similarity() -> None:
+    request = requests({"event_timestamp": Q})
+    before = build(request).features.to_pylist()[0]
+    after = build(
+        request,
+        users=normalized_users(
+            {},
+            {"available_at": Q + timedelta(microseconds=1), "hobby_keywords": ["음악"], "interest_keywords": []},
+        ),
+        videos=normalized_videos(
+            {},
+            {"available_at": Q + timedelta(microseconds=1), "category_id": "Gaming"},
+        ),
+    ).features.to_pylist()[0]
+    assert after["topic_similarity"] == before["topic_similarity"] == 0.96
+    assert after["mean_topic_similarity"] == before["mean_topic_similarity"] == 0.08
 
 
 def test_observed_video_age_uses_kst_not_utc_or_query_date() -> None:

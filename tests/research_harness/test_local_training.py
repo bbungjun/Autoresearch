@@ -145,7 +145,7 @@ def test_actual_lightgbm_seed_retraining_and_receipt(tmp_path: Path) -> None:
     assert first.receipt['input_manifest_sha256'] == loaded.manifest_sha256
     assert first.receipt['sampling']['realized_rate'] == 1.0
     assert str(tmp_path) not in json.dumps(first.receipt)
-    assert first.receipt['feature_columns'] == list(MODEL_FEATURE_COLUMNS)
+    assert first.receipt['feature_columns'] == [*MODEL_FEATURE_COLUMNS, 'mean_topic_similarity']
 
 
 @pytest.mark.parametrize('seed', [-1, 2**32, True])
@@ -172,7 +172,7 @@ def test_sampling_corrects_probabilities_and_refits_each_call(tmp_path: Path, mo
     first = m.train_local_candidate(loaded, seed=7, embedding=Embedding(), config=config)
     second = m.train_local_candidate(loaded, seed=7, embedding=Embedding(), config=config)
     assert len(calls) == 2 and calls[0][0] is not calls[1][0]
-    assert calls[0][1].columns.tolist() == list(MODEL_FEATURE_COLUMNS)
+    assert calls[0][1].columns.tolist() == [*MODEL_FEATURE_COLUMNS, 'mean_topic_similarity']
     assert len(calls[0][2]) == 36
     assert first.receipt['sampling']['realized_rate'] == 0.5
     assert first.receipt['sampling']['scale_pos_weight'] == 1.0
@@ -217,7 +217,9 @@ def test_input_is_not_read_again_after_loading(tmp_path: Path) -> None:
     assert len(result.predictions) == 1
 
 
-def test_published_fixture_real_lightgbm_and_native_model(candidate_fixture: object, tmp_path: Path) -> None:
+def test_published_fixture_real_lightgbm_and_native_model(
+    candidate_fixture: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import lightgbm as lgb
     import pandas as pd
     from autoresearch.research_harness.candidate_data_view import materialize_candidate_data_view_v2, prepare_candidate_metadata
@@ -225,6 +227,14 @@ def test_published_fixture_real_lightgbm_and_native_model(candidate_fixture: obj
     from autoresearch.research_harness.local_features import build_local_features
 
     m = module()
+    fitted: dict[str, object] = {}
+    original_fit = m.LGBMModel.fit
+
+    def capture_fit(self: object, x: object, y: object, **kwargs: object) -> None:
+        fitted['frame'] = x.copy()
+        original_fit(self, x, y, **kwargs)
+
+    monkeypatch.setattr(m.LGBMModel, 'fit', capture_fit)
     fixture, source = candidate_fixture
     metadata = prepare_candidate_metadata(fixture.judge, source=source)
     view = materialize_candidate_data_view_v2(CandidateDataViewRequest(fixture.judge, tmp_path), source=source, metadata=metadata)
@@ -238,6 +248,11 @@ def test_published_fixture_real_lightgbm_and_native_model(candidate_fixture: obj
         features[column] = pd.Categorical(features[column], categories=values)
     restored = lgb.Booster(model_str=result.model_text).predict(features)
     np.testing.assert_allclose(restored, result.predictions['score'].to_numpy(), atol=1e-12)
+    assert features.columns.tolist() == [*MODEL_FEATURE_COLUMNS, 'mean_topic_similarity']
+    assert lgb.Booster(model_str=result.model_text).feature_name() == result.receipt['feature_columns']
+    fitted_mean = fitted['frame']['mean_topic_similarity'].to_numpy()
+    assert np.isfinite(fitted_mean).all()
+    assert np.unique(fitted_mean).size > 1
     assert result.receipt['feature_diagnostics']['training']['history_7d_complete'] == 0
 
 
