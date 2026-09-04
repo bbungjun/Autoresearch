@@ -5,6 +5,7 @@
 
 [기능] 기존 Judge 상태 루트의 evaluation별 marker를 원자 생성·동기화하고, marker evidence와
 직접 만들 수 없는 final 소비 grant를 반환한다.
+검증된 로컬 Windows 장경로는 내부 registry I/O에서만 extended path로 변환한다.
 
 [비책임] final prediction 실행·채점·판정, Trial Ledger 기록, Controller의 복구 순서는 담당하지
 않는다. marker 삭제와 같은 OS 사용자에 대한 완전한 filesystem 격리도 제공하지 않는다.
@@ -26,6 +27,7 @@ from autoresearch.research_harness.fixture_errors import StageCError
 from autoresearch.research_harness._filesystem import sync_directory
 from autoresearch.research_harness.fixture_models import JudgeSnapshotHandoff
 from autoresearch.research_harness.local_evaluation_fixture import (
+    _io_path,
     _validated_judge_snapshot,
 )
 
@@ -106,7 +108,8 @@ class FinalConsumptionGrant:
         try:
             return (
                 self._token is _GRANT_TOKEN
-                and self._snapshot_root == handoff.snapshot_root.resolve()
+                and _io_path(self._snapshot_root).resolve(strict=True)
+                == _io_path(handoff.snapshot_root).resolve(strict=True)
                 and self._snapshot_fingerprint == str(handoff.snapshot_fingerprint)
                 and self._manifest_sha256 == handoff.manifest_sha256
                 and self._final_evaluation_id == str(handoff.final_holdout_id)
@@ -148,7 +151,7 @@ def claim_final_consumption(
 
     if prior_evidence is not None:
         _verify_prior_evidence(prior_evidence, evidence)
-    if os.path.lexists(marker_path):
+    if os.path.lexists(_io_path(marker_path)):
         raise ConsumptionRegistryError(
             ConsumptionRegistryErrorCode.ALREADY_CONSUMED,
             "marker_exists",
@@ -158,7 +161,7 @@ def claim_final_consumption(
     flags |= getattr(os, "O_BINARY", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(marker_path, flags, 0o600)
+        descriptor = os.open(_io_path(marker_path), flags, 0o600)
     except FileExistsError:
         raise ConsumptionRegistryError(
             ConsumptionRegistryErrorCode.ALREADY_CONSUMED,
@@ -185,7 +188,7 @@ def claim_final_consumption(
             pass
 
     try:
-        sync_directory(registry_root)
+        sync_directory(_io_path(registry_root))
     except OSError:
         raise ConsumptionRegistryError(
             ConsumptionRegistryErrorCode.STATE_UNAVAILABLE,
@@ -199,7 +202,7 @@ def _issue_grant(
     evidence: FinalConsumptionEvidence,
 ) -> FinalConsumptionGrant:
     grant = object.__new__(FinalConsumptionGrant)
-    object.__setattr__(grant, "_snapshot_root", handoff.snapshot_root.resolve())
+    object.__setattr__(grant, "_snapshot_root", handoff.snapshot_root.absolute())
     object.__setattr__(grant, "_snapshot_fingerprint", str(handoff.snapshot_fingerprint))
     object.__setattr__(grant, "_manifest_sha256", handoff.manifest_sha256)
     object.__setattr__(grant, "_final_evaluation_id", str(handoff.final_holdout_id))
@@ -246,20 +249,23 @@ def _validated_registry_root(
     try:
         if not isinstance(configured_root, Path) or not configured_root.is_absolute():
             raise ValueError
-        state_root = configured_root.resolve(strict=True)
-        registry_root = (state_root / _REGISTRY_DIRECTORY).resolve(strict=True)
-        snapshot_root = handoff.snapshot_root.resolve(strict=True)
-        expected_state_root = snapshot_root.parents[2]
+        state_root = configured_root.absolute()
+        registry_root = state_root / _REGISTRY_DIRECTORY
+        snapshot_root = handoff.snapshot_root.absolute()
+        io_state_root = _io_path(state_root).resolve(strict=True)
+        io_registry_root = _io_path(registry_root).resolve(strict=True)
+        io_snapshot_root = _io_path(snapshot_root).resolve(strict=True)
+        expected_state_root = io_snapshot_root.parents[2]
         if (
-            not state_root.is_dir()
-            or not registry_root.is_dir()
-            or registry_root.parent != state_root
-            or snapshot_root.parent.name != "by-hash"
-            or snapshot_root.parent.parent.name != "evaluation-snapshots"
-            or state_root != expected_state_root
+            not io_state_root.is_dir()
+            or not io_registry_root.is_dir()
+            or io_registry_root.parent != io_state_root
+            or io_snapshot_root.parent.name != "by-hash"
+            or io_snapshot_root.parent.parent.name != "evaluation-snapshots"
+            or io_state_root != expected_state_root
         ):
             raise ValueError
-        with os.scandir(registry_root):
+        with os.scandir(io_registry_root):
             pass
         return state_root, registry_root
     except (IndexError, OSError, RuntimeError, ValueError):
@@ -294,7 +300,7 @@ def _verify_prior_evidence(
             not isinstance(provided, FinalConsumptionEvidence)
             or provided.marker_path != expected.marker_path
             or _DIGEST_PATTERN.fullmatch(provided.marker_sha256) is None
-            or not os.path.lexists(expected.marker_path)
+            or not os.path.lexists(_io_path(expected.marker_path))
             or sha256(_read_regular_file(expected.marker_path)).hexdigest()
             != provided.marker_sha256
         ):
@@ -308,7 +314,7 @@ def _verify_prior_evidence(
 
 def _read_regular_file(path: Path) -> bytes:
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
+    descriptor = os.open(_io_path(path), flags)
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > _MAX_MARKER_BYTES:
