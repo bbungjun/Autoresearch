@@ -2322,11 +2322,17 @@ grant와 evidence에는 기존 canonical 절대 경로를 유지한다. 합성 f
 final metadata·grant·view를 잇는 신규 회귀가 GREEN이 됐고, 기존 #60/#69/#71 marker는 읽거나
 변경하지 않았다.
 
+첫 수정 재리뷰에서는 검증에 사용한 resolved 경로와 반환한 `absolute()` 경로가 달라 junction
+또는 `..` alias에서 marker를 선점하고도 사용할 수 없는 grant를 반환하는 P1을 추가로 찾았다.
+긴 `..` alias를 RED에 넣고, resolved extended path에서 device prefix만 제거한 canonical 공개
+경로를 registry와 grant에 사용하도록 수정했다. marker open/read/sync 시점에는 그 경로를 다시
+내부 I/O 표현으로 바꾼다. 이로써 alias 정규화와 공개 prefix 비노출을 동시에 검증한다.
+
 같은 리뷰에서 250자 candidate destination이 `.harness-in.lock` 생성에서 실패하는 P2도
 재현했다. 이는 #77의 검증된 fixture 입력 소비 범위를 벗어난 게시 destination I/O 문제이므로
 [#90](https://github.com/bbungjun/Autoresearch/issues/90)으로 분리했다. #77은 이 제한을 숨기지
 않되 destination 게시 전체를 함께 넓히지 않는다. 리뷰 수정 뒤 중첩·registry·final view 3파일은
-48 passed였으며 전체 관련 범위와 원격 CI는 새 head에서 다시 확인한다.
+48 passed였으며 두 번째 리뷰 수정 뒤 전체 관련 범위와 원격 CI를 새 head에서 다시 확인한다.
 
 저장소 전체 4,203건도 Windows/Python 3.12, xdist 4 worker와 같은 짧은 basetemp로 실행했다.
 결과는 3,996 passed, 135 skipped, 80 failed / 400.88초였다. 실패는 모두 변경한

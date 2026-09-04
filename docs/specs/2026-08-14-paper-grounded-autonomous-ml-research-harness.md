@@ -904,6 +904,10 @@ grant evidence는 canonical 절대 경로로 유지한다. 기존 실험의 mark
 않는다. 긴 candidate destination의 게시 I/O는 별도 #90 범위이며 #77의 지원 주장에 포함하지
 않는다.
 
+Registry가 junction이나 `..` alias를 허용한 뒤 marker를 만들 경우에는 검증에 사용한 resolved
+경로를 device prefix 없는 canonical 공개 경로로 되돌려 evidence와 grant에 저장한다. 검증 경로와
+반환 경로가 달라 marker만 선점하고 grant가 무효가 되는 상태를 허용하지 않는다.
+
 agent는 initial card와 validation feedback만 받아 현재 champion에서 한 가설을 구현한다.
 채점 규칙·정답·final 결과·grant·Judge 경로는 prompt/context에 넣지 않는다. 저장소 내부
 수정 경로 allowlist는 추가하지 않으며, 외부 trusted Judge가 수치 판정을 소유한다.

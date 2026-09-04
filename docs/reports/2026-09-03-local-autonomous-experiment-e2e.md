@@ -994,8 +994,9 @@ research harness 밖에서 발생했고 `/bin/sh` 부재, symlink 생성 권한,
 주장하지 않으며, 변경 범위 회귀와 원격 Linux CI 근거를 구분한다.
 
 **결과와 한계:** 중첩 합성 fixture는 생성·재사용에 이어 candidate metadata와 validation
-view 게시·재사용까지 완주한다. 이번 작업은 새 final grant·평가·소비 marker를 만들지 않았고,
-실제 coding agent·22열 학습·품질 판정을 실행하지 않았다. 따라서 #71의 피처 실증은 여전히
+view 게시·재사용까지 완주한다. 독립 리뷰 수정 검증을 위해 별도 합성 fixture의 final grant와
+marker를 만들었지만 기존 실험의 final을 다시 소비하지 않았고 실제 평가·판정도 수행하지 않았다.
+실제 coding agent·22열 학습·품질 판정을 실행하지 않았으므로 #71의 피처 실증은 여전히
 미완료다. 임의 UNC/device 경로와 hostile filesystem 경쟁도 검증 범위가 아니다. 원격
 Python 3.11/3.12, Feast/Postgres, lock drift, Ruff와 선택 이미지 CI는 PR #89에서 통과했다.
 구현 비참여 독립 리뷰는 P1 1건과 P2 1건을 찾았다. P1은 긴 snapshot을 가진 fixture에서
@@ -1005,6 +1006,11 @@ final consumption registry가 raw `Path.resolve(strict=True)`로 실패해 final
 공개 grant evidence와 handoff 경로에는 extended prefix를 넣지 않았다. 수정 뒤 중첩 fixture,
 consumption registry, final candidate view 3파일은 48 passed였다. 기존 #60/#69/#71의 final
 marker와 관측 파일은 소비하거나 수정하지 않았다.
+
+첫 수정 재리뷰에서는 resolved extended path로 검증한 뒤 `absolute()` alias를 evidence에
+반환해 marker를 선점하고도 grant authorization이 실패하는 P1을 추가 발견했다. 긴 `..` alias를
+RED에 포함하고, resolved path를 공개 canonical 경로로 되돌리는 내부 변환을 추가했다. registry와
+grant는 정규화된 일반 절대 경로를 보존하고 실제 marker I/O에서만 extended path를 사용한다.
 
 P2는 250자 candidate destination에서 267자 lock 파일을 raw `os.open()`으로 만들다가
 `candidate_lock_prepare`로 실패하는 별도 게시 경계다. #77의 fixture 입력 범위 밖이므로
