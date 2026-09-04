@@ -21,8 +21,13 @@ snapshot·split·seed의 paired 비교로 설명한다. 결과는 합성 환경�
 
 ## 비교군 5종
 
-1. `trending`: 원래 Trending rank를 [0, 1] 역순 점수로 변환한다.
-2. `popularity`: 같은 slate 안의 `view_count`를 [0, 1] min-max 점수로 변환한다.
+1. `trending`: 원래 Trending rank를 [0, 1] 역순 점수로 변환한다. 첫 실행 전 입력
+   점검에서 canonical fixture의 `original_rank`·`candidate_source`가 모두 null이고
+   snapshot이 행을 재정렬한다는 사실을 확인했다. 어떤 metric도 계산하기 전에, 이
+   합성 fixture에 한해 candidate-safe `fixture-video-YYYYMMDD-NNNN`의 원천 행 번호를
+   rank로 복원하도록 고정했다. 이 fallback은 production 데이터에는 적용하지 않는다.
+2. `popularity`: 같은 slate 안의 as-of `view_count`를 [0, 1] min-max 점수로 변환한다.
+   관측 전 영상은 production 피처 조립과 같은 cold-start 값 `0`을 사용한다.
 3. `video_only_lgbm`: 영상 자체 9피처만 사용하는 LightGBM이다.
 4. `personalized_lgbm`: production `MODEL_FEATURE_COLUMNS` 21개를 사용하는 LightGBM이다.
 5. `oracle_upper_bound`: Judge만 봉인 label을 사용해 만드는 이진 relevance 상한이다.

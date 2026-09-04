@@ -13,6 +13,7 @@ heuristic 점수 정규화를 정의한다.
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Sequence
 from dataclasses import asdict
 from statistics import fmean, stdev
@@ -133,23 +134,38 @@ def heuristic_predictions(inputs: LocalTrainingInput, arm: str) -> pa.Table:
     slate_ids = tuple(inputs.slate["slate_id"].to_pylist())
     if arm == "trending":
         raw = inputs.slate["original_rank"].to_pylist()
-        if any(value is None for value in raw):
+        if all(value is None for value in raw):
+            raw = synthetic_fixture_trending_ranks(inputs.slate["video_id"].to_pylist())
+        elif any(value is None for value in raw):
             raise ValueError("personalization_ablation_scores_invalid")
         scores = normalize_scores_by_slate(slate_ids, raw, higher_is_better=False)
     elif arm == "popularity":
         requests = inputs.slate.select(["video_id", "event_timestamp"])
         metadata = select_metadata_as_of(inputs.videos, requests, entity_key="video_id")
         raw = metadata["view_count"].to_pylist()
-        if metadata["metadata_missing"].to_pylist().count(True) or any(
-            value is None for value in raw
-        ):
-            raise ValueError("personalization_ablation_scores_invalid")
+        raw = [0 if value is None else value for value in raw]
         scores = normalize_scores_by_slate(slate_ids, raw, higher_is_better=True)
     else:
         raise ValueError("personalization_ablation_arm_invalid")
     return inputs.slate.select(["evaluation_id", "slate_id", "video_id"]).append_column(
         "score", pa.array(scores, type=pa.float64())
     )
+
+
+def synthetic_fixture_trending_ranks(video_ids: Sequence[object]) -> tuple[int, ...]:
+    """합성 fixture video ID에 보존된 원천 Trending 행 번호를 복원한다."""
+
+    ranks: list[int] = []
+    for video_id in video_ids:
+        if not isinstance(video_id, str):
+            raise ValueError("personalization_ablation_scores_invalid")
+        match = re.fullmatch(r"fixture-video-\d{8}-(\d{4})", video_id)
+        if match is None:
+            raise ValueError("personalization_ablation_scores_invalid")
+        ranks.append(int(match.group(1)) + 1)
+    if not ranks:
+        raise ValueError("personalization_ablation_scores_invalid")
+    return tuple(ranks)
 
 
 def scoring_result_dict(result: JudgeScoringResult) -> dict[str, object]:

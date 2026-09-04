@@ -77,6 +77,15 @@ def test_unknown_learned_arm_is_rejected() -> None:
         module().feature_columns_for_arm("trending")
 
 
+def test_synthetic_fixture_trending_rank_is_recovered_from_safe_video_id() -> None:
+    assert module().synthetic_fixture_trending_ranks(
+        ("fixture-video-20260901-0015", "fixture-video-20260901-0002")
+    ) == (16, 3)
+
+    with pytest.raises(ValueError, match="personalization_ablation_scores_invalid"):
+        module().synthetic_fixture_trending_ranks(("production-video",))
+
+
 def test_summary_applies_direction_and_two_thirds_rule() -> None:
     m = module()
     observations = []
