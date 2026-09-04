@@ -1016,3 +1016,37 @@ P2는 250자 candidate destination에서 267자 lock 파일을 raw `os.open()`�
 `candidate_lock_prepare`로 실패하는 별도 게시 경계다. #77의 fixture 입력 범위 밖이므로
 [#90](https://github.com/bbungjun/Autoresearch/issues/90)으로 분리했으며, 긴 destination까지
 지원한다고 주장하지 않는다. 새 head의 전체 관련 회귀와 원격 CI는 다시 확인한다.
+
+## 18. Snapshot과 Judge 오류의 2차 전달 충돌 제거 — #79
+
+**문제:** #76에서 `StageCError`의 contextlib 충돌을 수정한 뒤 영향 범위를 조사하면서
+`EvaluationSnapshotError`와 `JudgeError`도 같은 `frozen=True, slots=True` 조합으로 원본 대신
+`TypeError`를 전파함을 확인했다. 최신 main `271b148`, Windows/Python 3.12의 파일 I/O 없는
+최소 재현에서 두 클래스 모두 같은 결과였다. 이는 직접 오류 전달 결함의 증거이며 실제 E2E
+실패 로그에서 두 오류가 발생했다는 뜻은 아니다.
+
+**해결:** #76과 같은 최소 패턴을 각 오류 모듈에 적용했다. Dataclass 전체 frozen을 제거하고
+code·stage·`dt`·`count`·`identifier_prefix`·`row_number`만 초기화 후 일반 대입·삭제로부터
+보호한다. traceback·context·cause·suppression·notes는 기본 `Exception`에 맡긴다. 공용 기반
+클래스를 만들지 않아 두 오류의 문자열과 선택 필드, Snapshot identifier 축약 계약을 섞지
+않았다. equality/hash/repr/`replace()`는 유지했다.
+
+**검증:** 제품 변경 전 RED 3종 36건은 22 failed, 14 passed였다. 모든 Snapshot code와 두
+Judge code의 중첩 context manager 전달, 실제 `_run_lock`, runtime metadata와 원인 연쇄가
+실패했고 기존 구조 필드 보호·타입 거부·dataclass value 계약은 통과했다. 구현과 optional
+`None` 필드 회귀 보강 뒤 신규 38건은 모두 통과했다. 기존 Snapshot/Judge 소비 대조는 변경 전
+79 passed, 3 skipped였고, 변경 후 두 오류를 직접 참조하는 테스트 전체는 짧은 basetemp에서
+260 passed, 5 skipped였다. 전체 Ruff와 `git diff --check`도 통과했다.
+
+기본 pytest temp의 영향 실행에서는 기존 `test_fixture.py` raw `Path.read_*()` 11건이 260자
+초과 경로 때문에 실패했다. 같은 집합을 짧은 basetemp에서 모두 통과시켜 제품 회귀와 테스트
+환경 한계를 분리했다. 임시 test root 삭제는 자동 승인 검사에서 거부되어 코드·커밋 밖 로컬
+폴더로 남았으며 검증 결과에는 영향을 주지 않는다.
+
+**결과와 한계:** 두 오류는 generator context manager와 실제 run lock에서 원본 객체·구조
+필드·traceback과 원인 연쇄를 유지한다. 오류 전달 신뢰성만 검증했으며 자율 복구율이나 모델
+품질이 향상됐다고 주장하지 않는다. 실제 coding agent·학습·평가·final 소비를 실행하지 않았고
+기존 #60/#69/#71 증거도 수정하지 않았다. 전체 Research Harness는 CI와 같은 xdist 4 worker와
+짧은 basetemp에서 1,302 passed, 13 skipped / 228.42초였다. 구현 비참여 독립 리뷰는
+P0/P1/P2/P3 모두 0건이었고 관련 회귀 260 passed, 5 skipped를 재확인했다. PR #91의 Linux
+Python 3.11/3.12, Feast/Postgres, lock drift, Ruff와 선택 이미지 CI도 통과했다.

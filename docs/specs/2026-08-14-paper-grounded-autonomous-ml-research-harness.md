@@ -872,6 +872,14 @@ with/contextmanager를 거쳐도 동일 예외 객체와 구조화 필드가 전
 이 보호는 일반 필드 대입·삭제 계약이며, Python 내부 접근을 통한 적대적 변조 방어가 아니다.
 다른 frozen exception이나 #77 경로 소비까지 일괄 수정하지 않는다.
 
+**#79 Snapshot/Judge 오류 전달:** `EvaluationSnapshotError`와 `JudgeError`도 구조화 code·stage와
+각 선택 필드를 생성 후 일반 대입·삭제로 바꿀 수 없게 유지하면서, Python이 예외 전달에 쓰는
+traceback·context·cause·suppression·notes는 기본 `Exception` 동작을 허용한다. 중첩 generator
+context manager와 실제 run lock을 지나도 같은 오류 객체와 필드가 전달되어야 하며 다른
+`TypeError`로 바뀌면 안 된다. Snapshot의 UTF-8 16바이트 identifier 축약과 두 클래스의 기존
+문자열·equality/hash/repr/`replace()` 계약을 유지한다. 공용 오류 계층 도입, 다른 frozen 예외
+일괄 변경과 실제 ML/final 실행은 범위 밖이다.
+
 **#77 중첩 fixture의 candidate 입력 소비:** #74가 게시한 canonical fixture 경로는
 공개 receipt와 handoff에서 `\\?\` 접두사 없는 절대 경로를 유지한다. Windows trusted
 process가 그 경로를 검증·읽을 때만 기존 `_io_path` 규칙을 적용하며, source provenance,

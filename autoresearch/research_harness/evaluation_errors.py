@@ -3,12 +3,13 @@
 [파이프라인] action log 원천을 평가 snapshot으로 검증·변환하는 Stage B 전 구간에서
 안전한 오류 문맥을 전달한다.
 
-[기능] Stage B 검증 실패의 reason code와 예외 타입을 제공한다.
+[기능] Stage B 검증 실패의 reason code와 예외 타입을 제공한다. 구조 필드는 생성 후
+보호하면서 traceback·cause 등 Python 예외 전달 metadata는 기본 동작을 유지한다.
 
 [비책임] 오류를 HTTP/CLI 응답으로 변환하거나 재시도 정책을 정하지 않는다.
 """
 
-from dataclasses import dataclass
+from dataclasses import FrozenInstanceError, dataclass
 from datetime import date
 from enum import StrEnum, unique
 
@@ -28,13 +29,23 @@ class SnapshotErrorCode(StrEnum):
     SNAPSHOT_WRITE_CONFLICT = "snapshot_write_conflict"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True, unsafe_hash=True)
 class EvaluationSnapshotError(Exception):
     code: SnapshotErrorCode
     stage: str
     dt: date | None = None
     count: int | None = None
     identifier_prefix: str | None = None
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name in self.__dataclass_fields__ and hasattr(self, name):
+            raise FrozenInstanceError(f"cannot assign to field {name!r}")
+        Exception.__setattr__(self, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if name in self.__dataclass_fields__:
+            raise FrozenInstanceError(f"cannot delete field {name!r}")
+        Exception.__delattr__(self, name)
 
     def __post_init__(self) -> None:
         if self.identifier_prefix is not None:
