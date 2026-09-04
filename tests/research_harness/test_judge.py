@@ -28,6 +28,7 @@ from autoresearch.research_harness.judge import (
     JudgeEvaluationTarget,
     build_validation_target,
     parse_prediction_copy,
+    score_oracle_upper_bound,
     score_predictions,
 )
 from autoresearch.research_harness.local_evaluation_fixture import (
@@ -178,6 +179,21 @@ def test_target_rejects_direct_construction() -> None:
         JudgeEvaluationTarget()
 
     assert error.value.code is JudgeErrorCode.INVALID_TARGET
+
+
+def test_oracle_upper_bound_scores_inside_judge_without_exposing_rows(judge_handoff) -> None:
+    target = build_validation_target(judge_handoff)
+
+    result = score_oracle_upper_bound(target)
+
+    assert result.row_count == 2
+    assert result.ndcg_at_10.value == 1.0
+    assert result.recall_at_10.value == 1.0
+    assert result.ndcg_at_24.value == 1.0
+    assert result.probability.roc_auc == 1.0
+    assert result.probability.pr_auc == 1.0
+    assert result.probability.grouped_roc_auc is not None
+    assert result.probability.grouped_roc_auc.value == 1.0
 
 
 def test_validation_target_rejects_forged_handoff(judge_handoff) -> None:
