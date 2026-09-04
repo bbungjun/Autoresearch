@@ -2313,6 +2313,12 @@ candidate source/snapshot/destination 관계 비교와 공용 regular-file ident
 합치면 272 passed, 3 skipped이며 skip은 기존 플랫폼 조건이다. 전체 Ruff와 diff 검사는
 통과했다. 원격 Python 3.11/3.12 CI와 구현 비참여 리뷰는 아직 남아 있다.
 
+저장소 전체 4,203건도 Windows/Python 3.12, xdist 4 worker와 같은 짧은 basetemp로 실행했다.
+결과는 3,996 passed, 135 skipped, 80 failed / 400.88초였다. 실패는 모두 변경한
+`tests/research_harness` 밖의 기존 테스트이며 `/bin/sh` 부재, Windows symlink 권한,
+POSIX 경로 구분자·파일 모드 가정과 cp949 decode 등 로컬 플랫폼 차이다. 이를 전체 통과로
+기록하지 않으며 Linux Python 3.11/3.12 CI를 별도 최종 근거로 사용한다.
+
 ### 잔여 검증 우선순위 — 2026-09-03 권고
 
 아래는 #68 문서 갱신 당시의 권고안이며 당시에는 실험 실행 승인이 포함되지 않았다.

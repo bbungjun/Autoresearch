@@ -987,6 +987,12 @@ Metadata/view/final/consumption 5파일은 100 passed / 161.03초였다. 공용 
 `--basetemp`에서는 해당 파일 전체가 37 passed, 2 skipped였다. 이 테스트 실행 환경 한계를
 제품 회귀와 구분해 남긴다. 전체 Ruff와 `git diff --check`는 통과했다.
 
+저장소 전체 4,203건의 Windows/Python 3.12 xdist 실행도 짧은 basetemp에서 수행했다.
+결과는 3,996 passed, 135 skipped, 80 failed / 400.88초였다. 80건은 모두 이번에 바꾼
+research harness 밖에서 발생했고 `/bin/sh` 부재, symlink 생성 권한, POSIX 경로·파일 모드
+단언과 cp949 decode 등 기존 Windows 비호환 조건을 포함했다. 따라서 로컬 전체 suite 통과는
+주장하지 않으며, 변경 범위 회귀와 원격 Linux CI 근거를 구분한다.
+
 **결과와 한계:** 중첩 합성 fixture는 생성·재사용에 이어 candidate metadata와 validation
 view 게시·재사용까지 완주한다. 이번 작업은 새 final grant·평가·소비 marker를 만들지 않았고,
 실제 coding agent·22열 학습·품질 판정을 실행하지 않았다. 따라서 #71의 피처 실증은 여전히
