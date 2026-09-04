@@ -2,7 +2,7 @@
 
 > 이슈: #85  
 > 작성일: 2026-09-04  
-> 상태: 구현 완료, GitHub-hosted runner 후속 실측 대기
+> 상태: PR 1차 실측 완료, main 최종 실측 대기
 
 ## 문제
 
@@ -59,15 +59,20 @@ suite와 다른 의존성·서비스를 사용하므로 이번 변경에서 병�
 - 소규모 테스트를 `-n 4 --dist loadfile`로 실행: xdist 설치와 worker 실행 확인
 - `git diff --check`: YAML·문서·lockfile 변경의 공백 오류 확인
 
-GitHub-hosted runner 결과는 PR CI가 실행된 뒤 아래 표에 기록합니다. 측정 전에는
-절감률을 성과로 확정하지 않습니다.
+PR #86의 첫 GitHub-hosted 실행은
+[Actions run 33790459899](https://github.com/bbungjun/Autoresearch/actions/runs/33790459899)에서
+성공했습니다. 변경 전 최근 성공 `main` 10회 중앙값과 비교하면 Python 3.11 job은
+477초에서 214초로 55.1%, Python 3.12 job은 493.5초에서 228초로 53.8%
+줄었습니다. 한 번의 PR 실행 결과이므로 `main` 최종 실측과 반복 실행 분포는 아직
+확인하지 않았습니다.
 
 | 항목 | 변경 전 근거 | 변경 후 원격 결과 |
 | --- | --- | --- |
-| Python 3.11 pytest job | 최근 성공 10회 중앙값 477초(415~502초) | 미측정 |
-| Python 3.12 pytest job | 최근 성공 10회 중앙값 493.5초(363~581초) | 미측정 |
-| 테스트 결과 | 최신 CI 4,052 passed, 126 skipped | 미측정 |
-| 느린 테스트 관측 | 별도 상위 25건 출력 없음 | `--durations=25` 결과 대기 |
+| Python 3.11 pytest job | 최근 성공 10회 중앙값 477초(415~502초) | 214초(3분 34초), 55.1% 감소 |
+| Python 3.12 pytest job | 최근 성공 10회 중앙값 493.5초(363~581초) | 228초(3분 48초), 53.8% 감소 |
+| pytest 본체 | 최신 CI 449.74초 | 3.11 195.07초, 3.12 213.82초 |
+| 테스트 결과 | 최신 CI 4,052 passed, 126 skipped | 양쪽 모두 4,052 passed, 126 skipped; 3.11 131 warnings, 3.12 190 warnings |
+| 느린 테스트 관측 | 별도 상위 25건 출력 없음 | proxy Docker forward 32.33초/25.00초, port-env 11.79초/11.48초, executor report timeout 약 10초 |
 
 ## 한계와 후속 과제
 
@@ -81,3 +86,13 @@ GitHub-hosted runner 결과는 PR CI가 실행된 뒤 아래 표에 기록합니
 관측해야 합니다. `--durations=25`에서 반복적으로 긴 테스트가 확인되면 개별 대기
 제거를 별도 이슈로 다루고, 네 worker로도 충분하지 않은 경우에만 job sharding의
 설치 비용과 유지보수 비용을 다시 비교합니다.
+
+첫 원격 job 감소율 55.1%/53.8%는 WSL의 직렬 대비 `-n 4` 로컬 감소율
+72.4%/72.7%보다 작았습니다. 원격 durations에서는 proxy Docker forward 테스트가
+Python 3.11/3.12에서 각각 32.33초/25.00초, port-env 테스트가 11.79초/11.48초,
+executor report timeout 계열이 약 10초를 차지했습니다. 병렬 worker가 같은 runner의
+CPU와 Docker daemon을 함께 사용하지만, 이번 측정은 CPU·Docker 경합을 분리하지
+않았습니다. 확인된 사실은 proxy Docker와 timeout 계열 테스트의 시간이 길었다는
+것뿐입니다. 경합은 원격 개선 폭을 제한했을 수 있는 후보로 남기고 자원 사용량을
+별도로 측정한 뒤 판단합니다. 한 번의 PR 결과를 안정적인 절감률로 일반화하지 않고,
+`main` 실행과 이후 분포에서도 재확인합니다.
