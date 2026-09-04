@@ -1161,3 +1161,55 @@ P0/P1/P2/P3 모두 0건으로 종료했다. 사후 재해시에서 기존 #60
 seed 7103 후보의 공식 22열 학습이나 성능 결과가 아니다. 두 coding 기회는 이미 소진됐고 patch와
 원래 failure evidence를 보존한다. #96의 확장 회귀·독립 리뷰·CI·merge 뒤, #71은 새 seed와 새
 single-use final 계약 및 별도 비용 승인으로 다시 실행해야 한다.
+
+## 22. seed 7104에서 피처 추가부터 final 판정까지 완주하기 — #71
+
+**문제와 선택:** seed 7103의 coding 기회 2회는 장경로 temp 회수 실패로 소진됐고 공식
+validation/final은 0회였다. #96을 PR #97로 merge한 뒤 결과를 보지 않고 다음 정수 seed 7104와
+merge commit `0957792ba276af33fbea0549f09446ffcf2284d0`을 새 baseline으로 고정했다. 이전 fixture나
+미소비 final ID를 재사용하지 않았다.
+
+**검증 결과:** 무비용 preflight에서 새 fixture·snapshot을 만들고 candidate view 최초/재사용 hash
+`7ed47dbfe745d6e0c0ef27edcd59560c4ec809f288e16352d1327ee2a9ff52a5`가 일치했다. Workspace와
+worktree 등록은 제거됐고 `candidate_lock_prepare`는 재현되지 않았다. 기존 #60 208개, #69
+128개, 원 #71 112개, seed 7102 119개, seed 7103 55개 evidence를 재해시했고 validation/final
+ID 12개가 모두 고유했다. 이 단계의 agent·training·final 호출은 모두 0회였으며 독립 리뷰는
+P0/P1/P2/P3 0건이었다.
+
+Baseline seed 101~105는 21개 피처로 모두 완료됐다. NDCG@10은 평균 0.7697717746, 표본
+표준편차 0.0064497224였고 7개 metric 모두 valid count 5와 양수 sigma를 만족했다. 준비한 run
+config SHA는 `e8b11f9c097a0d7a1800b757eaaf128e38ba11c3ab091267da0f08da853288e6`이다. 비용 승인과 Ollama
+종료 뒤 config를 정확히 한 번 실행했고 1,510.777초에 `improved / promotion_threshold_met`으로
+종료했다.
+
+**해결:** 첫 coding agent는 기존 21개 production 피처 순서를 보존하면서 float64
+`mean_topic_similarity`를 22번째 열에 추가했다. 공백 keyword를 제거하고 exact-string 첫 등장
+순서로 중복을 제거한 뒤 고정 E5 embedding의 cosine similarity를 [-1, 1]로 제한하고 산술 평균을
+소수 넷째 자리로 반올림한다. keyword가 없거나 보지 않은 영상은 0이다. 첫 후보 validation은
+7개 지표 모두 threshold를 통과했다. 두 번째 agent는 feedback을 읽고 추가 변경이 필요 없다고
+판단했으며, 동일 후보 self-compare는 모든 delta 0으로 `discard / primary_not_improved`였다. 이
+두 번째 판정은 첫 후보의 champion 선택을 되돌리지 않았다.
+
+**결과:** single-use final은 5개 paired seed를 정확히 한 번 평가해
+`promote / promotion_threshold_met`을 반환했다. Candidate NDCG@10은 0.8821625508이고 baseline
+대비 방향 보정 평균 차이는 +0.0496126127이었다. PR AUC는 0.7514051678(+0.1783881676), grouped
+ROC AUC는 0.9369565217(+0.0102173913), LogLoss는 0.0671221830(개선 +0.0629524047), Brier는
+0.0113972748(개선 +0.0196848040)이었다. Recall@10은 1.0으로 차이가 0이었다. Final marker는
+정확히 1개이며 hash는 `7407e28febc7a1cd3203f833499f834e2e7d8decdc839d15ed2c9534a6fa7fa8`이다.
+
+실제 validation 피처 3,840행은 모두 유한했고 고유값 17개, 비영 값 2,302개, 평균
+0.4841585938, 표준편차 0.3958107337이었다. 24개 pair-role 학습 receipt와 native LightGBM
+feature name/model hash를 대조한 결과 baseline 모델 11개는 21열, candidate 모델 13개는 마지막
+열 `mean_topic_similarity`를 포함한 22열이었다. Candidate 코드 5개 파일도 실험 SHA와 현재
+브랜치가 일치하고, 이전 실험 evidence 622개는 전후 hash가 같았다.
+
+전체 agent 호출은 2회였다. 첫 호출은 284.859초, input 876,104/cached 804,864/output 6,786/
+reasoning 1,465 token이었고 두 번째는 105.234초, input 468,058/cached 406,656/output 2,414/
+reasoning 938 token이었다. 기록 Judge는 34.655초, input 108,208/output 1,677/reasoning 435
+token이었고 수치 판정과 일치했다. 달러 비용과 자동 사람 개입 값은 `null`이다. 별도 operator
+관찰상 고정 실행 중 수동 코드 변경·재시작·추가 승인은 0건이었다.
+
+이 결과는 고정 합성 fixture에서 새 피처가 공식 22열 학습·validation·final까지 이어져 offline
+promote된 증거다. 운영 champion 반영이나 일반 데이터 개선률을 뜻하지 않는다. 기록 Judge가
+구조화 기록만으로 피처 분포와 native model 열을 직접 볼 수 없다고 지적한 한계는 별도 기술
+감사로 보완했으며, 자동 개입 계측과 달러 비용 계측은 후속 과제로 남는다.

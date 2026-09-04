@@ -1,8 +1,9 @@
 """안전한 candidate metadata와 raw 행동 로그의 로컬 baseline 피처 조립.
 
 [파이프라인] candidate view 게시 뒤, CTR 모델 재학습·예측 앞의 순수 피처 계산 구간이다.
-[기능] 시점별 metadata와 KST 일별 raw 이벤트 집계를 기존 21개 피처 순서로 조립하고,
-metadata 누락과 제공 이력 구간 coverage를 행별 진단으로 분리한다.
+[기능] 시점별 metadata와 KST 일별 raw 이벤트 집계를 기존 21개 피처 접두부와
+평균 topic similarity 실험 피처로 조립하고, metadata 누락과 제공 이력 구간
+coverage를 행별 진단으로 분리한다.
 [비책임] 파일·partition 검증은 candidate_data_view/호출 loader, 라벨·학습·예측은
 후속 학습 CLI, 모델 로딩·GPU 실행은 TextEmbedder adapter가 담당한다.
 """
@@ -19,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from autoresearch.feature_engineering.category_reference import CATEGORY_DESCRIPTIONS
 from autoresearch.feature_engineering.model_contract import (
     CATEGORICAL_FEATURE_COLUMNS, COLD_START_CATEGORICAL_DEFAULT, FeatureContractError,
-    MODEL_FEATURE_COLUMNS,
+    MODEL_FEATURE_COLUMNS, resolve_experiment_feature_columns,
 )
 from autoresearch.research_harness.candidate_metadata import select_metadata_as_of
 from autoresearch.research_harness.embedding import TextEmbedder, encode_normalized
@@ -37,11 +38,13 @@ _HISTORY_SCHEMA = pa.schema([
     *_REQUEST_SCHEMA, pa.field("event_id", pa.string(), nullable=False),
     pa.field("event_type", pa.string(), nullable=False), pa.field("watch_time_sec", pa.int64()),
 ])
-_FLOATS = {"like_ratio", "comment_ratio", "topic_similarity"}
+_MEAN_TOPIC_SIMILARITY = "mean_topic_similarity"
+_LOCAL_FEATURE_COLUMNS = resolve_experiment_feature_columns((_MEAN_TOPIC_SIMILARITY,))
+_FLOATS = {"like_ratio", "comment_ratio", "topic_similarity", _MEAN_TOPIC_SIMILARITY}
 _FEATURE_SCHEMA = pa.schema([
     pa.field(name, pa.string() if name in CATEGORICAL_FEATURE_COLUMNS else
              pa.float64() if name in _FLOATS else pa.int64(), nullable=False)
-    for name in MODEL_FEATURE_COLUMNS
+    for name in _LOCAL_FEATURE_COLUMNS
 ])
 _DIAGNOSTIC_SCHEMA = pa.schema([
     pa.field(name, pa.bool_(), nullable=False) for name in (
@@ -156,17 +159,20 @@ def _window(daily: dict[tuple[str, date], _Daily], user: str, day: date) -> dict
 
 def _similarities(
     users: list[dict[str, object]], videos: list[dict[str, object]], embedding: TextEmbedder,
-) -> list[float]:
+) -> list[tuple[float, float]]:
     # Unique texts are encoded once per call; persistence/model identity belongs to the adapter.
-    keywords_by_row = [
-        [word for name in ("hobby_keywords", "interest_keywords", "lifestyle_keywords")
-         for word in (user[name] or []) if word.strip()] for user in users
-    ]
+    keywords_by_row: list[list[str]] = []
+    for user in users:
+        words = [
+            word for name in ("hobby_keywords", "interest_keywords", "lifestyle_keywords")
+            for word in (user[name] or []) if word.strip()
+        ]
+        keywords_by_row.append(list(dict.fromkeys(words)))
     pairs = [(words, video["category_id"]) for words, video in zip(keywords_by_row, videos, strict=True)]
     keywords = list(dict.fromkeys(word for words, category in pairs if category is not None for word in words))
     categories = list(dict.fromkeys(category for words, category in pairs if words and category is not None))
     if not keywords or not categories:
-        return [0.0] * len(users)
+        return [(0.0, 0.0)] * len(users)
     queries = encode_normalized(embedding, keywords, role="query")
     documents = encode_normalized(
         embedding, [CATEGORY_DESCRIPTIONS[category] for category in categories], role="document",
@@ -174,10 +180,14 @@ def _similarities(
     )
     by_keyword = dict(zip(keywords, queries, strict=True))
     by_category = dict(zip(categories, documents, strict=True))
-    return [
-        round(float(np.clip(max(np.dot(by_keyword[word], by_category[category]) for word in words), -1.0, 1.0)), 4)
-        if words and category is not None else 0.0 for words, category in pairs
-    ]
+    similarities: list[tuple[float, float]] = []
+    for words, category in pairs:
+        if not words or category is None:
+            similarities.append((0.0, 0.0))
+            continue
+        cosines = [float(np.clip(np.dot(by_keyword[word], by_category[category]), -1.0, 1.0)) for word in words]
+        similarities.append((round(max(cosines), 4), round(float(np.mean(cosines)), 4)))
+    return similarities
 
 
 def build_local_features(
@@ -196,8 +206,9 @@ def build_local_features(
         history_start_date: loader가 검증한 연속 partition 구간의 시작일.
 
     Returns:
-        요청 순서·중복을 유지한 21열 features와 행별 진단. 이력 coverage는 제공 구간의
-        길이에 관한 값이며 이 함수가 파일의 존재·완전성을 검사했다는 뜻은 아니다.
+        요청 순서·중복을 유지한 production 21열 접두부와 마지막 평균 유사도 실험 열,
+        그리고 행별 진단. 이력 coverage는 제공 구간의 길이에 관한 값이며 이 함수가
+        파일의 존재·완전성을 검사했다는 뜻은 아니다.
 
     Raises:
         FeatureContractError: 입력 schema/행/구간 또는 임베딩이 계약을 위반한 경우.
@@ -251,9 +262,10 @@ def build_local_features(
                     days_since_upload=(video["available_at"].astimezone(_KST).date() - video["published_at"].astimezone(_KST).date()).days,
                 )
             row.update(
-                topic_similarity=similarity,
+                topic_similarity=similarity[0],
                 preferred_category_match=int(row["category_id"] in (user["primary_categories"] or [])),
                 historical_category_match=int(row["historical_category_affinity"] != COLD_START_CATEGORICAL_DEFAULT and row["historical_category_affinity"] == row["category_id"]),
+                mean_topic_similarity=similarity[1],
             )
             output.append(row)
             diagnostics.append({

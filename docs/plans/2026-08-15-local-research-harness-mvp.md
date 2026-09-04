@@ -1,10 +1,10 @@
 # 로컬 Research Harness MVP — 독립 실행 경로 Implementation Plan
 
-> **현황 2026-09-03 (#69): Task 1~6 핵심 구현·Task 7 주요 실측·단일 실패 후보 수정 실측 완료.**
-> 코드 반영 상태는 [PR #70](https://github.com/bbungjun/Autoresearch/pull/70)을 따르며 전체 MVP 수용 완료는 아니다. 아래 종합 체크리스트와
+> **현황 2026-09-05 (#71): Task 1~6 핵심 구현·Task 7의 복구 및 단일 피처 추가 실측 완료.**
+> 코드 반영 상태는 #71 PR을 따르며 전체 MVP 수용 완료는 아니다. 아래 종합 체크리스트와
 > 잔여 검증 우선순위를 따른다. 과거 Task의 문제·결과는 해당 구현 시점 기록이다.
-> 후속 #71은 coding 2회 뒤 prepare 회수 실패로 피처 학습 실증이 막혔다. Task 7F와 #73을 따른다.
-> #76은 PR #80, #77은 PR #89로 merge됐고, #79의 Snapshot/Judge 오류 전달은 PR #91에서 검증을 마치고 사람의 최종 판정을 기다린다.
+> #76은 PR #80, #77은 PR #89, #79는 PR #91, #96은 PR #97로 merge됐다. #71 seed 7104의
+> 새 평가 대상 재실행은 Task 7F 계약에 따라 offline promote까지 완주했다.
 
 **Goal:** 현행 executor를 수정하지 않고 정적 allowlist를 사용하지 않는 독립 로컬 Research
 Harness(봉인된 사후 판정 + 자가 피드백) 경로를 만든다. 사람이 준 가설·`ExperimentCard`로
@@ -2119,10 +2119,84 @@ Judge는 `concerns`를 남겼다. 구조화 기록으로 복구 후 학습·평�
 해결·결과와 감사 근거는 [포트폴리오 §12](../reports/2026-09-03-local-autonomous-experiment-e2e.md#12-실패한-코드를-고쳤는가-정상-코드에서-다시-시작했는가--69)를 따른다.
 피처 추가 promote, σ=0을 포함한 정책 수용 판단, 범용 자율성·비용 측정은 남아 있다.
 
-### Task 7F: 실제 피처 하나 추가·학습·평가 — #71 (회수 실패, 실증 미완료)
+### Task 7F: 실제 피처 하나 추가·학습·평가 — #71 (seed 7104 실증 완료, 반영 대기)
 
 사용자가 승인한 단일 실행은 종료됐다. 계약은 spec §4.8.1이며 실제 결과는 보고서 §13에
 보존한다. PR #72는 준비 코드·실패 결과 기록이며 피처 실증 이슈 #71은 닫지 않는다.
+
+**2026-09-04 재실행 계약:** #73·#74·#76·#77·#79가 main에 반영된 뒤 사용자가 새 실행을
+승인했다. 결과를 보지 않고 이전 seed 7101의 다음 정수인 **7102**와 최신 main
+`0680e16b66dabde1e639600647c226b8ee6edf39`를 새 fixture·baseline으로 고정한다. 이전 #71의
+소비된 final을 초기화하거나 재사용하지 않고 새 evaluation ID와 final registry를 만든다.
+먼저 coding agent·학습·final 호출 없이 실제 표준 경로의 validation metadata/view 게시와
+disposable worktree 회수를 수행한다. 이 preflight에서 #90의 `candidate_lock_prepare`가
+재현되면 비용 있는 실행 전에 중단하고 #90으로 분기한다.
+
+- [x] seed 7102의 새 fixture와 이전 #60/#69/#71 증거 hash 보존 기록
+- [x] 표준 경로 validation v2 게시·재사용, 입력 identity와 worktree 회수 preflight
+- [x] baseline 0680e16의 고정 seed 101~105 calibration 및 양수 sigma gate
+- [x] coding agent 최대 2회 실행 — timeout·agent_blocked로 공식 validation은 0회
+- [ ] 공식 validation 학습·평가 최소 1회
+- [ ] 실제 `mean_topic_similarity`가 유한·비상수이고 22열 모델/receipt/manifest가 일치하는지 감사
+- [x] seed 7102 final·REPORT·새 문맥 Judge, 시간/token 기록 — baseline 자기 비교로 품질 근거 제외
+- [x] 후속 #92·#94 독립 리뷰 P0/P1 0건, CI 통과, squash merge
+
+재실행의 성공은 피처 후보가 공식 학습·평가와 증거 기록을 완주했다는 뜻이다. 수치 기준에
+미달하면 `discard`를 그대로 완료 결과로 보존한다. infrastructure 오류는 final 전에 멈추고
+원래 오류·patch·미소비 상태를 기록한다. 기존 threshold·seed·모델·embedding·split·label과
+피처 계산 계약은 사후 변경하지 않는다.
+
+**다음 실행 제안 — 무비용 preflight 완료, 비용 구간 승인 전:** 결과를 보지 않고 다음 정수
+**seed 7103**과 최신 main
+`9ede758fcb25bc73356eda72fa6523744705dfb7`를 고정한다. 새 fixture·validation·final ID와 registry를
+사용하며 이전 final과 실패 evidence는 그대로 보존한다. 고정 seed 101~105 calibration과 표준
+validation/worktree preflight를 다시 통과해야 coding을 시작한다. Coding은 초기 1회와 feedback
+1회로 유지하되, 첫 agent가 구현·112 tests·Ruff까지 완료하고 420초 경계에서 timeout된 관측에
+따라 호출당 timeout만 **900초**로 올린다. Agent prompt는 표적 테스트와 Ruff가 끝나면 추가 탐색
+없이 구조화 응답을 즉시 반환하도록 명시하고 commit은 기존 runner가 수행한다. 전체 trial 시작
+예산은 3600초를 유지한다.
+
+유효 candidate가 0건이면 #92 계약에 따라 final을 소비하지 않고
+`inconclusive / no_valid_validation_candidate`로 종료한다. 하나라도 공식 validation을 완료하면
+22열·피처 분포·receipt/manifest를 감사하고 새 final을 정확히 한 번 소비해 baseline과 비교한다.
+수치 기준 미달은 `discard` 완료이며, infrastructure 오류는 final 전에 중단한다. 완료 조건은
+공식 22열 candidate의 validation과 final 비교, REPORT·기록 Judge·비용 기록·독립 감사까지다.
+
+- [x] seed 7103 fixture와 서로 다른 validation/final ID 생성
+- [x] candidate view 게시·재사용, workspace 회수, `candidate_lock_prepare` 미재현
+- [x] agent/training/final 0회와 새 final registry 미생성 확인
+- [x] #60 208개·#69 128개·원 #71 112개 및 seed 7102 run 119개 evidence 전후 보존
+- [x] validation/final ID 10개 유일성 및 전체 preflight 독립 재리뷰 P0/P1/P2/P3 0건
+- [x] 비용 실행 직전 GPU gate와 Ollama 종료 승인 확인
+- [x] baseline seed 101~105 calibration과 양수 sigma gate 통과
+- [x] coding 최대 2회 실행 — 두 candidate 모두 Windows 장경로 cleanup 실패, validation/final 0회
+- [x] 원인 #96 수정·독립 리뷰·PR #97 CI·squash merge
+- [x] 공식 22열 validation/final, REPORT·Judge·감사 완료 — seed 7104에서 충족
+
+**seed 7104 실행 결과:** #96 merge commit
+`0957792ba276af33fbea0549f09446ffcf2284d0`을 새 baseline으로 고정했다. 새 fixture와
+validation/final ID를 만들고 표준 candidate view 게시·재사용·회수 preflight를 통과했다.
+기존 #60/#69/#71과 seed 7102/7103 evidence를 재해시했으며 validation/final ID 12개가 모두
+고유하다. 독립 preflight 리뷰는 P0/P1/P2/P3 0건이었다. Baseline seed 101~105는 21열로 모두
+완료됐고 NDCG@10 평균 0.7697717746, 표본 표준편차 0.0064497224로 양수 sigma gate를 통과했다.
+Run config SHA는 `e8b11f9c097a0d7a1800b757eaaf128e38ba11c3ab091267da0f08da853288e6`이며
+사용자 비용 승인과 Ollama 종료 뒤 이 config를 정확히 한 번 실행했다. 첫 agent가
+`mean_topic_similarity`를 구현했고 공식 validation은 `promote / promotion_threshold_met`이었다.
+두 번째 agent는 feedback을 검토한 뒤 변경하지 않았으며 self-compare trial은 `discard`였다.
+선택된 첫 후보의 single-use final도 `promote / promotion_threshold_met`이었다. Candidate
+NDCG@10은 0.8821625508이고 baseline 대비 방향 보정 평균 차이는 +0.0496126127이다.
+
+실행은 1,510.777초였고 coding agent 2회와 기록 Judge 1회를 사용했다. Agent 토큰은 각각
+input 876,104/cached 804,864/output 6,786/reasoning 1,465와 input 468,058/cached 406,656/
+output 2,414/reasoning 938이었다. Judge는 input 108,208/output 1,677/reasoning 435였고 기록은
+수치 판정과 일치했다. 달러 비용과 자동 사람 개입 값은 `null`이다. 별도 operator 관찰로 고정
+실행 중 수동 코드 변경·재시작·추가 승인은 0건이었다.
+
+실제 validation 입력에서 새 피처는 3,840행 모두 유한하고 고유값 17개, 비영 값 2,302개였다.
+모든 24개 pair-role 학습 receipt를 native LightGBM feature name과 대조해 baseline 모델 11개는
+21열, candidate 모델 13개는 마지막 열 `mean_topic_similarity`를 포함한 22열임을 확인했다.
+Final marker는 정확히 1개이며 이전 실험 evidence의 전후 hash도 일치했다. 이는 고정 합성
+fixture의 offline promote 실증이며 운영 champion 품질이나 일반 데이터 성능으로 확대하지 않는다.
 
 - [x] #71 발행과 이슈 연결 브랜치 생성, 기존 입력/21개 피처 및 학습 receipt 검토
 - [x] 클릭 비중의 학습 cold-start·조회수/나이의 순서 중복을 입력 구조에서 확인하고
@@ -2224,7 +2298,7 @@ object limit의 fail-closed 정책은 완화하지 않는다.
 - [x] 실패 재현 tree 826개 객체를 수정 helper로 전부 회수하고 anchor empty 확인
 - [x] coding agent·runner·workspace·hardlink 확장 회귀 148 passed/1 skipped, 전체 Ruff·diff 검증
 - [x] 구현 비참여 독립 리뷰 P0/P1/P2/P3 0건
-- [ ] PR #97 갱신 HEAD Linux CI, Ready 전환, squash merge
+- [x] PR #97 갱신 HEAD Linux CI, Ready 전환, squash merge
 
 #96은 이미 소비된 seed 7103 coding 기회를 되돌리거나 피처 품질을 입증하지 않는다. 수정이 main에
 반영된 뒤 새 seed·fixture·evaluation/final과 별도 비용 승인을 고정해 #71을 다시 실행한다.
@@ -2238,7 +2312,7 @@ object limit의 fail-closed 정책은 완화하지 않는다.
 - [x] 정상/loader 예외/assertion 실패 뒤 alias 해제, 원본 내용·외부 sentinel 보존, 기존 거부 정책 검증
 - [x] published-fixture 충돌의 중첩 경로 재현을 확보하고 별개 후속 #74로 분리
 - [x] 표적 47개·Ruff·diff, 독립 47개 및 수정 전 RED5 재확인, 문서·포트폴리오 기록
-- [ ] CI·PR·squash merge; #71의 실제 피처 실증은 미완료로 유지
+- [x] CI·PR·squash merge; 당시 #71의 실제 피처 실증은 미완료로 유지
 
 제품 cleanup helper의 hardlink/reparse/경계 검사를 완화하거나 host ACL·소유권을
 변경하지 않는다. 테스트가 의도적으로 만든 링크의 생명주기를 테스트가 책임지는 접근을
@@ -2466,10 +2540,9 @@ PR #91의 Linux Python 3.11/3.12, Feast/Postgres, lock drift, Ruff와 선택 이
 
 아래는 #68 문서 갱신 당시의 권고안이며 당시에는 실험 실행 승인이 포함되지 않았다.
 이후 첫 권고는 위 Task 7R (#69)에서 승인·실측했고, 코드 반영·CI·merge 상태는 PR #70을 따른다.
-현재 2번 피처 추가는 #71에서 시도했으나 회수 실패로 미완료다. #73의 테스트 수명 보완과
-#74의 중첩 경로 fixture 생성과 #76의 예외 전달 보완에 이어 #77의 candidate 입력 소비 및
-#79의 다른 예외 전달 계약을 검증한 뒤
-새 피처 실험과 3번 정책 수용 판단으로 돌아간다.
+2번 피처 추가는 처음 #71에서 회수 실패했으나 #73·#74·#76·#77·#79·#92·#94·#96의 기반
+보완 뒤 seed 7104로 offline promote까지 완주했다. 다음 우선순위는 3번 정책 수용 판단과 자동
+사람 개입·달러 비용 계측이다.
 실행 전 별도 이슈에서 실패 주입 위치·관측 범위·예산·종료 조건을 고정한다.
 
 1. **최소 자동 복구 시나리오(실측 완료):** 새 disposable candidate에 원인이 명확한 실패 하나를
