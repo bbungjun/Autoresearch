@@ -202,7 +202,11 @@ def _issue_grant(
     evidence: FinalConsumptionEvidence,
 ) -> FinalConsumptionGrant:
     grant = object.__new__(FinalConsumptionGrant)
-    object.__setattr__(grant, "_snapshot_root", handoff.snapshot_root.absolute())
+    object.__setattr__(
+        grant,
+        "_snapshot_root",
+        _canonical_public_path(_io_path(handoff.snapshot_root).resolve(strict=True)),
+    )
     object.__setattr__(grant, "_snapshot_fingerprint", str(handoff.snapshot_fingerprint))
     object.__setattr__(grant, "_manifest_sha256", handoff.manifest_sha256)
     object.__setattr__(grant, "_final_evaluation_id", str(handoff.final_holdout_id))
@@ -249,12 +253,11 @@ def _validated_registry_root(
     try:
         if not isinstance(configured_root, Path) or not configured_root.is_absolute():
             raise ValueError
-        state_root = configured_root.absolute()
-        registry_root = state_root / _REGISTRY_DIRECTORY
-        snapshot_root = handoff.snapshot_root.absolute()
-        io_state_root = _io_path(state_root).resolve(strict=True)
-        io_registry_root = _io_path(registry_root).resolve(strict=True)
-        io_snapshot_root = _io_path(snapshot_root).resolve(strict=True)
+        io_state_root = _io_path(configured_root).resolve(strict=True)
+        io_registry_root = _io_path(
+            configured_root / _REGISTRY_DIRECTORY
+        ).resolve(strict=True)
+        io_snapshot_root = _io_path(handoff.snapshot_root).resolve(strict=True)
         expected_state_root = io_snapshot_root.parents[2]
         if (
             not io_state_root.is_dir()
@@ -267,7 +270,10 @@ def _validated_registry_root(
             raise ValueError
         with os.scandir(io_registry_root):
             pass
-        return state_root, registry_root
+        return (
+            _canonical_public_path(io_state_root),
+            _canonical_public_path(io_registry_root),
+        )
     except (IndexError, OSError, RuntimeError, ValueError):
         raise ConsumptionRegistryError(
             ConsumptionRegistryErrorCode.STATE_UNAVAILABLE,
@@ -342,3 +348,16 @@ def _write_all(descriptor: int, payload: bytes) -> None:
         if written <= 0:
             raise OSError
         offset += written
+
+
+def _canonical_public_path(path: Path) -> Path:
+    """Return a resolved Windows I/O path without exposing its device prefix."""
+
+    value = str(path)
+    if os.name != "nt":
+        return path
+    if value.startswith("\\\\?\\UNC\\"):
+        return Path(f"\\\\{value[8:]}")
+    if value.startswith("\\\\?\\"):
+        return Path(value[4:])
+    return path
