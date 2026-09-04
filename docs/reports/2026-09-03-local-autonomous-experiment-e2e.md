@@ -952,3 +952,43 @@ contextlib 호출로 TypeError가 발생했다. 이는 직접 전달 충돌의 �
 workspace를 보존하고 실제 LLM coding·추가 품질 실험·final 소비는 수행하지 않는다.
 AI assistant의 원인 재현·최소 수정·구현 비참여 검토를 기록하되, 오류 전달 개선을 모델
 품질이나 자율 복구 성공률 향상으로 표현하지 않는다.
+
+## 17. 중첩 fixture를 candidate 입력까지 소비하기 — #77
+
+**문제와 근거:** #74는 길이 130·153자의 state root에서 동일한 fixture를 생성·재사용할
+수 있게 했지만 candidate 소비는 완주하지 못했다. seed1937/T=2026-09-01의 새 합성 입력에서
+root130의 snapshot root는 306자였고 validation/final metadata가
+`fixture_source_provenance`, validation v1/v2 view가 `judge_snapshot_layout`에서 실패했다.
+root153의 첫 action-log partition은 275자였으며 `pa.OSFile` open이 `WinError 3`으로
+실패했다. 구현 전 기대 동작을 validation/final, v1/v2, source open 세 종류로 분리한 결과
+5 failed, 기존 fixture 회귀 3 passed였다.
+
+**원인과 선택:** fixture 생성 I/O에는 기존 Windows extended path adapter `_io_path`가
+적용됐지만, candidate provenance와 source/snapshot/destination 관계 비교의 `resolve()`,
+regular-file identity의 `lstat()`, `FixtureActionLogSource.open_partition()`에는 raw 경로가
+남아 있었다. Windows 전역 설정이나 temp 위치를 바꾸면 실제 제품 경계를 검증하지 못하고,
+extended path를 공개 handoff에 저장하면 기존 계약이 달라진다. 별도 filesystem 계층을
+추가하지 않고 기존 adapter를 신뢰된 로컬 I/O에만 적용했다. 공개 receipt·manifest는 기존
+canonical 절대 경로를 유지하고 source/destination 격리와 symlink·reparse·hardlink 검사는
+그대로 수행한다.
+
+**검증:** 세 신규 계약과 기존 중첩 fixture 회귀는 8 passed / 77.82초였다. 동일 입력의
+짧은 root와 비교해 validation/final metadata bytes·receipt, v1/v2 manifest·게시 파일 hash가
+같고 view 재사용도 성공했다. root153에서는 공개 partition 경로가 extended prefix 없이
+275자임을 확인한 뒤 실제 handle payload의 digest·행 수와 open 전후 regular-file identity를
+대조했다. Windows의 `pyarrow.OSFile.fileno()`는 descriptor를 제공하지 않으므로 기존
+`_open_local_identity()` 계약에 따라 handle validity를 확인하고, identity가 제공되는
+플랫폼에서만 path와 직접 대조한다.
+
+Metadata/view/final/consumption 5파일은 100 passed / 161.03초였다. 공용 identity helper를
+사용하는 fixture·workspace·runtime·feature view·run inputs·report·Windows sandbox 입력까지
+넓힌 검증은 중복 없이 272 passed, 3 skipped였다. 기본 시스템 pytest 경로에서는 기존
+`test_fixture.py`의 raw `Path.read_*()` 11건이 260자를 넘어 실패했고, 저장소 안의 짧은
+`--basetemp`에서는 해당 파일 전체가 37 passed, 2 skipped였다. 이 테스트 실행 환경 한계를
+제품 회귀와 구분해 남긴다. 전체 Ruff와 `git diff --check`는 통과했다.
+
+**결과와 한계:** 중첩 합성 fixture는 생성·재사용에 이어 candidate metadata와 validation
+view 게시·재사용까지 완주한다. 이번 작업은 새 final grant·평가·소비 marker를 만들지 않았고,
+실제 coding agent·22열 학습·품질 판정을 실행하지 않았다. 따라서 #71의 피처 실증은 여전히
+미완료다. 임의 UNC/device 경로와 hostile filesystem 경쟁도 검증 범위가 아니다. 원격
+Python 3.11/3.12 CI와 구현 비참여 리뷰 결과는 PR 단계에서 추가한다.

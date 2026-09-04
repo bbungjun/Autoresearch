@@ -8,8 +8,8 @@ derived path·lock alias 검증, content-addressed write-once fixture 게시와 
 재검증 및 candidate source의 outer fixture provenance·canonical Judge state root 결속을
 제공한다. 알려진 하위 오류의 public Stage C 번역에서는 원래 exception context를 숨긴다.
 원본 artifact와 별개인 현재 final 소비 marker만 선택적 상태 파일로 허용한다.
-내부 생성·재검증·회수 I/O에는 Windows 긴 경로를 적용하되 공개 receipt와 content identity는
-유지한다.
+내부 생성·재검증·회수와 candidate provenance/source open I/O에는 Windows 긴 경로를
+적용하되 공개 receipt와 content identity는 유지한다.
 
 [비책임] candidate data view·workspace·argv·환경 구성과 metric/Judge 판정은 후속 Stage C 및
 P0-2 모듈이 담당한다. 임의 hostile filesystem actor와의 경쟁 방어도 담당하지 않는다.
@@ -130,7 +130,7 @@ class FixtureActionLogSource(ActionLogSource):
         if self._opened_dates is not None:
             self._opened_dates.append(dt)
         return pa.OSFile(
-            str(self._physical_partition_path(dt)),
+            str(_io_path(self._physical_partition_path(dt))),
             "rb",
         )
 
@@ -552,14 +552,14 @@ def _require_fixture_source_provenance(
         valid = (
             opaque_root == expected_root
             and _resolved_without_link(judge_state_root)
-            and fixture_root.resolve(strict=True)
-            == canonical_fixture_root.resolve(strict=True)
+            and _io_path(fixture_root).resolve(strict=True)
+            == _io_path(canonical_fixture_root).resolve(strict=True)
             and sha256(descriptor_bytes).hexdigest() == descriptor_digest
             and _resolved_without_link(source._physical_root)
-            and source._physical_root.resolve(strict=True)
-            == (fixture_root / "action_log").resolve(strict=True)
-            and handoff.snapshot_root.resolve(strict=True)
-            == expected_snapshot.resolve(strict=True)
+            and _io_path(source._physical_root).resolve(strict=True)
+            == _io_path(fixture_root / "action_log").resolve(strict=True)
+            and _io_path(handoff.snapshot_root).resolve(strict=True)
+            == _io_path(expected_snapshot).resolve(strict=True)
             and _fixture_is_valid(fixture_root, descriptor, descriptor_digest)
         )
     except (
@@ -886,8 +886,9 @@ def _open_lock_matches(
 
 
 def _safe_regular_file_identity(path: Path) -> tuple[int, int] | None:
+    io_path = _io_path(path)
     try:
-        file_stat = path.lstat()
+        file_stat = io_path.lstat()
     except OSError:
         return None
     reparse = getattr(file_stat, "st_file_attributes", 0) & 0x400
@@ -895,7 +896,7 @@ def _safe_regular_file_identity(path: Path) -> tuple[int, int] | None:
         reparse
         or not stat.S_ISREG(file_stat.st_mode)
         or file_stat.st_nlink != 1
-        or not _resolved_without_link(path)
+        or not _resolved_without_link(io_path)
     ):
         return None
     return (file_stat.st_dev, file_stat.st_ino)
@@ -921,10 +922,11 @@ def _safe_tree(root: Path) -> bool:
 
 
 def _resolved_without_link(path: Path) -> bool:
+    io_path = _io_path(path)
     try:
-        resolved = path.resolve(strict=True)
-        absolute = path.absolute()
-        stat_result = path.lstat()
+        resolved = io_path.resolve(strict=True)
+        absolute = io_path.absolute()
+        stat_result = io_path.lstat()
     except (OSError, RuntimeError):
         return False
     reparse = getattr(stat_result, "st_file_attributes", 0) & 0x400

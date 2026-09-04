@@ -14,6 +14,7 @@ import pytest
 
 from autoresearch.action_log_generation.pipeline import ActionLogGenerationError
 from autoresearch.research_harness.candidate_data_view import (
+    _open_local_identity,
     materialize_candidate_data_view,
     materialize_candidate_data_view_v2,
     prepare_candidate_metadata,
@@ -272,15 +273,16 @@ def test_nested_fixture_source_opens_partition_over_windows_limit(
         assert stat.S_ISREG(source_stat.st_mode)
         assert source_stat.st_nlink == 1
         with source.open_partition(receipt.dt) as handle:
-            opened_stat = os.fstat(handle.fileno())
+            handle_valid, handle_identity = _open_local_identity(handle)
             payload = handle.read()
 
-        assert (opened_stat.st_dev, opened_stat.st_ino) == (
-            source_stat.st_dev,
-            source_stat.st_ino,
-        )
-        assert stat.S_ISREG(opened_stat.st_mode)
-        assert opened_stat.st_nlink == 1
+        source_identity = (source_stat.st_dev, source_stat.st_ino)
+        current_stat = io_partition.stat()
+        assert handle_valid
+        assert handle_identity in (None, source_identity)
+        assert (current_stat.st_dev, current_stat.st_ino) == source_identity
+        assert stat.S_ISREG(current_stat.st_mode)
+        assert current_stat.st_nlink == 1
         assert sha256(payload).hexdigest() == receipt.sha256
         assert pq.read_table(pa.BufferReader(payload)).num_rows == receipt.rows
     finally:

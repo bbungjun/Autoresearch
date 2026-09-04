@@ -9,6 +9,7 @@ copy를 write-once atomic directory로 materialize한다.
 명시적으로 선택한 v2 경로는 검증된 fixture의 metadata를 한 번 준비하고 동일한 게시
 검증을 거쳐 두 metadata 파일을 추가한다. Final 전용 interface는 실제 소비 grant를
 게시·재사용 직전에 재확인하며, 기존 validation v1/v2 interface는 그대로 유지한다.
+신뢰된 로컬 snapshot/source의 Windows 긴 경로는 내부 I/O 표현으로만 변환한다.
 
 [비책임] git worktree·subprocess 구성은 workspace, final 소비 권한 발급은
 consumption_registry, metric/Judge 판정은 judge가 담당한다.
@@ -486,7 +487,7 @@ def _require_source_disjoint(
                 if path is not None:
                     if not isinstance(path, Path):
                         raise TypeError
-                    local_paths.append(path.resolve(strict=True))
+                    local_paths.append(_io_path(path).resolve(strict=True))
         except (OSError, RuntimeError, TypeError):
             raise _error(
                 StageCErrorCode.JUDGE_HANDOFF_INVALID,
@@ -500,13 +501,13 @@ def _require_source_disjoint(
             if root is not None:
                 if not isinstance(root, Path):
                     raise TypeError
-                source_roots.append(root.resolve(strict=True))
+                source_roots.append(_io_path(root).resolve(strict=True))
         except (OSError, RuntimeError, TypeError):
             raise _error(
                 StageCErrorCode.JUDGE_HANDOFF_INVALID,
                 "candidate_source_path",
             ) from None
-    destination = destination_root.resolve(strict=True)
+    destination = _io_path(destination_root).resolve(strict=True)
     if any(path.is_relative_to(destination) for path in local_paths) or any(
         destination.is_relative_to(root) or root.is_relative_to(destination)
         for root in source_roots
@@ -516,8 +517,8 @@ def _require_source_disjoint(
 
 def _require_disjoint_root(destination_root: Path, protected_root: Path) -> None:
     try:
-        destination = destination_root.resolve(strict=True)
-        protected = protected_root.resolve(strict=True)
+        destination = _io_path(destination_root).resolve(strict=True)
+        protected = _io_path(protected_root).resolve(strict=True)
     except (OSError, RuntimeError):
         raise _error(
             StageCErrorCode.JUDGE_HANDOFF_INVALID,
@@ -617,8 +618,8 @@ def _require_safe_request(destination_root: Path, snapshot_root: Path) -> None:
     ):
         raise _error(StageCErrorCode.FIXTURE_REQUEST_INVALID, "candidate_request_validation")
     try:
-        destination = destination_root.resolve(strict=True)
-        snapshot = snapshot_root.resolve(strict=True)
+        destination = _io_path(destination_root).resolve(strict=True)
+        snapshot = _io_path(snapshot_root).resolve(strict=True)
         if (
             snapshot.parent.name != "by-hash"
             or snapshot.parent.parent.name != "evaluation-snapshots"
