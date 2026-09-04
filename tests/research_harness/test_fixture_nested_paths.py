@@ -306,10 +306,13 @@ def test_nested_fixture_claims_and_materializes_final_view(tmp_path: Path) -> No
         source = _source(fixture)
         metadata = prepare_final_candidate_metadata(fixture.judge, source=source)
         _test_io_path(fixture.fixture_root / "final-holdout-consumed").mkdir()
+        alias_hop = fixture.fixture_root.parent / "alias-hop"
+        _test_io_path(alias_hop).mkdir()
+        aliased_fixture_root = alias_hop / ".." / fixture.fixture_root.name
 
         grant = claim_final_consumption(
             FinalConsumptionRequest(
-                judge_state_root=fixture.fixture_root,
+                judge_state_root=aliased_fixture_root,
                 handoff=fixture.judge,
                 baseline_sha="a" * 40,
                 candidate_sha="b" * 40,
@@ -325,6 +328,9 @@ def test_nested_fixture_claims_and_materializes_final_view(tmp_path: Path) -> No
 
         assert view.manifest.evaluation_id == fixture.judge.final_holdout_id
         assert grant._authorizes(fixture.judge)
+        assert grant.evidence.marker_path.parent == (
+            fixture.fixture_root / "final-holdout-consumed"
+        )
         assert not str(grant.evidence.marker_path).startswith("\\\\?\\")
         assert not str(view.root).startswith("\\\\?\\")
     finally:
