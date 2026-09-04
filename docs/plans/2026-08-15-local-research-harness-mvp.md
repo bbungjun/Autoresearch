@@ -2132,18 +2132,34 @@ Judge는 `concerns`를 남겼다. 구조화 기록으로 복구 후 학습·평�
 disposable worktree 회수를 수행한다. 이 preflight에서 #90의 `candidate_lock_prepare`가
 재현되면 비용 있는 실행 전에 중단하고 #90으로 분기한다.
 
-- [ ] seed 7102의 새 fixture와 이전 #60/#69/#71 증거 hash 보존 기록
-- [ ] 표준 경로 validation v2 게시·재사용, 입력 identity와 worktree 회수 preflight
-- [ ] baseline 0680e16의 고정 seed 101~105 calibration 및 양수 sigma gate
-- [ ] coding agent 최대 2회와 공식 validation 학습·평가 최소 1회
+- [x] seed 7102의 새 fixture와 이전 #60/#69/#71 증거 hash 보존 기록
+- [x] 표준 경로 validation v2 게시·재사용, 입력 identity와 worktree 회수 preflight
+- [x] baseline 0680e16의 고정 seed 101~105 calibration 및 양수 sigma gate
+- [x] coding agent 최대 2회 실행 — timeout·agent_blocked로 공식 validation은 0회
+- [ ] 공식 validation 학습·평가 최소 1회
 - [ ] 실제 `mean_topic_similarity`가 유한·비상수이고 22열 모델/receipt/manifest가 일치하는지 감사
-- [ ] 새 final 단일 소비, REPORT·새 문맥 Judge, 시간/token/사람 개입 기록
-- [ ] 독립 리뷰 P0/P1 0건, CI 통과, Ready PR; 최종 squash merge는 사람이 판정
+- [x] seed 7102 final·REPORT·새 문맥 Judge, 시간/token 기록 — baseline 자기 비교로 품질 근거 제외
+- [x] 후속 #92·#94 독립 리뷰 P0/P1 0건, CI 통과, squash merge
 
 재실행의 성공은 피처 후보가 공식 학습·평가와 증거 기록을 완주했다는 뜻이다. 수치 기준에
 미달하면 `discard`를 그대로 완료 결과로 보존한다. infrastructure 오류는 final 전에 멈추고
 원래 오류·patch·미소비 상태를 기록한다. 기존 threshold·seed·모델·embedding·split·label과
 피처 계산 계약은 사후 변경하지 않는다.
+
+**다음 실행 제안 — 승인 전 미실행:** 결과를 보지 않고 다음 정수 **seed 7103**과 최신 main
+`9ede758fcb25bc73356eda72fa6523744705dfb7`를 고정한다. 새 fixture·validation·final ID와 registry를
+사용하며 이전 final과 실패 evidence는 그대로 보존한다. 고정 seed 101~105 calibration과 표준
+validation/worktree preflight를 다시 통과해야 coding을 시작한다. Coding은 초기 1회와 feedback
+1회로 유지하되, 첫 agent가 구현·112 tests·Ruff까지 완료하고 420초 경계에서 timeout된 관측에
+따라 호출당 timeout만 **900초**로 올린다. Agent prompt는 표적 테스트와 Ruff가 끝나면 추가 탐색
+없이 구조화 응답을 즉시 반환하도록 명시하고 commit은 기존 runner가 수행한다. 전체 trial 시작
+예산은 3600초를 유지한다.
+
+유효 candidate가 0건이면 #92 계약에 따라 final을 소비하지 않고
+`inconclusive / no_valid_validation_candidate`로 종료한다. 하나라도 공식 validation을 완료하면
+22열·피처 분포·receipt/manifest를 감사하고 새 final을 정확히 한 번 소비해 baseline과 비교한다.
+수치 기준 미달은 `discard` 완료이며, infrastructure 오류는 final 전에 중단한다. 완료 조건은
+공식 22열 candidate의 validation과 final 비교, REPORT·기록 Judge·비용 기록·독립 감사까지다.
 
 - [x] #71 발행과 이슈 연결 브랜치 생성, 기존 입력/21개 피처 및 학습 receipt 검토
 - [x] 클릭 비중의 학습 cold-start·조회수/나이의 순서 중복을 입력 구조에서 확인하고
