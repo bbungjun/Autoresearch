@@ -1276,3 +1276,53 @@ POSIX 권한 bit, cp949 subprocess decoding과 candidate destination 밖 fixture
 장경로 read에 분포했다. 마지막 fixture 실패는 변경 전 `bc96685`에서도 같은 테스트와
 `Path.read_bytes()` 위치로 재현했으므로 #90의 회귀로 분류하지 않는다. Linux 전체 결과는
 GitHub CI에서 별도로 판정한다.
+
+## 25. 개인화 비교군과 피처군 ablation을 반복 검증하기 — #16
+
+**문제와 사전 고정:** #71은 22번째 실험 피처를 기존 21피처 모델과 비교했지만, 단순
+Trending·popularity·video-only 모델을 함께 두지 않아 개인화 자체의 이득과 기존 피처군별
+기여를 분리하지 못했다. 결과를 보기 전에 평가일 `2026-09-01`, world seed
+`1601`·`1602`·`1603`, 학습 seed `101`·`102`·`103`, NDCG@10 primary와 6개 guardrail을
+고정했다. 비교군은 Trending, popularity, video-only LightGBM, 21피처 personalized
+LightGBM, Judge 내부 Oracle 5종이고, user static·recent behavior·category match·topic
+similarity·video popularity를 하나씩 제거한 ablation 5종이다. 각 world의 validation/final과
+같은 학습 seed를 paired 단위로 삼았다.
+
+첫 데이터 점검에서 fixture의 `original_rank`와 `candidate_source`가 전부 null이고 snapshot
+writer가 행을 `video_id`로 재정렬한다는 결함을 발견했다. 어떤 metric도 계산하기 전에 합성
+fixture ID에 보존된 원천 행 번호를 Trending rank로 복원하도록 계획과 코드를 함께 고정했다.
+Popularity는 as-of metadata의 미관측 값을 production 피처 조립과 같은 cold-start `0`으로
+처리했다. 이 보정은 합성 fixture 전용이며 production Trending 계약을 입증하지 않는다.
+
+**해결과 실행:** 학습 함수에 기존 열 순서를 보존하는 검증된 feature projection을 추가하고,
+실험 arm·slate별 heuristic 정규화·Judge 내부 binary Oracle·paired 집계와 원자적 JSON 게시를
+구현했다. 실행은 3 world × 2 split × 3 학습 seed × 10 arm의 180 observations를 252.965초에
+완료했다. 실제 모델 fit은 학습 arm 7종에 대해 126회, heuristic prediction 봉인·채점은 12회,
+Oracle 채점은 split별 6회 수행했다. E5 cache는 hit 2,259, miss 9, inference call 2회였다.
+각 world의 final marker는 하나씩 총 3개였고 동일 request의 두 번째 claim은 모두
+`already_consumed`로 거부됐다. Raw result SHA-256은
+`e504042bded46fa385b6164c3d45136f041a15cbe6d8b9f896965feefc24d7cc`이다.
+
+| split | Trending | popularity | video-only | personalized | Oracle |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| validation NDCG@10 | 0.640402 | 0.473191 | 0.659068 | 0.782892 | 1.000000 |
+| final NDCG@10 | 0.640402 | 0.436691 | 0.655371 | 0.786725 | 1.000000 |
+
+**결과:** 사전 판정은 `not_supported`다. Personalized NDCG@10은 Trending 대비 평균
+`+0.144407`, video-only 대비 `+0.127589`였고 두 비교 모두 18/18 paired 반복에서 양수였다.
+Video-only 대비 NDCG@24 `+0.130262`, grouped ROC-AUC `+0.017693`, PR-AUC `+0.283829`,
+LogLoss 방향 보정 `+0.267630`, Brier 방향 보정 `+0.115442`도 개선됐다. 그러나 Recall@10은
+`-0.010417`이고 18/18에서 양수가 아니어서 guardrail을 통과하지 못했다.
+
+Ablation도 21피처 구성의 안정적인 기여를 입증하지 못했다. Topic similarity의 full-minus-
+ablation NDCG@10 평균은 `+0.002323`이지만 양수 반복이 11/18로 사전 기준 12/18에 한 건
+모자랐다. Recent behavior 제거 결과는 full과 완전히 같았다. User static 제거는 full보다
+`0.023608`, video popularity 제거는 `0.055807` 더 높았고, 특히 후자는 18/18에서 ablation이
+우세했다. 따라서 이 합성 규칙에서는 개인화 모델이 단순 비교군보다 ranking·확률 품질 대부분을
+높였다는 관측은 가능하지만, Recall 손실 없이 개선됐거나 현재 21개 피처군이 모두 유효하다고
+주장할 수 없다. 모든 ranking/probability coverage는 유효했다.
+
+이 실험은 binary click label을 사용하는 rule-based 합성 환경의 결과다. LLM relevance,
+복수 LLM Judge, simulated watch time, 장기 폐루프 편향과 실제 사용자 CTR은 측정하지 않았다.
+후속 실험은 video popularity 제거 후보와 Recall@10 trade-off를 새 validation/final 계약으로
+별도 사전 등록해야 하며, 이번 final을 초기화하거나 재사용하지 않는다.

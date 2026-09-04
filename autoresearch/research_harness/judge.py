@@ -4,7 +4,7 @@
 candidate prediction을 validation label과 1:1로 결합해 P0-2C 판정 입력을 만든다.
 
 [기능] 검증된 handoff로 validation target과 소비 grant가 승인한 final opaque target을 만들고, 공통 parser가 검증한
-Judge 소유 CSV 사본을 ranking·probability metric 하나의 불변 결과로 결합한다.
+Judge 소유 CSV 사본 또는 Judge 내부 Oracle 상한을 ranking·probability metric 하나의 불변 결과로 결합한다.
 
 [비책임] candidate 경로에서의 안전한 파일 ingestion·subprocess 자원 제한은
 ``prediction_ingestion``이, coverage·sigma 판정은 ``judge_decision``이, final holdout 소비
@@ -219,15 +219,36 @@ def score_predictions(
     ):
         raise _invalid_predictions("semantic_validation")
 
-    ordered_keys = sorted(target_by_key)
-    labels = [target_by_key[key].label for key in ordered_keys]
-    scores = [prediction_by_key[key].score for key in ordered_keys]
-    slate_ids = [key[0] for key in ordered_keys]
-    video_ids = [key[1] for key in ordered_keys]
-    groups = [target_by_key[key].user_id for key in ordered_keys]
+    ordered_rows = tuple(target_by_key[key] for key in sorted(target_by_key))
+    scores = [prediction_by_key[key].score for key in sorted(target_by_key)]
+    return _score_target_rows(expected_id, ordered_rows, scores)
+
+
+def score_oracle_upper_bound(target: JudgeEvaluationTarget) -> JudgeScoringResult:
+    """봉인 label과 같은 점수를 Judge 안에서 사용해 합성 환경의 상한을 계산한다."""
+
+    if not isinstance(target, JudgeEvaluationTarget):
+        raise JudgeError(JudgeErrorCode.INVALID_TARGET, "target_type")
+    target_rows = _load_verified_target_rows(target)
+    return _score_target_rows(
+        target._evaluation_id,
+        target_rows,
+        [row.label for row in target_rows],
+    )
+
+
+def _score_target_rows(
+    evaluation_id: EvaluationId,
+    target_rows: tuple[_TargetRow, ...],
+    scores: list[float | int],
+) -> JudgeScoringResult:
+    labels = [row.label for row in target_rows]
+    slate_ids = [row.slate_id for row in target_rows]
+    video_ids = [row.video_id for row in target_rows]
+    groups = [row.user_id for row in target_rows]
     try:
         return JudgeScoringResult(
-            evaluation_id=expected_id,
+            evaluation_id=evaluation_id,
             row_count=len(target_rows),
             ndcg_at_10=ndcg_at_k(labels, scores, slate_ids, video_ids, k=10),
             recall_at_10=recall_at_k(labels, scores, slate_ids, video_ids, k=10),
