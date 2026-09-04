@@ -1092,3 +1092,27 @@ Controller와 같은 predicate를 사용하도록 연결하고, 유효 validatio
 Python 파일 Ruff, `git diff --check`를 다시 확인했다.
 PR #93의 Linux Python 3.11/3.12, Feast/Postgres, Ruff, lock drift와 선택 Docker 이미지 CI도
 모두 통과했다.
+
+## 20. 이미 사라진 빈 agent temp anchor를 안전하게 회수하기 — #94
+
+**문제:** #71 seed 7102 재실행의 첫 coding agent는 피처 구현과 표적 112 tests, Ruff를
+완료했지만 제한 시간 전에 응답과 commit을 남기지 못했다. process 회수 뒤 등록된
+`harness_out/.agent-tmp`가 존재하지 않아 cleanup preflight가 `FileNotFoundError`로 끝났고,
+원래 timeout과 별도로 `workspace_cleanup_failed`가 기록됐다. Agent command 기록에는 해당
+anchor를 삭제한 명령이 없었다. 임시 디렉터리 사용 주체가 빈 root까지 제거할 수 있는데도 기존
+계약은 anchor 자체의 identity가 계속 존재해야만 회수를 성공으로 인정했다.
+
+**해결:** 등록된 `.agent-tmp` 보안 경계 아래 disposable `runtime` 자식을 만들고 agent child의
+TEMP/TMP/TMPDIR/PYTEST_DEBUG_TEMPROOT만 그 경로로 지정한다. 임시 도구가 빈 runtime을 제거하면
+anchor는 남으므로 helper와 host가 등록 identity와 부모 경계를 계속 검증하면서 잔여물 0건으로
+처리할 수 있다. Anchor 부재·교체와 부모 경계 변경, hardlink·reparse·object limit 검사는
+기존처럼 실패한다.
+
+**결과와 한계:** 최초 RED는 clean, sandbox helper, lifecycle host verification 세 층에서
+3 failed, 기존 회귀 74 passed였다. 첫 구현은 anchor 부재를 직접 허용했지만 독립 리뷰가 내용이
+든 anchor를 rename해 회수를 우회하는 P1을 재현했다. 이를 폐기하고 보안 anchor와 disposable
+runtime을 분리했으며, non-empty anchor rename은 실패하고 이동된 파일을 삭제하지 않는 회귀로
+고정했다. 최종 temp/coding 회귀는 78 passed, runner/workspace 회귀는 61 passed, 1 skipped였고
+전체 Ruff와 `git diff --check`도 통과했다. 수정 재리뷰는 P0/P1/P2/P3 모두 0건이었다.
+ACL·소유권 변경이나 동시 악성 inode 교체를 새로 방어하지 않는다. #71의 기존 실패 evidence와
+소비된 final은 수정하지 않았고, 피처의 공식 학습·평가 성능도 아직 입증하지 않았다.

@@ -154,7 +154,7 @@ def test_temp_settings_apply_only_to_candidate_shell_not_host(tmp_path, monkeypa
     assert agent._environment(_config())["TEMP"] == "host-temp-sentinel"
     if settings:
         assert len(settings) == 8
-        assert all(str(request.cwd / "harness_out/.agent-tmp") == json.loads(value.split("=", 1)[1]) for value in settings[1::2])
+        assert all(str(request.cwd / "harness_out/.agent-tmp/runtime") == json.loads(value.split("=", 1)[1]) for value in settings[1::2])
 
 
 def _temp_request(tmp_path):
@@ -168,7 +168,11 @@ def _temp_request(tmp_path):
 def test_temp_cleanup_is_deferred_and_adds_verified_sidecar(tmp_path, monkeypatch):
     request = _temp_request(tmp_path)
     calls = []
-    monkeypatch.setattr(agent, "_cleanup_temp_process", lambda *args: calls.append("cleanup") or {"status": "complete", "removed_count": 0})
+    def clean(*args):
+        calls.append("cleanup")
+        (request.cwd / "harness_out/.agent-tmp/runtime").rmdir()
+        return {"status": "complete", "removed_count": 1}
+    monkeypatch.setattr(agent, "_cleanup_temp_process", clean)
     with ExitStack() as stack:
         state = stack.enter_context(agent._temp_lifecycle(_config(), request))
         state["process_ready"] = True
@@ -252,7 +256,7 @@ def test_temp_helper_owned_gate_uses_fixed_sandbox_and_preserves_logs(tmp_path, 
         return popen((*command[:index - 1], sys.executable, "-I", "-S", helper), **kwargs)
     monkeypatch.setattr(agent.subprocess, "Popen", fake_sandbox)
     result = agent._cleanup_temp_process(_config(), request)
-    assert result["status"] == "complete" and result["removed_count"] == 1
+    assert result["status"] == "complete" and result["removed_count"] == 2
     assert result["process_cleanup_ok"] is True
     command = commands[0]
     assert command[command.index("--permission-profile") + 1] == ":workspace"
@@ -260,6 +264,47 @@ def test_temp_helper_owned_gate_uses_fixed_sandbox_and_preserves_logs(tmp_path, 
     assert command[-4:-1] == (sys.executable, "-I", "-S")
     assert (request.artifact_root / "temp-cleanup.stdout.log").exists()
     assert (request.artifact_root / "temp-cleanup.stderr.log").exists()
+
+
+def test_temp_helper_accepts_missing_runtime_root_after_anchor_preflight(tmp_path, monkeypatch):
+    request = _temp_request(tmp_path)
+    registration = agent._agent_temp.register(request.cwd)
+    agent._write(request.artifact_root / "temp-registration.json", agent._json_bytes(registration))
+    (request.cwd / "harness_out/.agent-tmp/runtime").rmdir()
+    popen = agent.subprocess.Popen
+    commands = []
+
+    def fake_sandbox(command, **kwargs):
+        commands.append(command)
+        index = command.index("sandbox")
+        helper = command[-1]
+        return popen((*command[:index - 1], sys.executable, "-I", "-S", helper), **kwargs)
+
+    monkeypatch.setattr(agent.subprocess, "Popen", fake_sandbox)
+
+    result = agent._cleanup_temp_process(_config(), request)
+
+    assert result["status"] == "complete"
+    assert result["object_count"] == result["removed_count"] == 0
+    assert result["process_cleanup_ok"] is True
+    assert len(commands) == 1
+
+
+def test_temp_lifecycle_host_verification_accepts_missing_runtime_root(tmp_path, monkeypatch):
+    request = _temp_request(tmp_path)
+    monkeypatch.setattr(
+        agent,
+        "_cleanup_temp_process",
+        lambda *args: {"status": "complete", "object_count": 0, "removed_count": 0},
+    )
+
+    with agent._temp_lifecycle(_config(), request) as state:
+        state["process_ready"] = True
+        (request.cwd / "harness_out/.agent-tmp/runtime").rmdir()
+
+    receipt = json.loads((request.artifact_root / "temp-cleanup.json").read_bytes())
+    assert receipt["status"] == "complete"
+    assert receipt["host_verified_empty"] is True
 
 
 def test_changed_temp_boundary_never_launches_helper(tmp_path, monkeypatch):
@@ -298,7 +343,7 @@ def test_helper_log_failure_cannot_mask_interruption_and_partial_receipt(tmp_pat
     with pytest.raises(kind) as caught:
         agent._cleanup_temp_process(_config(), request)
     assert caught.value is interruption
-    assert interruption.temp_cleanup_receipt["removed_count"] == 1
+    assert interruption.temp_cleanup_receipt["removed_count"] == 2
     assert interruption.temp_cleanup_receipt["status"] == "interrupted"
     assert interruption.temp_cleanup_receipt["log_evidence_failed"] is True
 
@@ -354,7 +399,11 @@ def test_windows_coding_prepare_runs_temp_cleanup_only_after_safe_process_reclai
     (request.cwd / "harness_out").mkdir()
     monkeypatch.setattr(agent, "_prepare_input_access", lambda request: None)
     calls = []
-    monkeypatch.setattr(agent, "_cleanup_temp_process", lambda *args: calls.append("cleanup") or {"status": "complete", "removed_count": 0})
+    def clean(*args):
+        calls.append("cleanup")
+        (request.cwd / "harness_out/.agent-tmp/runtime").rmdir()
+        return {"status": "complete", "removed_count": 1}
+    monkeypatch.setattr(agent, "_cleanup_temp_process", clean)
     _fake(monkeypatch, tmp_path, "out.write_text('{}')\n" + (
         "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n" if behavior == "leak" else ""))
     if behavior == "cleanup_failure":
