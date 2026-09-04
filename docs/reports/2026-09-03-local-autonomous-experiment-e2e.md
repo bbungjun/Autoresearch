@@ -1,8 +1,8 @@
 # 로컬 자율 ML 실험 에이전트: 실행보다 먼저 검증 가능성을 만들기
 
-> 실측 기록 · 2026-09-03. 실제 두 trial, checkpoint 중단·재개, 단일 final batch와 종료
-> 재호출을 확인했습니다. 최종 7개 지표의 평균은 모두 개선됐지만 고정된 채택 기준에는
-> 미달해 baseline을 유지했습니다. 실험 절차의 완주와 모델 채택을 구분한 기록입니다.
+> 최초 실측 2026-09-03 · MVP 수용 갱신 2026-09-05. #60의 feedback·재개·엄격한 기각,
+> #69의 실패 코드 수정·σ=0 판정 불가, #71의 새 피처 학습·offline promote를 순서대로
+> 기록합니다. 최신 MVP 증거 경계와 수용 결론은 §23입니다.
 
 ## 1. 해결하려는 문제
 
@@ -279,7 +279,7 @@ final `pair.json`, 지표 평균·결론은 `research-record.json`, 호출 수·
 - 재개 호출 측정: `b77ccaed2c99d7b94a3d5aaf5ecb2b81713d6fc00527b2654f446b4f22984101`
 - 종료 재호출 측정: `41a07b15492f76977c4fe52d70e5801e9113e336910379bc4563363438300b35`
 
-전체 변경·검증 경과는 [Task 7 실측 기록](../plans/2026-08-15-local-research-harness-mvp.md),
+전체 변경·검증 경과는 [Task 7 실측 기록](../archive/plans/2026-08-15-local-research-harness-mvp.md),
 판정·재개 계약은 [spec §4.10–4.11](../specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md)이 정본입니다.
 
 ## 6. 재현 조건과 실행 방법
@@ -334,7 +334,7 @@ Prediction 설정에는 명시된 embedding 값만 넣어 agent가 바꾼 학습
   비용 절감률 또는 사람 개입 횟수를 추정해 채우지 않습니다.
 
 설계·측정 원본의 정본은 [Research Harness spec](../specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md)과
-[Task 7 구현·실측 기록](../plans/2026-08-15-local-research-harness-mvp.md)입니다.
+[Task 7 구현·실측 기록](../archive/plans/2026-08-15-local-research-harness-mvp.md)입니다.
 
 ## 8. 실험에서 발견한 설명 문제를 제품 개선으로 연결하기 — #62
 
@@ -533,7 +533,7 @@ plan의 Task 6·Task 7·전체 체크리스트와 문서 인덱스를 같은 상
 **다음 권고:** 먼저 실패 한 번 → feedback → 수정 한 번 → 학습·평가·보고의 최소 복구
 시나리오를 고정된 판정 기준으로 검증한다. 그다음 피처 추가, 필요 시 별도 임베딩 교체
 실험으로 자율성 범위를 넓힌다. 결과가 미승격이면 그대로 보존하며 성공을 위해 기준을
-낮추지 않는다. 상세 관측·실행 조건은 [plan의 잔여 검증 우선순위](../plans/2026-08-15-local-research-harness-mvp.md#잔여-검증-우선순위--2026-09-03-권고)를
+낮추지 않는다. 상세 관측·실행 조건은 [plan의 후속 로드맵 우선순위](../archive/plans/2026-08-15-local-research-harness-mvp.md#후속-로드맵-우선순위--2026-09-05-mvp-수용-뒤)를
 따른다. 이번 작업은 문서 정합화이며 새 실험 실행이나 수용 기준 변경을 승인하지 않는다.
 기존 실험 원본·final 소비 상태를 수정하지 않고 새 모델 성과나 비용 절감도 주장하지 않는다.
 
@@ -1213,3 +1213,33 @@ token이었고 수치 판정과 일치했다. 달러 비용과 자동 사람 개
 promote된 증거다. 운영 champion 반영이나 일반 데이터 개선률을 뜻하지 않는다. 기록 Judge가
 구조화 기록만으로 피처 분포와 native model 열을 직접 볼 수 없다고 지적한 한계는 별도 기술
 감사로 보완했으며, 자동 개입 계측과 달러 비용 계측은 후속 과제로 남는다.
+
+## 23. 실측 세 분기로 MVP 판정 정책과 증거 경계를 수용하기 — #17
+
+**문제:** 구현과 개별 E2E가 끝나도 초기 `2σ/-1σ`, baseline noise, coverage 정책이 실제
+실험에서 유용한지와 비용·자율성의 어느 수준까지 MVP 증거로 인정할지가 결정되지 않았다.
+기준을 낮추면 #60의 기존 기각을 성과에 맞춰 소급 변경하게 되고, 자동 계측되지 않은 달러
+비용이나 외부 사람 행동을 추정하면 관측보다 넓은 주장이 된다. 반대로 #16의 비교군·ablation,
+#90의 임의 장경로와 production A/B까지 묶으면 로컬 실행 기반 MVP와 제품 고도화의 경계가
+사라진다.
+
+**해결:** #60·#69·#71을 서로 다른 정책 분기로 대조했다. #60 final NDCG@10 개선폭
+0.0252086224는 고정 2σ 0.0252896838보다 0.0000810614 작아, 다른 지표가 모두 개선됐어도
+`discard`됐다. #69는 Recall@10 σ=0을 epsilon으로 대체하지 않고
+`inconclusive / insufficient_baseline_noise`로 끝났다. #71의 새 22번째 피처는 final
+NDCG@10 방향 보정 평균 +0.0496126127로 해당 baseline 2σ 0.0128994448을 넘고 모든
+guardrail을 통과해 `promote`됐다. Coverage 하한은 계약 위반 회귀로 fail-closed를 검증했으며
+실제 coverage failure 비율이나 통계적 최적성은 측정했다고 주장하지 않는다.
+
+이 근거로 [ADR 0003](../adr/0003-local-research-harness-mvp-acceptance.md)은 현재 정책을
+유지하고, 고정 합성 fixture의 offline 결과를 로컬 Harness MVP 품질 근거로 수용한다. 비용은
+wall-clock과 token만 사용하고 달러 값은 계속 `null`이다. #69와 #71의 고정 실행 구간에서
+관찰한 중간 승인·수동 코드 수정·수동 재시작 0건은 제한된 자율성 근거로 수용하지만 자동
+`human_interventions` 값은 `null`이다. Trial 수·시작 시간과 subprocess timeout은 MVP 예산
+경계로 유지하며 CPU/GPU/저장공간 hard scheduling은 후속 범위다.
+
+**결과:** 재현 가능한 입력, 외부 Sealed Judge, 반복 feedback, 실패 코드 수정, checkpoint
+재개, 단일 final, 새 피처의 실제 학습·offline promote와 REPORT까지 로컬 Research Harness
+MVP 완료 조건을 충족했다. #16, #90, executor 연결, 논문·웹, production 승격·온라인 A/B와
+자동 비용·외부 개입 계측은 열린 후속 범위로 남긴다. 이번 수용 작업은 새 agent·학습·final을
+실행하지 않으며 기존 marker·원본 evidence·판정을 변경하지 않는다.

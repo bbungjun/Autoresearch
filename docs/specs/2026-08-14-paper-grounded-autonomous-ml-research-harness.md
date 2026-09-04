@@ -1,7 +1,7 @@
 # 자율 ML 연구 Harness — YouTube 리랭킹 기반 MVP와 논문 로드맵
 
-> 최초 작성 2026-08-14 | 현황 갱신 2026-09-03 (#69 실측)
-> 상태: 기반 MVP 핵심 구현·합성 E2E·단일 실패 후보 수정 실측 완료, 잔여 실증·수용 판단 진행 중
+> 최초 작성 2026-08-14 | 현황 갱신 2026-09-05 (#17 MVP 수용)
+> 상태: 로컬 Research Harness MVP 구현·합성 E2E·복구·피처 추가 실증과 정책 수용 완료
 > 현재 추적: [#17](https://github.com/bbungjun/Autoresearch/issues/17)
 >
 > 이 문서는 기존 executor의 다음 단계를 정의한다. 현재의 단일 가설 실행 계약을
@@ -55,24 +55,21 @@ agent나 기존 goal 실행과 구별되는 ML 연구 방법론이 부족하다.
 이 문서는 위 계약의 현재 구현 사실을 반복하지 않고, 그 위에 놓일 자율 연구 계층을
 정의한다.
 
-### 2.2 현재 위치 (2026-09-03, #69 복구 실측 기준)
+### 2.2 현재 위치 (2026-09-05, #17 MVP 수용 기준)
 
-이제 별도 로컬 Harness에서 snapshot·Sealed Judge·candidate worktree·Controller·재학습
-CLI·구조화 기록·독립 연구 기록 Judge·REPORT까지 연결되어 있다. Task 6 구현을 완료했고,
-Task 7에서는 5-seed calibration과 실제 agent feedback, 중단·재개, 단일 final 소비,
-REPORT를 합성 데이터로 실측했다. 후속 #69에서는 #62 설명 개선과 #54A/B의 Windows
-입력 읽기·등록 temp 회수를 반영한 새 실행에서, 주입된 실패 코드의 실제 agent 수정
-한 번과 재학습·평가·REPORT 완주를 확인했다. 코드 반영·CI·merge의 최종 상태는
-[PR #70](https://github.com/bbungjun/Autoresearch/pull/70)에서 확인한다.
+별도 로컬 Harness에서 snapshot·Sealed Judge·candidate worktree·Controller·재학습 CLI,
+구조화 기록·독립 연구 기록 Judge·REPORT까지 연결됐다. #60은 feedback 수정·checkpoint
+재개·단일 final과 엄격한 기각을, #69는 주입된 실패 코드 한 건의 실제 agent 수정과 σ=0
+fail-closed를, #71은 새 22번째 피처의 공식 학습과 validation/final offline promote를 실측했다.
 
-현재 상태에서 **실험 완주**, **모델 채택**, **전체 MVP 수용**을 구분한다. #60은 validation
-`promote`를 관측했으나 final 기준 미달로 baseline을 유지했다. #69는 단일 오타 복구에는
-성공했지만 Recall@10의 σ=0을 보존해 final은 `inconclusive / insufficient_baseline_noise`였다.
-복구 한 건의 실증을 범용 자율성이나 모델 개선으로 확대하지 않는다. 사람 개입 자동 계측,
-명시적인 피처 추가 실험과 σ·coverage 판정 기준의 수용 판단은 남아 있다.
-논문 발견·출처 연결·웹 배선은 별도 로드맵이다. 완료 상태와 증거 종류는 §12가 정본이며,
-[실측·포트폴리오 기록](../reports/2026-09-03-local-autonomous-experiment-e2e.md)의
-§5·§7~12에서 관측값과 한계를 확인한다. 이 문서는 현재 소비되는 계약이므로 archive하지 않는다.
+[ADR 0003](../adr/0003-local-research-harness-mvp-acceptance.md)은 이 세 분기를 근거로 현재
+`2σ/-1σ`, baseline noise와 coverage 정책을 유지하고 로컬 Research Harness MVP를 수용한다.
+합성 fixture 밖의 품질, 범용 복구·무인 실행, 자동 사람 개입·달러 비용 계측, CPU/GPU/
+저장공간 hard scheduling은 완료 주장에 포함하지 않는다. #16의 비교군·ablation, #90의 임의
+장경로, executor 연결, 논문·웹과 production A/B는 별도 후속 범위다. 완료 상태와 증거 종류는
+§12, 관측값과 한계는 [실측·포트폴리오 기록](../reports/2026-09-03-local-autonomous-experiment-e2e.md)의
+§5·§7~23이 정본이다. 이 spec은 구현이 계속 소비하는 계약과 후속 로드맵을 함께 소유하므로
+archive하지 않는다.
 
 ## 3. 제품 계약
 
@@ -1021,7 +1018,7 @@ seed 101~105의 새 fit 5회, validation 3,840행·160 slate를 사용했다. sn
 승격 또는 final 개선은 측정하지 않았다. parser의 일반 문자 300k행은 봉인 3.998초에
 성공했지만 backslash-heavy 300k행은 3.356초에 거부됐다. 따라서 parser 최대 입력
 지원은 아직 완료가 아니며 별도 수정이 필요하다. 상세 raw 값·자원 측정·한계는
-[Task 7 실측 기록](../plans/2026-08-15-local-research-harness-mvp.md#첫-실측-pr--57)에 남긴다.
+[Task 7 실측 기록](../archive/plans/2026-08-15-local-research-harness-mvp.md#첫-실측-pr--57)에 남긴다.
 
 **#58 내부 출력 상한 보정:** 외부 CSV의 허용 문자를 줄이지 않고 내부 정규화 JSONL
 상한만 104MiB로 보정한다. evaluation ID 69byte, 두 ID는 각각 최대 64개의 backslash가
@@ -2231,7 +2228,7 @@ research lineage다.
 
 ## 12. MVP 완료 조건
 
-2026-09-05 #71 피처 추가 실측 반영 기준이다. `[x]`는 해당 항목의 구현과 필요한 검증이 확보됐다는 뜻이지,
+2026-09-05 #17 MVP 수용 기준이다. `[x]`는 해당 항목의 구현과 필요한 검증이 확보됐다는 뜻이지,
 모든 항목이 실제 ML E2E로 검증됐다는 뜻은 아니다. 계약 위반·동시성·실패 분기는 회귀
 테스트로, 실행·자율성 시나리오는 별도 실측으로 확인한다. 아래 표가 그 증거 수준을 구분한다.
 
@@ -2247,8 +2244,9 @@ research lineage다.
 | Windows 입력 읽기·등록 temp 회수 | 완료 — native 및 복구 통합 실측 | §4.9, 실측 기록 §9~10·§12. #69 agent의 등록 temp도 회수했다. 등록 범위 밖 private 산출물은 지원하지 않는다. |
 | 깨진 candidate의 자동 코드 수정·복구 | 완료 — 사전 주입 결함 한 건 실측 | §7.4, 실측 기록 §12. 실제 agent 1회가 실패 diff의 오타를 수정하고 학습·평가·REPORT를 완주했다. 자연 발생 오류나 범용 복구율 실측은 아니다. |
 | 피처 1개 추가 candidate의 promote | 완료 — 실제 측정 | #71 seed 7104에서 `mean_topic_similarity`를 22번째 열로 실제 학습하고 single-use final의 offline promote를 확인했다. 합성 fixture 결과이며 운영 champion 반영은 아니다. |
-| threshold·coverage 기준의 실용성 | 실측 자료 확보 / 수용 판단 필요 | calibration·E2E는 완료했으나 기준 유지 또는 사전 변경의 수용 결론은 미확정이다. 기존 정책은 유지한다. |
-| 품질·자율성·비용 | 일부 실측 / 계측 보완 필요 | #71에서 final NDCG@10 방향 보정 평균 차이 +0.0496126127, 전체 1,510.777초와 agent/Judge token을 측정했다. 실행 중 수동 개입은 별도 관찰상 0건이나 자동 human 값과 달러 비용은 null이다. 범용 무인 완주를 주장하지 않는다. |
+| threshold·coverage 기준의 실용성 | 완료 — 현재 정책 수용 | #60 근소한 기각, #69 σ=0 판정 불가, #71 명확한 승격을 구분했다. `2σ/-1σ`, `σ > 1e-6`과 coverage를 유지한다. 통계적 최적성 주장은 아니다. ADR 0003을 따른다. |
+| 실행 예산 | 완료 — MVP 경계 수용 | 새 trial 수·trial 시작 시간과 subprocess timeout을 강제한다. CPU/GPU/저장공간 hard scheduling은 후속 최적화다. |
+| 품질·자율성·비용 | 완료 — MVP 증거 경계 수용 | 합성 offline 품질, 실행 시간·token과 #69/#71 고정 구간의 수동 관찰 0건을 근거로 한다. 자동 human 값과 달러 비용은 `null`이며 범용 무인 실행·비용 절감을 주장하지 않는다. |
 | 논문 발견·PaperCard·compiler·출처·웹 | MVP 이후 로드맵 | §11.3. 현재 완료율에 포함하거나 구현 완료로 표시하지 않는다. |
 
 구현·회귀 근거는 [domain](../../autoresearch/research_harness/domain.py),
@@ -2257,7 +2255,7 @@ research lineage다.
 [final registry](../../tests/research_harness/test_consumption_registry.py),
 [workspace 경계](../../tests/research_harness/test_workspace.py)를 대조했다.
 실제 실행 근거는 [실측 기록 §5](../reports/2026-09-03-local-autonomous-experiment-e2e.md#5-실제-e2e-결과)와
-[Task별 구현·검증 기록](../plans/2026-08-15-local-research-harness-mvp.md)을 따른다.
+[Task별 구현·검증 기록](../archive/plans/2026-08-15-local-research-harness-mvp.md)을 따른다.
 
 - [x] 사람이 준 가설과 `ExperimentCard`, 예산으로 research run을 시작한다.
 - [x] 에이전트가 저장소 전체 범위에서 candidate를 만들 수 있다 — 경로 allowlist 없음;
@@ -2287,9 +2285,8 @@ research lineage다.
 
 마지막 항목은 실행 안에 승인 gate가 없다는 구현 사실만이 아니라 별도 operator observation을
 근거로 한다. #69와 #71의 고정 실행 구간은 사전 준비와 분리해 수동 관측했으며 원본 human 값은 여전히 null이다.
-관측 근거의 범위는 §7.4와 포트폴리오 §12·§22를 따르며 범용 무인 실행으로 확장하지 않는다. 다음 검증 권고 순서는
-[plan의 잔여 검증 우선순위](../plans/2026-08-15-local-research-harness-mvp.md#잔여-검증-우선순위--2026-09-03-권고)를
-따르며, 이번 문서 갱신은 후속 실험 실행이나 기존 수용 기준 변경을 승인하지 않는다.
+관측 근거의 범위는 §7.4와 포트폴리오 §12·§22~23을 따르며 범용 무인 실행으로 확장하지 않는다.
+수용 결정과 후속 범위는 ADR 0003을 따르며 기존 final·판정을 소급 변경하지 않는다.
 
 ### MVP 이후 로드맵 완료 조건
 
@@ -2333,7 +2330,7 @@ trial을 수행한 뒤, 채택 또는 기각 근거와 출처가 연결된 REPOR
 
 ## 15. 구현 순서 원칙
 
-MVP 구현은 [로컬 Research Harness MVP 계획](../plans/2026-08-15-local-research-harness-mvp.md)의
+MVP 구현은 [로컬 Research Harness MVP 계획](../archive/plans/2026-08-15-local-research-harness-mvp.md)의
 의존 순서를 따른다. 로컬 Harness를 신규로 만들고 현행 Kubernetes executor는 MVP에서
 수정하지 않으며, 이후 `ExperimentRunner` 구현체로 흡수한다.
 

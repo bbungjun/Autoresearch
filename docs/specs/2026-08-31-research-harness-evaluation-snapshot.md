@@ -6,7 +6,7 @@
 > `docs/specs/2026-08-14-paper-grounded-autonomous-ml-research-harness.md`
 >
 > 구현 순서:
-> `docs/plans/2026-08-15-local-research-harness-mvp.md` Task 1-0, Task 1
+> `docs/archive/plans/2026-08-15-local-research-harness-mvp.md` Task 1-0, Task 1
 
 ## Stage A·B·C 및 P0-1 완료
 
@@ -583,7 +583,7 @@ Stage C에는 두 개의 외부 seam만 둔다.
 
 두 module의 interface가 fixture 입력 생성, daily runner 반복, source 검증, artifact 경로
 해석과 digest 재검증을 숨긴다. 실제 git worktree 생성, subprocess argv·환경, credential
-allowlist는 `docs/plans/2026-08-15-local-research-harness-mvp.md` Task 3이 이 interface를
+allowlist는 `docs/archive/plans/2026-08-15-local-research-harness-mvp.md` Task 3이 이 interface를
 소비해 구현한다. Stage C 테스트는 임시 빈 디렉터리를 candidate 목적지로 사용하며 Task 3을
 선행 구현하지 않는다.
 
