@@ -1267,3 +1267,9 @@ fail-closed를 묶은 관련 회귀는 96건 모두 통과했다. 공개 `Candid
 absolute destination이며 UNC/device path를 새 입력 계약으로 허용하거나 동일 OS의 악성 동시
 교체를 추가로 방어하지 않는다. 이 기반 수정은 새 agent·학습·final을 실행하지 않으며 #71의
 기존 evidence와 판정을 변경하지 않는다.
+
+Windows 전체 suite는 4,040 passed, 135 skipped, 91 failed였다. 실패는 `/bin/sh` 부재,
+POSIX 권한 bit, cp949 subprocess decoding과 candidate destination 밖 fixture 테스트의 raw
+장경로 read에 분포했다. 마지막 fixture 실패는 변경 전 `bc96685`에서도 같은 테스트와
+`Path.read_bytes()` 위치로 재현했으므로 #90의 회귀로 분류하지 않는다. Linux 전체 결과는
+GitHub CI에서 별도로 판정한다.
