@@ -1,17 +1,19 @@
 # CI pytest 병렬 실행 문제 해결 기록
 
-> 이슈: #85  
+> 이슈: #85, #87
 > 작성일: 2026-09-04  
-> 상태: PR 1차 실측 완료, main 최종 실측 대기
+> 상태: 완료 (`main` 최종 실측 반영)
 
 ## 문제
 
 일반 pytest job은 Python 3.11과 3.12에서 전체 테스트를 각각 직렬 실행합니다.
 최근 성공한 `main` CI 10회의 job 시간은 Python 3.11 중앙값 477초
-(415~502초), Python 3.12 중앙값 493.5초(363~581초)였습니다. 최신 CI의 pytest
-본체는 4,052 passed, 126 skipped를 기록하고 449.74초 걸렸습니다. 두 Python
-버전의 회귀 검증은 필요하지만 runner에서 테스트 프로세스 하나만 사용하는 실행
-방식이 대기시간의 큰 부분을 차지했습니다.
+(415~502초), Python 3.12 중앙값 493.5초(363~581초)였습니다. 병렬화 전 마지막
+[`main` 실행](https://github.com/bbungjun/Autoresearch/actions/runs/33780751915)의
+pytest 본체는 Python 3.11 459.84초, Python 3.12 449.74초였습니다. 결과는 3.11이
+4,052 passed, 126 skipped, 125 warnings이고 3.12가 4,052 passed, 126 skipped,
+184 warnings였습니다. 두 Python 버전의 회귀 검증은 필요하지만 runner에서 테스트
+프로세스 하나만 사용하는 실행 방식이 대기시간의 큰 부분을 차지했습니다.
 
 ## 대안과 선택
 
@@ -59,20 +61,20 @@ suite와 다른 의존성·서비스를 사용하므로 이번 변경에서 병�
 - 소규모 테스트를 `-n 4 --dist loadfile`로 실행: xdist 설치와 worker 실행 확인
 - `git diff --check`: YAML·문서·lockfile 변경의 공백 오류 확인
 
-PR #86의 첫 GitHub-hosted 실행은
-[Actions run 33790459899](https://github.com/bbungjun/Autoresearch/actions/runs/33790459899)에서
-성공했습니다. 변경 전 최근 성공 `main` 10회 중앙값과 비교하면 Python 3.11 job은
-477초에서 214초로 55.1%, Python 3.12 job은 493.5초에서 228초로 53.8%
-줄었습니다. 한 번의 PR 실행 결과이므로 `main` 최종 실측과 반복 실행 분포는 아직
-확인하지 않았습니다.
+PR #86의 [첫 실행](https://github.com/bbungjun/Autoresearch/actions/runs/33790459899)과
+[둘째 실행](https://github.com/bbungjun/Autoresearch/actions/runs/33836328373), 병합 후
+[`main` 실행](https://github.com/bbungjun/Autoresearch/actions/runs/33836608430)이 모두
+성공했습니다. `main`에서 Python 3.11 job은 변경 전 최근 성공 10회 중앙값 477초에서
+219초로 54.1%, Python 3.12 job은 493.5초에서 237초로 52.0% 줄었습니다. 원격 세
+표본의 job 시간 범위는 Python 3.11 214~219초, Python 3.12 222~237초였습니다.
 
 | 항목 | 변경 전 근거 | 변경 후 원격 결과 |
 | --- | --- | --- |
-| Python 3.11 pytest job | 최근 성공 10회 중앙값 477초(415~502초) | 214초(3분 34초), 55.1% 감소 |
-| Python 3.12 pytest job | 최근 성공 10회 중앙값 493.5초(363~581초) | 228초(3분 48초), 53.8% 감소 |
-| pytest 본체 | 최신 CI 449.74초 | 3.11 195.07초, 3.12 213.82초 |
-| 테스트 결과 | 최신 CI 4,052 passed, 126 skipped | 양쪽 모두 4,052 passed, 126 skipped; 3.11 131 warnings, 3.12 190 warnings |
-| 느린 테스트 관측 | 별도 상위 25건 출력 없음 | proxy Docker forward 32.33초/25.00초, port-env 11.79초/11.48초, executor report timeout 약 10초 |
+| Python 3.11 pytest job | 최근 성공 10회 중앙값 477초(415~502초) | `main` 219초, 54.1% 감소; 원격 3표본 214~219초 |
+| Python 3.12 pytest job | 최근 성공 10회 중앙값 493.5초(363~581초) | `main` 237초, 52.0% 감소; 원격 3표본 222~237초 |
+| pytest 본체 | 마지막 직렬 `main`: 3.11 459.84초, 3.12 449.74초 | 병렬 `main`: 3.11 200.63초, 3.12 221.47초 |
+| 테스트 결과 | 마지막 직렬 `main`: 양쪽 모두 4,052 passed, 126 skipped; 3.11 125 warnings, 3.12 184 warnings | 병렬 `main`: 양쪽 모두 4,052 passed, 126 skipped; 3.11 131 warnings, 3.12 190 warnings |
+| 느린 테스트 관측 | 별도 상위 25건 출력 없음 | `main`: proxy Docker forward 26.36초/28.53초, port-env 11.53초/11.52초, executor report 10.05초/10.06초 |
 
 ## 한계와 후속 과제
 
@@ -87,12 +89,12 @@ PR #86의 첫 GitHub-hosted 실행은
 제거를 별도 이슈로 다루고, 네 worker로도 충분하지 않은 경우에만 job sharding의
 설치 비용과 유지보수 비용을 다시 비교합니다.
 
-첫 원격 job 감소율 55.1%/53.8%는 WSL의 직렬 대비 `-n 4` 로컬 감소율
-72.4%/72.7%보다 작았습니다. 원격 durations에서는 proxy Docker forward 테스트가
-Python 3.11/3.12에서 각각 32.33초/25.00초, port-env 테스트가 11.79초/11.48초,
-executor report timeout 계열이 약 10초를 차지했습니다. 병렬 worker가 같은 runner의
+`main` job 감소율 54.1%/52.0%는 WSL의 직렬 대비 `-n 4` 로컬 감소율
+72.4%/72.7%보다 작았습니다. `main` durations에서는 proxy Docker forward 테스트가
+Python 3.11/3.12에서 각각 26.36초/28.53초, port-env 테스트가 11.53초/11.52초,
+executor report 계열이 10.05초/10.06초를 차지했습니다. 병렬 worker가 같은 runner의
 CPU와 Docker daemon을 함께 사용하지만, 이번 측정은 CPU·Docker 경합을 분리하지
 않았습니다. 확인된 사실은 proxy Docker와 timeout 계열 테스트의 시간이 길었다는
 것뿐입니다. 경합은 원격 개선 폭을 제한했을 수 있는 후보로 남기고 자원 사용량을
-별도로 측정한 뒤 판단합니다. 한 번의 PR 결과를 안정적인 절감률로 일반화하지 않고,
-`main` 실행과 이후 분포에서도 재확인합니다.
+별도로 측정한 뒤 판단합니다. 원격 결과가 PR 2회와 `main` 1회의 세 표본뿐이므로,
+관측 범위를 장기적인 실행시간 분포나 안정적인 절감률로 일반화하지 않습니다.
