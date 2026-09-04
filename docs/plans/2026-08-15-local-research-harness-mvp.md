@@ -2267,9 +2267,9 @@ candidate 입력으로 소비하는 공개 경로는 아직 완주하지 못한�
 
 - [x] #77 연결 브랜치 `fix/77-nested-candidate-paths`를 최신 main `40c1f92`에서 생성
 - [x] Windows/Python 3.12 공개 호출로 root 130·153의 실패 단계와 경로 길이를 재확인
-- [ ] RED 1: root 130의 fixture로 validation/final metadata 준비가 짧은 root와 같은 receipt·bytes를 냄
-- [ ] RED 2: root 130의 별도 destination에 validation v1/v2 view를 게시·재사용하고 짧은 root와 manifest·파일 hash가 같음
-- [ ] RED 3: root 153에서 260자를 넘는 action-log partition을 실제로 열며 source path/handle identity와 receipt digest가 일치함
+- [x] RED 1: root 130의 fixture로 validation/final metadata 준비가 짧은 root와 같은 receipt·bytes를 냄
+- [x] RED 2: root 130의 별도 destination에 validation v1/v2 view를 게시·재사용하고 짧은 root와 manifest·파일 hash가 같음
+- [x] RED 3: root 153에서 260자를 넘는 action-log partition을 실제로 열며 source path/handle identity와 receipt digest가 일치함
 - [ ] 최소 구현 후 공개 handoff·manifest에 `\\?\`가 없고 snapshot/source/destination 관계 검사가 유지됨
 - [ ] 기존 alias/reparse/hardlink·외부 source·중첩 destination·변조·실패 회수 회귀 통과
 - [ ] Windows native 표적·확장 회귀, 전체 Ruff·`git diff --check`, Python 3.11/3.12 및 선택 이미지 CI 통과
@@ -2285,6 +2285,17 @@ CI를 구분해 기록한다.
 성공의 의미는 동일한 합성 입력의 candidate metadata/view 준비가 긴 로컬 경로에서도
 완주한다는 것이다. 이 결과만으로 #71의 실제 22열 학습·품질 판정이나 피처 promote가
 완료됐다고 처리하지 않는다. 구현과 검증이 끝난 뒤 #79를 처리하고 새 #71 실험으로 돌아간다.
+
+RED 3종은 Windows/Python 3.12에서 제품 코드 변경 전에 실행했다. Metadata와 candidate
+view의 두 계약 variant를 각각 매개변수화해 선행 실패가 다른 variant를 가리지 않게 했다.
+기존 fixture 생성·회수 3건은 통과했다. Metadata는 짧은 root의 validation/final 준비가
+각각 성공한 뒤 중첩 root에서 모두 `fixture_source_provenance`로 실패했다. Candidate view는
+짧은 root 게시가 성공한 뒤 중첩
+root의 v1과 v2가 각각 `judge_snapshot_layout`에서 실패했다. 275자 action-log partition은
+extended path가 없는 공개 source path를 유지했지만 `pa.OSFile` open에서 `WinError 3`으로
+실패했다. 최종 RED 실행은 `5 failed, 3 passed`였으며 각 테스트는 장경로 fixture를
+`finally`에서 extended I/O path로 회수했다. 이
+RED 단계에서는 `autoresearch/` 제품 파일을 변경하지 않았다.
 
 ### 잔여 검증 우선순위 — 2026-09-03 권고
 
