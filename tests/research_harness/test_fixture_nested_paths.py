@@ -1,6 +1,6 @@
 """중첩된 Judge fixture와 candidate 입력 경계의 content identity를 검증한다."""
 
-from datetime import date
+from datetime import UTC, date, datetime
 from hashlib import sha256
 import os
 from pathlib import Path
@@ -17,8 +17,13 @@ from autoresearch.research_harness.candidate_data_view import (
     _open_local_identity,
     materialize_candidate_data_view,
     materialize_candidate_data_view_v2,
+    materialize_final_candidate_data_view,
     prepare_candidate_metadata,
     prepare_final_candidate_metadata,
+)
+from autoresearch.research_harness.consumption_registry import (
+    FinalConsumptionRequest,
+    claim_final_consumption,
 )
 import autoresearch.research_harness.local_evaluation_fixture as fixture_module
 from autoresearch.research_harness.fixture_models import (
@@ -285,5 +290,42 @@ def test_nested_fixture_source_opens_partition_over_windows_limit(
         assert current_stat.st_nlink == 1
         assert sha256(payload).hexdigest() == receipt.sha256
         assert pq.read_table(pa.BufferReader(payload)).num_rows == receipt.rows
+    finally:
+        _remove_nested_root(nested_root)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows long-path regression")
+def test_nested_fixture_claims_and_materializes_final_view(tmp_path: Path) -> None:
+    nested_root = _nested_root(tmp_path, "nested-final", 130)
+    destination_root = tmp_path / "final-output"
+    destination_root.mkdir()
+    try:
+        fixture = build_local_evaluation_fixture(
+            LocalEvaluationFixtureRequest(nested_root, date(2026, 9, 1), 1937)
+        )
+        source = _source(fixture)
+        metadata = prepare_final_candidate_metadata(fixture.judge, source=source)
+        _test_io_path(fixture.fixture_root / "final-holdout-consumed").mkdir()
+
+        grant = claim_final_consumption(
+            FinalConsumptionRequest(
+                judge_state_root=fixture.fixture_root,
+                handoff=fixture.judge,
+                baseline_sha="a" * 40,
+                candidate_sha="b" * 40,
+                started_at=datetime(2026, 9, 4, tzinfo=UTC),
+            )
+        )
+        view = materialize_final_candidate_data_view(
+            CandidateDataViewRequest(fixture.judge, destination_root),
+            source=source,
+            metadata=metadata,
+            grant=grant,
+        )
+
+        assert view.manifest.evaluation_id == fixture.judge.final_holdout_id
+        assert grant._authorizes(fixture.judge)
+        assert not str(grant.evidence.marker_path).startswith("\\\\?\\")
+        assert not str(view.root).startswith("\\\\?\\")
     finally:
         _remove_nested_root(nested_root)
