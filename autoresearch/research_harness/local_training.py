@@ -3,13 +3,15 @@
 [파이프라인] candidate v2 게시와 prediction CSV 게시 사이의 학습 구간이다.
 [기능] 동일 bytes의 receipt 검증, 완전 과거 라벨, 시점 피처, seed별 분할·sampling·
 LightGBM fit과 예측 및 경로 없는 재현 receipt를 제공한다. 기존 21열 접두부와
-학습·예측 schema를 검증하고 추가 수치 피처를 실제 모델 입력 순서로 기록한다.
+학습·예측 schema를 검증하고 추가 수치 피처 또는 순서 보존 실험 projection을
+실제 모델 입력 순서로 기록한다.
 [비책임] GPU 모델 준비는 local_embedding, CLI·산출물 게시는 prediction,
 평가 라벨·지표·최종 판정은 Sealed Judge가 담당한다.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta, timezone
 from hashlib import sha256
@@ -252,11 +254,39 @@ def _feature_columns(training: LocalFeatureBatch, prediction: LocalFeatureBatch)
     return columns
 
 
+def _project_feature_columns(
+    available: tuple[str, ...],
+    requested: Sequence[str] | None,
+) -> tuple[str, ...]:
+    if requested is None:
+        return available
+    if isinstance(requested, (str, bytes)):
+        raise FeatureContractError('local_training_feature_projection_invalid')
+    try:
+        selected = tuple(requested)
+    except TypeError:
+        raise FeatureContractError('local_training_feature_projection_invalid') from None
+    selected_set = set(selected)
+    if (
+        not selected
+        or len(selected_set) != len(selected)
+        or any(type(name) is not str or name not in available for name in selected)
+        or selected != tuple(name for name in available if name in selected_set)
+    ):
+        raise FeatureContractError('local_training_feature_projection_invalid')
+    return selected
+
+
 def train_local_candidate(
     inputs: LocalTrainingInput, *, seed: int, embedding: TextEmbedder,
     config: LocalTrainingConfig = LocalTrainingConfig(),
+    feature_columns: Sequence[str] | None = None,
 ) -> LocalTrainingResult:
-    """매번 새 LightGBM을 fit하고 고정 slate 순서로 보정된 확률을 반환한다."""
+    """새 LightGBM을 fit해 고정 slate 확률을 반환한다.
+
+    ``feature_columns``는 검증된 batch 열의 원래 순서를 보존하는 비어 있지 않은
+    부분집합만 허용한다. 기본값은 기존 전체 feature 계약이다.
+    """
     if type(seed) is not int or not 0 <= seed <= 2**32 - 1:
         raise FeatureContractError('local_training_seed_invalid')
     started = perf_counter()
@@ -281,14 +311,15 @@ def train_local_candidate(
                   history_start_date=inputs.manifest.history_partitions[0].dt)
     training = build_local_features(requests, **kwargs)
     prediction = build_local_features(inputs.slate, **kwargs)
-    feature_columns = _feature_columns(training, prediction)
-    frame = training.features.to_pandas()
+    available_feature_columns = _feature_columns(training, prediction)
+    feature_columns = _project_feature_columns(available_feature_columns, feature_columns)
+    frame = training.features.select(feature_columns).to_pandas()
     x_train, y_train, realized = downsample_negatives(frame.iloc[train].copy(), labels.iloc[train],
                                                    config.sampling_rate, random_state=seed)
     x_validation = frame.iloc[validation].copy()
-    x_prediction = prediction.features.to_pandas()
+    x_prediction = prediction.features.select(feature_columns).to_pandas()
     categories: dict[str, list[str]] = {}
-    for name in CATEGORICAL_FEATURE_COLUMNS:
+    for name in (column for column in CATEGORICAL_FEATURE_COLUMNS if column in feature_columns):
         vocabulary = pd.api.types.union_categoricals([x_train[name].astype('category'),
                                                       x_validation[name].astype('category')]).categories
         categories[name] = vocabulary.tolist()
@@ -300,7 +331,7 @@ def train_local_candidate(
     model = LGBMModel(scale_pos_weight=weight, n_estimators=config.n_estimators,
                       learning_rate=config.learning_rate, num_leaves=config.num_leaves, random_state=seed)
     try:
-        model.fit(x_train, y_train, categorical_features=list(CATEGORICAL_FEATURE_COLUMNS))
+        model.fit(x_train, y_train, categorical_features=list(categories))
         probabilities = np.asarray(model.predict_proba(x_prediction))
         if probabilities.shape != (len(inputs.slate), 2) or not np.isfinite(probabilities).all() or (
             (probabilities < 0).any() or (probabilities > 1).any()

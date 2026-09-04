@@ -1,7 +1,7 @@
 """Candidate 로컬 재학습의 라벨·입력·seed 계약을 검증한다.
 
 [파이프라인] 안전한 로컬 입력에서 피처 조립·학습·예측으로 이어지는 구간이다.
-[기능] 손 계산 라벨, 실제 모델·receipt 및 입력 거부를 검증하며, 보안 테스트가
+[기능] 손 계산 라벨, 실제 모델·receipt, 실험용 피처 부분집합 및 입력 거부를 검증하며, 보안 테스트가
 만든 alias는 실패 경로에서도 해제하여 후속 coding temp 회수를 방해하지 않는다.
 [비책임] 학습 구현은 local_training, 임시 파일 회수 정책은 _agent_temp 소유다.
 """
@@ -146,6 +146,58 @@ def test_actual_lightgbm_seed_retraining_and_receipt(tmp_path: Path) -> None:
     assert first.receipt['sampling']['realized_rate'] == 1.0
     assert str(tmp_path) not in json.dumps(first.receipt)
     assert first.receipt['feature_columns'] == [*MODEL_FEATURE_COLUMNS, 'mean_topic_similarity']
+
+
+def test_experiment_feature_projection_trains_only_declared_subsequence(tmp_path: Path) -> None:
+    import lightgbm as lgb
+
+    m = module()
+    loaded = m.load_local_training_input(write_view(tmp_path))
+    selected = (
+        'age_group',
+        'recent_click_count_7d',
+        'category_id',
+        'view_count',
+        'topic_similarity',
+    )
+
+    result = m.train_local_candidate(
+        loaded,
+        seed=7,
+        embedding=Embedding(),
+        config=m.LocalTrainingConfig(n_estimators=3),
+        feature_columns=selected,
+    )
+
+    assert result.receipt['feature_columns'] == list(selected)
+    assert set(result.receipt['categorical_categories']) == {'age_group', 'category_id'}
+    assert lgb.Booster(model_str=result.model_text).feature_name() == list(selected)
+
+
+@pytest.mark.parametrize(
+    'selected',
+    [
+        (),
+        ('view_count', 'view_count'),
+        ('unknown_feature',),
+        ('view_count', 'category_id'),
+    ],
+)
+def test_invalid_experiment_feature_projection_is_rejected(
+    tmp_path: Path,
+    selected: tuple[str, ...],
+) -> None:
+    m = module()
+    loaded = m.load_local_training_input(write_view(tmp_path))
+
+    with pytest.raises(FeatureContractError, match='local_training_feature_projection_invalid'):
+        m.train_local_candidate(
+            loaded,
+            seed=7,
+            embedding=Embedding(),
+            config=m.LocalTrainingConfig(n_estimators=2),
+            feature_columns=selected,
+        )
 
 
 @pytest.mark.parametrize('seed', [-1, 2**32, True])
