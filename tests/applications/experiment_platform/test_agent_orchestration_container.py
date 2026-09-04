@@ -1,4 +1,8 @@
-"""Agent Orchestration API·Runner 이미지 경계 계약."""
+"""실험 플랫폼 배포 전 API·Runner·Executor 이미지 경계와 CI 실행 계약을 검증한다.
+
+캐시 빌드 결과가 런타임 smoke에 전달되는지 검사하며, 실험 실행·모델 판정은
+applications.experiment_platform의 책임으로 이 모듈에서 수행하지 않는다.
+"""
 
 import ast
 from pathlib import Path
@@ -242,20 +246,29 @@ def test_pr_ci_builds_and_smokes_the_executor_image_contract() -> None:
 
     steps = job["steps"]
     assert isinstance(steps, list)
-    build_step = next(step for step in steps if step["name"].startswith("Build Agent"))
+    build_step = next(
+        step
+        for step in steps
+        if step.get("with", {}).get("file")
+        == "deployment/experiment_platform/executor.Dockerfile"
+    )
     smoke_step = next(step for step in steps if step["name"].startswith("Run Agent"))
-    build_script = build_step["run"]
     smoke_script = smoke_step["run"]
-    assert isinstance(build_script, str)
     assert isinstance(smoke_script, str)
 
-    assert "deployment/experiment_platform/executor.Dockerfile" in build_script
-    assert "autoresearch-agent-orchestration-executor:ci" in build_script
+    assert build_step["uses"].startswith("docker/build-push-action@")
+    assert build_step["with"]["load"] == "true"
+    assert build_step["with"]["tags"] == "autoresearch-agent-orchestration-executor:ci"
     assert "--read-only" in smoke_script
     assert 'test "$(id -u)" = "10001"' in smoke_script
     assert 'test "$(id -g)" = "10001"' in smoke_script
     assert 'test "$UV_PROJECT_ENVIRONMENT" = "/opt/autoresearch-venv"' in smoke_script
-    for command in ("git --version", "uv --version", "node --version", "codex --version"):
+    for command in (
+        "git --version",
+        "uv --version",
+        "node --version",
+        "codex --version",
+    ):
         assert command in smoke_script
     for module in (
         "applications.experiment_platform.executor.main",

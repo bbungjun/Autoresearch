@@ -149,7 +149,7 @@ PR은 작게 유지합니다. 무관한 리팩터링과 기능 변경을 섞지 
 
 **PR 생성 전 체크**:
 
-- [ ] 로컬 테스트 통과: `python -m pytest`
+- [ ] 로컬 테스트 통과: `uv run python -m pytest -n 4 --dist loadfile --durations=25`
 - [ ] 불필요한 파일, 캐시, 시크릿(`.env` 등)이 없는지 확인
 - [ ] 커밋 메시지가 컨벤션을 따르는지 확인
 
@@ -243,7 +243,7 @@ Issue Form과 자동화를 단순하게 유지하기 위해 `feature`, `bug`, `e
 
 `.github/workflows/ci.yml`과 `.github/workflows/lint.yml`이 PR과 `main` push, 수동 실행(`workflow_dispatch`)에서 자동 실행됩니다.
 
-- `ci.yml`: Python 3.11 / 3.12에서 `python -m pytest`, feast·postgres 그룹 테스트, `uv lock & proxy export drift`, 이미지 빌드와 import smoke check
+- `ci.yml`: Python 3.11 / 3.12에서 `python -m pytest -n 4 --dist loadfile --durations=25`, feast·postgres 그룹 테스트, `uv lock & proxy export drift`, 이미지 빌드와 import smoke check
 - `lint.yml`: `Ruff`
 - `release-drafter.yml`: GitHub가 자동 제공하는 `GITHUB_TOKEN`만 사용하는 release note 초안 갱신
 
