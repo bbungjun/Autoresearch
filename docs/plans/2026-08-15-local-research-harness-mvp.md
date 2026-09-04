@@ -4,7 +4,7 @@
 > 코드 반영 상태는 [PR #70](https://github.com/bbungjun/Autoresearch/pull/70)을 따르며 전체 MVP 수용 완료는 아니다. 아래 종합 체크리스트와
 > 잔여 검증 우선순위를 따른다. 과거 Task의 문제·결과는 해당 구현 시점 기록이다.
 > 후속 #71은 coding 2회 뒤 prepare 회수 실패로 피처 학습 실증이 막혔다. Task 7F와 #73을 따른다.
-> #76은 PR #80으로 merge됐고, #77의 중첩 fixture candidate 입력 소비는 아래 Task 7I 계획을 따른다.
+> #76은 PR #80, #77은 PR #89로 merge됐고, #79의 Snapshot/Judge 오류 전달은 아래 Task 7J 계획을 따른다.
 
 **Goal:** 현행 executor를 수정하지 않고 정적 allowlist를 사용하지 않는 독립 로컬 Research
 Harness(봉인된 사후 판정 + 자가 피드백) 경로를 만든다. 사람이 준 가설·`ExperimentCard`로
@@ -2232,7 +2232,7 @@ CI·PR·merge 상태는 [#76의 연결 PR](https://github.com/bbungjun/Autoresea
 실험·final 소비는 수행하지 않는다. 오류 전달 수정으로 실패 작업 자체가 성공한 것으로
 기록하지 않는다.
 
-### Task 7I: 중첩 fixture의 candidate 입력 소비 — #77 (독립 리뷰 수정·재검증 중)
+### Task 7I: 중첩 fixture의 candidate 입력 소비 — #77 (PR #89 merge 완료)
 
 #74에서 길이 130·153자의 state root에 fixture를 생성·재사용할 수 있게 했지만, 그 결과를
 candidate 입력으로 소비하는 공개 경로는 아직 완주하지 못한다. #76이 반영된 main
@@ -2339,6 +2339,48 @@ final metadata·grant·view를 잇는 신규 회귀가 GREEN이 됐고, 기존 #
 `tests/research_harness` 밖의 기존 테스트이며 `/bin/sh` 부재, Windows symlink 권한,
 POSIX 경로 구분자·파일 모드 가정과 cp949 decode 등 로컬 플랫폼 차이다. 이를 전체 통과로
 기록하지 않으며 Linux Python 3.11/3.12 CI를 별도 최종 근거로 사용한다.
+
+### Task 7J: Snapshot/Judge 오류의 Python 전달 계약 — #79 (계획 확정)
+
+`EvaluationSnapshotError`와 `JudgeError`는 `frozen=True, slots=True` dataclass다. 최신 main
+`271b148`의 Windows/Python 3.12에서 각 예외를 no-op generator context manager 안에서
+발생시키면 원본 대신 `TypeError("super(type, obj): obj must be an instance or subtype of type")`가
+전파됨을 다시 확인했다. 이는 Python 예외 전달 계약의 직접 재현이며, 실제 E2E 로그에서 두
+예외가 모두 가려졌다는 증거로 확대하지 않는다.
+
+**범위와 선택:** #76의 `StageCError` 패턴처럼 각 클래스에서 구조 필드만 생성 이후 보호하고
+`__traceback__`, `__context__`, `__cause__`, `__suppress_context__`, `__notes__`는 기본
+`Exception` 동작을 허용한다. 두 오류의 서로 다른 code·optional field·문자열·식별자 정제,
+dataclass equality/hash/repr/`replace()` 계약은 유지한다. 공용 오류 기반 클래스 도입, 모든 frozen
+예외 일괄 변경, 오류 문자열 통일과 호출부의 광범위한 예외 번역은 포함하지 않는다.
+
+**RED 3종:** 서로 다른 실패가 다른 계약을 가리지 않도록 분리한다.
+
+1. `EvaluationSnapshotError`: 중첩 generator context manager와 `pytest.raises`를 통과한 원본
+   객체·모든 code·stage·선택 필드·traceback을 검증한다. Snapshot publish conflict의 기존
+   정제 문자열과 staging 정리도 함께 대조한다.
+2. `JudgeError`: 중첩 generator context manager와 실제 `_run_lock` 경계에서 원본 객체·두 code·
+   stage·`row_number`·traceback을 검증한다. prediction/target 값이 문자열에 노출되지 않는 기존
+   Judge 소비 회귀를 유지한다.
+3. 두 클래스의 구조 필드 대입·삭제 불변성, 기본 예외 metadata 갱신과 타입 검증, 명시적
+   cause/context 및 `from None`, `add_note()`, dataclass value/hash/`replace()` 계약을 검증한다.
+
+**구현·검증 순서:**
+
+- [x] #79 이슈 연결 브랜치 `fix/79-snapshot-judge-error-propagation`을 최신 main `271b148`에서 생성
+- [x] 파일 I/O 없는 최소 재현에서 두 예외가 각각 `TypeError`로 바뀌는 현재 동작 확인
+- [ ] 제품 코드 변경 전 위 RED 3종을 작성하고 예상 실패와 기존 통과 대조를 분리 기록
+- [ ] `evaluation_errors.py`와 `judge_errors.py`에만 최소 필드 보호 패턴을 적용하고 module docstring 갱신
+- [ ] 신규 오류 계약, snapshot publisher/slate, Judge/prediction ingestion, local runtime·controller 인접 회귀 실행
+- [ ] 전체 Ruff·`git diff --check`, Linux Python 3.11/3.12 CI와 필요한 선택 이미지 검증
+- [ ] 문제·대안·RED/GREEN·한계를 spec/plan/포트폴리오에 반영하고 구현 비참여 독립 리뷰 수행
+- [ ] P0/P1 미해결 0건과 CI 성공을 확인한 뒤 Ready 전환; 최종 squash merge는 사람이 판정
+
+**종료 조건:** 두 오류가 generator context manager와 실제 소비 경계에서 원본 타입·객체·필드를
+유지하고 다른 `TypeError`로 바뀌지 않는다. 구조 필드 불변성과 안전한 메시지가 유지되며 예외
+연쇄·traceback은 Python 표준 동작을 따른다. 실제 coding agent, 모델 학습·품질 판정, final
+holdout 소비와 기존 #60/#69/#71 증거 변경은 수행하지 않는다. 이 완료는 오류 전달 신뢰성의
+근거이며 자율 복구율이나 모델 성능 개선의 증거가 아니다.
 
 ### 잔여 검증 우선순위 — 2026-09-03 권고
 
