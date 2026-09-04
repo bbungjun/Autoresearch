@@ -2146,7 +2146,8 @@ disposable worktree 회수를 수행한다. 이 preflight에서 #90의 `candidat
 원래 오류·patch·미소비 상태를 기록한다. 기존 threshold·seed·모델·embedding·split·label과
 피처 계산 계약은 사후 변경하지 않는다.
 
-**다음 실행 제안 — 승인 전 미실행:** 결과를 보지 않고 다음 정수 **seed 7103**과 최신 main
+**다음 실행 제안 — 무비용 preflight 완료, 비용 구간 승인 전:** 결과를 보지 않고 다음 정수
+**seed 7103**과 최신 main
 `9ede758fcb25bc73356eda72fa6523744705dfb7`를 고정한다. 새 fixture·validation·final ID와 registry를
 사용하며 이전 final과 실패 evidence는 그대로 보존한다. 고정 seed 101~105 calibration과 표준
 validation/worktree preflight를 다시 통과해야 coding을 시작한다. Coding은 초기 1회와 feedback
@@ -2160,6 +2161,13 @@ validation/worktree preflight를 다시 통과해야 coding을 시작한다. Cod
 22열·피처 분포·receipt/manifest를 감사하고 새 final을 정확히 한 번 소비해 baseline과 비교한다.
 수치 기준 미달은 `discard` 완료이며, infrastructure 오류는 final 전에 중단한다. 완료 조건은
 공식 22열 candidate의 validation과 final 비교, REPORT·기록 Judge·비용 기록·독립 감사까지다.
+
+- [x] seed 7103 fixture와 서로 다른 validation/final ID 생성
+- [x] candidate view 게시·재사용, workspace 회수, `candidate_lock_prepare` 미재현
+- [x] agent/training/final 0회와 새 final registry 미생성 확인
+- [x] #60 208개·#69 128개·원 #71 112개 및 seed 7102 run 119개 evidence 전후 보존
+- [ ] 승인 뒤 baseline seed 101~105 calibration부터 비용 구간 실행
+- [ ] coding 최대 2회, 공식 22열 validation/final, REPORT·Judge·감사 완료
 
 - [x] #71 발행과 이슈 연결 브랜치 생성, 기존 입력/21개 피처 및 학습 receipt 검토
 - [x] 클릭 비중의 학습 cold-start·조회수/나이의 순서 중복을 입력 구조에서 확인하고
