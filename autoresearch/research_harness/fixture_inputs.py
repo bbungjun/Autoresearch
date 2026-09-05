@@ -3,7 +3,7 @@
 [파이프라인] Judge가 local 평가 fixture를 준비하는 첫 구간에서 일일 action log
 producer가 읽을 production-schema Parquet 입력과 그 descriptor를 결정적으로 만든다.
 
-[기능] 평가일 기준 고정 4일 창, Stage B bucket별 160/40 사용자, 일별 48개 영상,
+[기능] 평가일 기준 기본 4일(v1) 또는 opt-in 34일(v2) 창, Stage B bucket별 160/40 사용자, 일별 48개 영상,
 pinned PyArrow writer receipt와 canonical descriptor JSON을 생성한다.
 
 [비책임] 일일 producer 실행, action log 검증, Stage B snapshot build와 fixture root의
@@ -27,7 +27,6 @@ from autoresearch.research_harness.evaluation_split import SPLIT_CONTRACT, user_
 from autoresearch.research_harness.fixture_errors import StageCError, StageCErrorCode
 from autoresearch.research_harness.fixture_models import (
     FIXTURE_CHANNEL_PUBLISHED_OFFSET_DAYS,
-    FIXTURE_HISTORY_START_OFFSET_DAYS,
     FixtureDescriptor,
     FixtureInputReceipt,
     FixturePartitionReceipt,
@@ -119,14 +118,14 @@ FIXTURE_YOUTUBE_SCHEMA_V1: Final = pa.schema(
 )
 
 
-def canonical_fixture_dates(evaluation_start_date: date) -> tuple[date, ...]:
+def canonical_fixture_dates(evaluation_start_date: date, *, history_days: int = 2) -> tuple[date, ...]:
     """Return history, evaluation, and scan-tail partition dates in canonical order."""
 
-    require_fixture_date_window(evaluation_start_date)
+    require_fixture_date_window(evaluation_start_date, history_days=history_days)
     try:
         return tuple(
             evaluation_start_date + timedelta(days=offset)
-            for offset in (-FIXTURE_HISTORY_START_OFFSET_DAYS, -1, 0, 1)
+            for offset in range(-history_days, 2)
         )
     except OverflowError:
         raise StageCError(
@@ -193,12 +192,13 @@ def write_canonical_fixture_inputs(
         기록된 입력의 exact receipt를 포함한 frozen descriptor.
     """
 
-    fixture_dates = canonical_fixture_dates(request.evaluation_start_date)
+    fixture_dates = canonical_fixture_dates(request.evaluation_start_date, history_days=request.history_days)
     virtual_users_path = fixture_root / _VIRTUAL_USER_PATH
     virtual_users_path.parent.mkdir(parents=True, exist_ok=True)
     validation_ids, final_holdout_ids = select_fixture_user_ids(request.fixture_seed)
     virtual_user_table = pa.Table.from_pylist(
-        _virtual_user_rows(validation_ids + final_holdout_ids, request.evaluation_start_date),
+        _virtual_user_rows(validation_ids + final_holdout_ids, request.evaluation_start_date,
+                           history_days=request.history_days),
         schema=FIXTURE_VIRTUAL_USER_SCHEMA_V1,
     )
     _write_table(virtual_user_table, virtual_users_path)
@@ -230,7 +230,8 @@ def write_canonical_fixture_inputs(
         )
 
     descriptor = FixtureDescriptor(
-        contract_version="youtube-ctr-local-fixture-v1",
+        contract_version=("youtube-ctr-local-fixture-v1" if request.history_days == 2
+                          else "youtube-ctr-local-fixture-v2"),
         input_generator_version="youtube-ctr-input-v1",
         input_writer=WriterIdentity(
             engine="pyarrow",
@@ -270,10 +271,11 @@ def write_canonical_fixture_inputs(
 def _virtual_user_rows(
     user_ids: tuple[str, ...],
     evaluation_start_date: date,
+    *, history_days: int = 2,
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     generated_at = datetime.combine(
-        evaluation_start_date - timedelta(days=2),
+        evaluation_start_date - timedelta(days=history_days),
         datetime.min.time(),
         tzinfo=UTC,
     ).isoformat().replace("+00:00", "Z")

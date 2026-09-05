@@ -7,6 +7,7 @@
 제공하고 상대 경로 및 seed의 기본 계약을 fail-closed로 검증한다. Metadata v2 manifest는
 별도 모델에서 고정 경로·행 수·digest를 검증하며 기존 v1 reader 계약은 유지한다.
 각 split metadata의 prepared bytes/receipt는 Harness 메모리에서 불변 값으로 전달한다.
+Fixture v2는 명시적 32일 history를 제공하며 기본 v1의 2일 계약을 유지한다.
 
 [비책임] 실제 일일 producer 실행, snapshot build, handoff 재검증과 candidate view 게시는
 후속 Stage C orchestration 모듈이 담당한다.
@@ -54,6 +55,7 @@ class LocalEvaluationFixtureRequest:
     judge_state_root: Path
     evaluation_start_date: date
     fixture_seed: int
+    history_days: int = 2
 
     def __post_init__(self) -> None:
         if isinstance(self.fixture_seed, bool) or not isinstance(self.fixture_seed, int):
@@ -66,7 +68,7 @@ class LocalEvaluationFixtureRequest:
                 StageCErrorCode.FIXTURE_REQUEST_INVALID,
                 "fixture_request_validation",
             )
-        require_fixture_date_window(self.evaluation_start_date)
+        require_fixture_date_window(self.evaluation_start_date, history_days=self.history_days)
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,7 +99,7 @@ class FixturePartitionReceipt:
 class FixtureDescriptor(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    contract_version: Literal["youtube-ctr-local-fixture-v1"]
+    contract_version: Literal["youtube-ctr-local-fixture-v1", "youtube-ctr-local-fixture-v2"]
     input_generator_version: Literal["youtube-ctr-input-v1"]
     input_writer: WriterIdentity
     fixture_seed: Annotated[int, Field(strict=True, ge=0)]
@@ -126,13 +128,13 @@ class FixtureDescriptor(BaseModel):
 
     @model_validator(mode="after")
     def require_canonical_fixture_semantics(self) -> Self:
-        require_fixture_date_window(self.evaluation_start_date)
+        require_fixture_date_window(self.evaluation_start_date, history_days=self.history_days)
         history_start_date = self.evaluation_start_date - timedelta(
-            days=FIXTURE_HISTORY_START_OFFSET_DAYS
+            days=self.history_days
         )
         expected_dates = tuple(
             self.evaluation_start_date + timedelta(days=offset)
-            for offset in (-FIXTURE_HISTORY_START_OFFSET_DAYS, -1, 0, 1)
+            for offset in range(-self.history_days, 2)
         )
         if (
             self.history_start_date != history_start_date
@@ -169,6 +171,11 @@ class FixtureDescriptor(BaseModel):
                     dt=receipt.dt,
                 )
         return self
+
+    @property
+    def history_days(self) -> int:
+        """Descriptor 버전의 고정 history 길이; v1 직렬화에는 필드를 추가하지 않는다."""
+        return 2 if self.contract_version == "youtube-ctr-local-fixture-v1" else 32
 
     @classmethod
     def model_validate_json(
@@ -419,11 +426,13 @@ def _is_posix_relative_path(value: str) -> bool:
     )
 
 
-def require_fixture_date_window(evaluation_start_date: date) -> None:
+def require_fixture_date_window(evaluation_start_date: date, *, history_days: int = 2) -> None:
+    if type(history_days) is not int or history_days not in (2, 32):
+        raise StageCError(StageCErrorCode.FIXTURE_REQUEST_INVALID, "fixture_history_profile_validation")
     ordinal = evaluation_start_date.toordinal()
     if (
         ordinal
-        < date.min.toordinal() + FIXTURE_MAX_EVALUATION_PAST_OFFSET_DAYS
+        < date.min.toordinal() + history_days + FIXTURE_CHANNEL_PUBLISHED_OFFSET_DAYS
         or ordinal > date.max.toordinal() - 1
     ):
         raise StageCError(

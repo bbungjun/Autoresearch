@@ -2,7 +2,7 @@
 
 [파이프라인] 로컬 학습 입력과 Sealed Judge 출력 사이의 실험 분석 구간이다.
 [기능] 고정 54개 관측의 split/world 통계, Recall 회복과 사전 등록 판정을 계산한다.
-학습/예측 피처 분포와 LightGBM importance를 기록한다.
+학습/예측 피처 분포와 LightGBM importance를 기록하며 진단의 fit seed를 명시할 수 있다.
 [비책임] fixture 생성, 정답 접근, 모델 학습, final 소비와 production 승격은 하지 않는다.
 """
 
@@ -126,7 +126,9 @@ def feature_stats(table: pa.Table) -> dict:
     return output
 
 
-def input_diagnostics(inputs: LocalTrainingInput, embedding: object) -> dict:
+def input_diagnostics(
+    inputs: LocalTrainingInput, embedding: object, *, training_seeds: Sequence[int] = TRAINING_SEEDS,
+) -> dict:
     """학습 계약과 동일한 fit 행 선택 및 예측 batch를 진단한다."""
     requests = pa.table({"user_id": [r.user_id for r in inputs.training_rows],
                          "video_id": [r.video_id for r in inputs.training_rows],
@@ -138,7 +140,7 @@ def input_diagnostics(inputs: LocalTrainingInput, embedding: object) -> dict:
     prediction = build_local_features(inputs.slate, **kwargs)
     labels = np.asarray([int(r.clicked) for r in inputs.training_rows])
     fit = {}
-    for seed in TRAINING_SEEDS:
+    for seed in training_seeds:
         train_val, _ = train_test_split(np.arange(len(labels)), test_size=.2,
                                         random_state=seed, stratify=labels)
         train, _ = train_test_split(train_val, test_size=.25, random_state=seed,
