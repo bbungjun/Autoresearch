@@ -114,4 +114,3 @@ def test_real_generated_slates_do_not_pad_inactive_users(sealed):
     assert set(counts.values()) <= {8, 16, 24}
     assert 0 < len(counts) < request.validation_users + request.final_users
     assert all(row["event_id"].startswith("evt_20260904_") for row in rows)
-

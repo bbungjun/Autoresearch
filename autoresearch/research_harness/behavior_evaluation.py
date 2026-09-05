@@ -247,4 +247,3 @@ def prepare_behavior_metadata(
     for key, artifact in (("user_id", result.users), ("video_id", result.videos)):
         _validate_metadata_artifact(artifact, requests, key)
     return result
-
