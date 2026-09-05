@@ -1,6 +1,6 @@
 # #111 고정 bundle 학습 실행기와 평가 봉인
 
-상태: 진행 중. 기준: #109의 사전 등록 spec와 복사본 SHA256 a1490bca5ebbe8114f6a3619dca6f3684b9eac4cecbcb18eb95af6abd0f624aa.
+상태: 구현·실물 봉인·독립 리뷰 완료. 최종 CI와 머지는 연결 PR에서 확인한다. 기준: #109의 사전 등록 spec와 복사본 SHA256 a1490bca5ebbe8114f6a3619dca6f3684b9eac4cecbcb18eb95af6abd0f624aa.
 
 ## 목표와 경계
 
@@ -16,11 +16,11 @@ Serving server는 저장 모델의 온라인 추론을 맡는다. 이번 작업�
 
 ## 순서와 완료 조건
 
-1. [ ] hash/분할/fit-only-train/저장 모델 재사용의 회귀 및 실행기 구현.
-2. [ ] 날짜·사용자 bucket·잠재 anchor·metadata/final 경계 회귀와 생성/봉인 구현.
-3. [ ] 독립 리뷰, 좁은 회귀 검증 후 깨끗한 commit을 고정.
-4. [ ] 신규 3개 cohort 실물 생성/봉인 및 receipt 재검증. 학습/채점/final 0 유지.
-5. [ ] 문제·선택 이유·실측·한계 보고서, 독립 실물/문서 리뷰, CI·squash 머지.
+1. [x] hash/분할/fit-only-train/저장 모델 재사용의 회귀 및 실행기 구현.
+2. [x] 날짜·사용자 bucket·잠재 anchor·metadata/final 경계 회귀와 생성/봉인 구현.
+3. [x] 독립 리뷰, 좁은 회귀 검증 후 깨끗한 commit을 고정.
+4. [x] 신규 3개 cohort 실물 생성/봉인 및 receipt 재검증. 학습/채점/final 0 유지.
+5. [x] 문제·선택 이유·실측·한계 보고서 및 독립 실물/문서 리뷰 완료. CI·squash 머지는 PR의 최종 반영 gate로 별도 확인한다.
 
 ## 남은 실험 단계
 

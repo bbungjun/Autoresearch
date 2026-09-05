@@ -24,7 +24,27 @@ Metadata는 허용 열만 normalize하고 as-of 범위로 선택한다. 기존 c
 
 ## 실물 실행 상태
 
-원본 생성 전 기록이다. 신규 3개 cohort 생성/봉인 receipt와 소요 시간은 실행 후 기록한다. 실제 실험 모델 학습·채점·final 소비는 실행하지 않는다.
+깨끗한 commit `c94a0d9cc43d4abdd9ef5eb644e96fbb32d5b751`에서 생성·봉인·validation view 게시를 **81.502초**에 완료했다. 신규 cohort 3개 각각 1,000명(등록 validation 800명/final 200명), 34일로 총 raw event **915,501건**을 만들었다. 실제 접속한 validation 사용자의 노출은 총 **19,600행**이다. 등록 사용자 수와 평가일 접속 사용자 수는 다르며, 미접속 사용자를 위해 노출을 보충하지 않았다.
+
+| cohort | 대응 학습 world | raw event | validation slate 행 | candidate history 일수 |
+| --- | --- | ---: | ---: | ---: |
+| 10901 | 10701 | 302,392 | 6,896 | 32 |
+| 10902 | 10702 | 305,733 | 6,280 | 32 |
+| 10903 | 10703 | 307,376 | 6,424 | 32 |
+
+생성 범위는 8/3~9/5, 평가일 9/4, candidate 관측 이력은 8/3~9/3이다. Evaluation metadata는 평가 요청 시점의 as-of 허용 행을 포함한다. Final slate/labels는 Judge snapshot에 보관하며 candidate-final view와 consumption marker는 만들지 않았다. **실제 모델 fit 0, 평가/채점 0, final claim 0**이다. 테스트의 소형 LightGBM fit과 구분한다.
+
+생성 정책 SHA256은 `1c600173494e1db1754465bc0aa2e8c4a8778dd2a8a62bd6493afbc31048af19`, summary SHA256은 `459c938eaf3a0d00b56fe46327a023745acddaae06e6afb904358f103b2c7d89`다. #109에서 복사한 비교 문서의 hash는 `a1490bca5ebbe8114f6a3619dca6f3684b9eac4cecbcb18eb95af6abd0f624aa`로 유지했다.
+
+| cohort | raw manifest SHA256 | snapshot fingerprint |
+| --- | --- | --- |
+| 10901 | `18c278d2b96207ead001304e71a6d623ff6ff5da5ac547a52596926418ce5b75` | `eb31c567185ddf8b6cdee29c56d0f1a3fb1d550399d4c152bf41b30eadf0eadd` |
+| 10902 | `eeb49a0bf1c9c029ba6751d60015382059c81b0e7d6e1a400bc3e129436a49c1` | `8982799854e1424d9e8e6f4e8027b6cf4e9814793f58adbdad2c150ea06b8e35` |
+| 10903 | `c95413a8db237cf88852a7a14e83600817280dda1a99f41cedebde221953bcb7` | `f0d369e288da5430a0620d789e8cb8475c0bc40e1cdf819e0faac8af90c9fe25` |
+
+실행 도구는 `python -m tools.prepare_behavior_evaluation --output <새 출력> --training <고정 bundle 묶음> --previous-result <기존 결과>`이며 `--previous-result`를 #16/#103/#105 결과에 각각 지정한다. 생성 데이터·모델·로컬 전용 경로는 커밋하지 않는다. 실행 중 실패한 산출물이나 기존 final marker를 초기화하지 않는다.
+
+독립 실물 검증에서 3개 cohort의 모든 원본/snapshot/candidate 파일 hash, 정책/코드 hash, 날짜/bucket 및 신규 사용자 비중복을 대조했다. 평가일 접속 여부와 사용자별 8/16/24노출을 독립 재계산해 일치를 확인했다. Candidate의 과거 이력·metadata as-of 경계, final marker 및 실제 모델 산출물 부재, 기존 #109 bundle 및 #16/#103/#105 결과 hash 유지도 확인했다. Final 정답은 파일 무결성만 검사했고 모델 채점에는 사용하지 않았다. 최종 보고서·포트폴리오 수치까지 독립 검토했으며 P1/P2 발견 사항은 없었다.
 
 ## 한계와 후속
 
