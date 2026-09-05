@@ -10,7 +10,7 @@
 - 평가: #111 summary SHA256 `459c938eaf3a0d00b56fe46327a023745acddaae06e6afb904358f103b2c7d89`.
   각 world의 raw/snapshot/candidate manifest hash를 summary와 대조한다. 원본 재생성 없음.
 - 모델: 기존 behavior_execution의 고정 15/10피처 API. 총18개 모델을 먼저 fit/봉인하고
-  동일 모델과 input feature batch를 두 arm·validation/final에 재사용한다.
+  동일 모델을 validation/final에 재사용하고, 각 split의 feature batch를 두 arm이 공유한다.
 - validation 18개 관측의 행 key·평가 ID·coverage·유한성 검증 후만 final claim을 한다.
   개선 여부는 final 실행 gate가 아니다. final은 cohort별6모델 묶음, 최대3claim이다.
   Final 예측6개를 전부 CSV로 봉인한 뒤 채점하고 seed/model/arm을 추가하지 않는다.
