@@ -23,6 +23,9 @@ Recall@10이 낮았다. 새로운 합성 snapshot에서 제거 효과와 Recall 
   해당 결과의 snapshot/evaluation ID와 신규 ID가 겹치면 중단한다.
   신규 final은 world마다 한 번 소비하며 두 번째 claim 거절을 확인한다.
   소비 후 실패해도 marker를 초기화하거나 새 seed로 대체하지 않는다.
+  실행 전 저장소 git common directory에 #103 단일 실행 claim을 원자적으로 기록한다.
+  출력 폴더/worktree 변경 재실행도 차단하며 실패 시 claim을 유지한다.
+  별도 clone이나 수동 삭제까지 막는 보안 경계로 주장하지 않는다.
 
 ## 결과 전 판정 고정
 
