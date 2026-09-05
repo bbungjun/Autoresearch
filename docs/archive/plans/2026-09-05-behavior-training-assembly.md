@@ -36,3 +36,12 @@
 10피처가 15피처의 정확한 projection인지, 동일 split 재계산과 overlap/변조 거절을 확인한다.
 실제 최근5개가 fit subset에서도 각각 비상수인지 검사하고 실패는 그대로 보존한다.
 개발 데이터에서의 품질 확인을 성능 향상으로 해석하지 않는다.
+
+## 준비 완료
+
+실행 코드 `39e7368401be39fd4ef2b1a618e060d57787b067`에서 실제 E5 cache를 사용한
+3개 bundle을 47.020초에 조립했다. Label 4,608행/163양성, 정확한 15→10 projection,
+9개 split과 원본/피처/분할 hash를 독립 대조했다. 관련 회귀 19개 통과, P1/P2 없음.
+Fit/평가/final은 0회다. 구현 계획은 archive하며 준비 실측은
+`docs/reports/2026-09-05-behavior-training-assembly.md`에 기록했다.
+미래 실험 조건은 현재 유효 spec에 유지한다. CI/머지 상태는 #109 연결 PR이 정본이다.
