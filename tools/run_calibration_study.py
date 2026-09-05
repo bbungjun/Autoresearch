@@ -373,7 +373,7 @@ def main() -> None:
     if args.worker:
         run(args)
     else:
-        raise SystemExit(supervise([sys.executable, "-m", "tools.run_calibration_study", *sys.argv[1:], "--worker"], args.output, MAX_SECONDS))
+        raise SystemExit(supervise([sys.executable, "-m", "tools.run_calibration_study", *sys.argv[1:], "--worker"], args.output, timeout=MAX_SECONDS))
 
 
 if __name__ == "__main__":

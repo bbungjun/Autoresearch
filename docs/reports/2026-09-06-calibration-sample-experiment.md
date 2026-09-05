@@ -29,3 +29,8 @@ Brier는 판별력과 보정을 함께 반영하므로 이것만으로 원인을
 수행하지 않았다. 실행 후 표본수, 지표, 비용, 원본 보존과 한계를 기록한다.
 
 근거: [scikit-learn 확률 보정 문서](https://scikit-learn.org/stable/modules/calibration.html).
+
+첫 CLI 기동은 supervisor의 keyword-only timeout을 위치 인자로 전달하여 TypeError로
+종료했다. worker 생성 전이므로 모델/보정 fit·final claim·실험 출력 생성은 0이다.
+호출을 수정하고 실제 supervisor 시그니처의 autospec으로 CLI 회귀를 추가했다.
+이는 학습 실패 재시도가 아닌 학습 전 기동 오류 수정이며, 실패 기록을 보존한다.

@@ -180,3 +180,19 @@ def test_phase_order_and_duplicate_claim_no_fit(tmp_path: Path, monkeypatch: pyt
     assert events == ['prepare']
     failure = json.loads((args.output/'failure.json').read_bytes())
     assert failure['fit_attempts']==0 and 'fit' in failure['costs']
+
+
+def test_cli_supervisor_timeout_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import create_autospec
+    supervisor = create_autospec(runner.supervise, return_value=0)
+    monkeypatch.setattr(runner, 'supervise', supervisor)
+    args = ['calibration-study']
+    for name in ('output', 'previous-run', 'old-evaluation', 'model-dir', 'cache-dir'):
+        args.extend([f'--{name}', str(tmp_path/name)])
+    monkeypatch.setattr(runner.sys, 'argv', args)
+    with pytest.raises(SystemExit) as error:
+        runner.main()
+    assert error.value.code == 0
+    supervisor.assert_called_once()
+    assert supervisor.call_args.kwargs == {'timeout': runner.MAX_SECONDS}
+    assert supervisor.call_args.args[0][-1] == '--worker'
