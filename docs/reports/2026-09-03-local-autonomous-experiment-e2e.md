@@ -1326,3 +1326,18 @@ ablation NDCG@10 평균은 `+0.002323`이지만 양수 반복이 11/18로 사전
 복수 LLM Judge, simulated watch time, 장기 폐루프 편향과 실제 사용자 CTR은 측정하지 않았다.
 후속 실험은 video popularity 제거 후보와 Recall@10 trade-off를 새 validation/final 계약으로
 별도 사전 등록해야 하며, 이번 final을 초기화하거나 재사용하지 않는다.
+
+## 26. 인기도 제거 효과와 Recall 회복을 새 데이터에서 확인하기 — #103
+
+#16의 후속 가설을 새 평가일·world/training seed로 사전 등록하고 54회 학습·평가했다.
+인기도 6개 제거의 NDCG@10 개선은 validation +0.048633, final +0.053591이며 각각
+9/9 반복에서 양수다. Final Recall@10은 full 0.997222에서 제거 모델 1.0으로 올라
+video-only와 같아졌고, 모든 split 평균 guardrail이 기준을 통과해 `supported`로 판정했다.
+신규 final은 3개이며 기존 #16 final을 초기화하거나 다시 소비하지 않았다.
+
+최근 행동 5개는 학습 이력이 없는 첫날 행에서 모두 0이고 모델 split도 0이었다.
+#16의 동률은 피처가 본질적으로 불필요하다는 증거가 아니라 fixture의 학습 조건 한계다.
+따라서 후속 합성 비교 기준으로 15피처를 권고하고, production 계약은 유지하면서
+충분한 선행 history 및 label 다양화를 다음 검증으로 분리했다.
+상세 분포·importance·paired 분산·실행 증거는
+[별도 보고서](2026-09-05-popularity-recall-confirmation.md)에 기록했다.
