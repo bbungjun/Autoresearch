@@ -48,7 +48,7 @@ MAX_FITS = 72
 MAX_SECONDS = 7200
 PHASE_SECONDS = {"prepare": 900, "models": 1800, "development": 600,
                  "fresh": 2400, "final": 900, "audit": 600}
-SPEC = "docs/specs/2026-09-06-recall-controlled-experiment.md"
+SPEC = "docs/archive/specs/2026-09-06-recall-controlled-experiment.md"
 BASE_SHA = "f9bdba9d9b0c7576d48c46368504d70f8233eaab"
 NEW_COHORTS = (11701, 11702, 11703)
 CACHED_RECEIPTS = {
