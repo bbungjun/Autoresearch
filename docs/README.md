@@ -35,7 +35,7 @@
 
 ### 📝 Action Log
 
-- [사전 등록 — 다양한 행동 15/10피처 비교](specs/2026-09-05-diverse-behavior-ablation.md) — 학습 bundle·신규 평가 cohort·seed·판정·final 단일 소비 조건 (#109, 평가 미실행)
+- [사전 등록 — 다양한 행동 15/10피처 비교](specs/2026-09-05-diverse-behavior-ablation.md) — #109의 동결 계약. 실제 평가는 #113에서 완료했으며 결과는 [실측 보고서](reports/2026-09-05-diverse-behavior-ablation.md)에 기록한다.
 - [실측 — 행동 데이터 학습 입력 조립](reports/2026-09-05-behavior-training-assembly.md) — 4,608개 label·실제 E5 기반 15/10피처·9개 공통 분할 준비 (#109)
 - [Spec — 다양한 합성 행동 이력](specs/2026-09-05-diverse-behavior-data.md) — 날짜순 30일 warm-up, 사용자별 활동·관심 변화와 데이터 품질 감사 (#107)
 - [실측 — 행동 다양성 데이터 생성](reports/2026-09-05-diverse-behavior-data.md) — 32일×3 seed, 168,548개 이벤트와 최근 피처 5개 분산 검증 (#107)
@@ -50,6 +50,8 @@
 - `feature_repo/` 디렉토리 (Feast 규격 — `feature_definitions.py`, `feature_store.yaml`)
 
 ### 🏋️ 학습 파이프라인 (Training)
+
+- [Report — 다양한 행동 15/10피처 실제 평가](reports/2026-09-05-diverse-behavior-ablation.md) — 18모델·36평가, NDCG 상승/Recall 감소와 반복 기준 미달로 not_supported (#113)
 
 - [Report — 고정 학습 실행기와 신규 평가 봉인](reports/2026-09-05-behavior-executor-sealing.md) — 저장 모델 재사용·신규 cohort 준비 (#111)
 
