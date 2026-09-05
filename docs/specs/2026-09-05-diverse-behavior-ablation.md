@@ -93,3 +93,32 @@ Validation의 개선 여부로 선택적으로 final을 숨기지 않는다. 유
 실제 E5 학습 feature/label/split bundle과 무결성 receipt, 이 사전 등록 문서 및 검증
 기록을 완성하면 준비 완료다. 후속 executor·평가 생성 확장·snapshot 봉인·학습·채점은
 다음 실행 작업이며 이번 Goal에서 성공했다고 주장하지 않는다.
+
+## 학습 bundle 계약
+
+`prepare_behavior_training`은 원본 manifest SHA256을 요구한다. 원본 품질 감사와
+각 파일의 안전한 재읽기/hash 확인 뒤, 학습일의 원본 ID를 보존한 `labels.parquet`을
+만든다. 이 파일에는 source_event_id/slate_id/user_id/video_id/event_timestamp/클릭 정답이
+있다. 정답 열 이름은 `clicked`, 타입은 int8의 0/1이다.
+
+`with_recent.parquet`과 `without_recent.parquet`은 같은 source_event_id 순서와 각각
+15/10개 canonical 피처 열을 갖는다. `splits.json`은 seed별 train/validation/test의
+label 행 위치를 한 번만 저장한다. 두 arm이 이 파일을 공유하며, source ID 순서 hash,
+양성 수와 자동 class weight는 `bundle.json`의 `split_receipts`에 기록한다.
+
+`bundle.json`에는 원본 hash, 피처/label/split 파일 receipt, 날짜/피처 cutoff, 실제 E5
+identity/manifest, 모델 설정, fit subset 피처 통계와 라이브러리 버전이 들어간다.
+원본 잠재 프로필·미래 선호·평가 ID/가짜 slate는 포함하지 않는다. 출력은 새 디렉터리만
+허용하고 source와 output의 포함 관계도 거절한다. 완료 manifest는 마지막에 게시한다.
+
+`load_behavior_training`은 호출자가 고정한 bundle manifest hash를 요구한다. 파일과
+정답 날짜/ID, 피처 dtype/유한성/행 정렬, 정확한 15→10 projection, split 재계산 및
+split receipt 일치까지 검사한다. 이 bundle은 기존 `LocalTrainingInput`과 다른 학습
+전용 계약이며 후속 executor가 명시적으로 소비해야 한다.
+
+도구 `python -m tools.prepare_behavior_training`의 인자는 `--source`, `--output`,
+`--model-dir`, `--cache-dir`이다. 깨끗한 checkout에서 고정 3개 원본만 소비하고 실제
+CUDA E5 adapter를 사용한다. 준비 결과를 재로딩한 후 `summary.json`에 source commit,
+bundle hash, 임베딩 계측, fit/evaluation/final 호출 수를 기록한다. 비교 문서는 출력의
+`comparison-contract.md`로 복사하고 SHA256을 summary에 고정한다. 테스트에서만 사용하는
+상수 임베딩은 실제 CLI 경로에 존재하지 않는다.

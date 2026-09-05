@@ -35,6 +35,7 @@
 
 ### 📝 Action Log
 
+- [사전 등록 — 다양한 행동 15/10피처 비교](specs/2026-09-05-diverse-behavior-ablation.md) — 학습 bundle·신규 평가 cohort·seed·판정·final 단일 소비 조건 (#109, 평가 미실행)
 - [Spec — 다양한 합성 행동 이력](specs/2026-09-05-diverse-behavior-data.md) — 날짜순 30일 warm-up, 사용자별 활동·관심 변화와 데이터 품질 감사 (#107)
 - [실측 — 행동 다양성 데이터 생성](reports/2026-09-05-diverse-behavior-data.md) — 32일×3 seed, 168,548개 이벤트와 최근 피처 5개 분산 검증 (#107)
 - [가이드 — action log 모듈 사용법](guides/action-log.md)
