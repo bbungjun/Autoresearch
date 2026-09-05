@@ -36,7 +36,7 @@ from tools.recall_analysis import METRICS, SEEDS, WORLDS, score_predictions
 from tools.run_diverse_behavior import EVALUATION_SUMMARY_HASH, prediction_features, supervise
 from tools.run_recall_experiment import digest, read_verified, tree_hashes, write_json
 
-SPEC = "docs/specs/2026-09-06-calibration-sample-experiment.md"
+SPEC = "docs/archive/specs/2026-09-06-calibration-sample-experiment.md"
 PINS = {"result.json": "b40b80f0ce50494097cc74c903edcb86e63f33362b084e8ba3920f39465e1dfe",
         "selection.json": "5c9fe0929c3ac29982576ced639dad27f855804907589e79639d7389e8004fd0",
         "models-sealed.json": "21e921bc7ee924d260ce28447aca911614c67e794fe4baa3d7c3c8e1546fc009",
