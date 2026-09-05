@@ -51,6 +51,13 @@ ranker 점수에 단순 sigmoid를 씌워 확률 지표를 비교하지 않았�
 입력으로 사용하지 않았다. 표본 증가군도 같은 날짜·생성 분포·기본 vocabulary·calibration을
 공유하여 시간 변화와 전처리 변화의 혼입을 피했다.
 
+저장 native 모델을 텍스트로 감사하여 설정이 실제 학습에 반영됐는지도 확인했다.
+6개 baseline의1,200tree는 최대31·평균30.7483leaf, 총35,698split이었고 shallow는
+최대7·평균7leaf, 총7,200split이었다. ranker6개는 모두 native objective가 lambdarank였으며,
+preference의 두 추가 열은6개 모델 모두에서 분할에 쓰였다(7일 합계1,327회,30일3,595회).
+각 pair의 기본 분할, calibration 행·라벨 hash도 동일했다. 이 감사는 모델 텍스트와 receipt만
+읽었으며 fit·predict·보정·정답 열람을 수행하지 않았다.
+
 ## 개발 평가와 후보 고정
 
 아래 값은 동일3world ×2seed의6쌍 평균이며 Δ는 candidate−baseline15다.
@@ -180,6 +187,10 @@ fit slate는55~64→74~86개였다. calibration은 각 pair에서272~368행으�
 3개 신규final claim, 후보 봉인이 생성보다 앞섰음도 검증했다. 재학습·재예측·재채점·
 final 정답 열람은 없었다. 주실험 감독 시간과 독립 재집계의 합은235.989초다.
 추가 과거 cohort ID 감사의 명령 경과는6.409초 이하였고 fit·API 호출은0회였다.
+추가 native 모델 감사는 계산0.292초(프로세스 wall0.728초)였으며, 증거 SHA256은
+`1aae36fa29cc6b1305d9e621c8cd30de2a44b93d645876653d0af2ea471b2e78`이다.
+주실험 감독 시간에 이 세 감사의 비용을 더한 보수적 합계는243.127초 이하로,
+실험 계산 상한7,200초 안에 있다.
 
 실행기는 기존913개 보호파일 전부의 hash가 시작/종료에 같음을 확인했다.
 독립 검토는 이 기록을 검토하고 그중202개를 별도 재해시했다. 나머지711개
@@ -187,10 +198,21 @@ raw/final/label 경로는 독립 검토에서 직접 읽지 않았으므로 전�
 표현하지 않는다. 실제 E5 identity는 기존 bundle과 같았고 신규final에서 cache27hit,
 miss0·새 encode inference0회였다. 캐시를 사용한 실행이며 GPU 추론 벤치마크는 아니다.
 
-실험 코드 commit `8262d0e`의 PR #118 CI에서 Python3.11/3.12 각각
+실험 코드 commit `8262d0e` 및 문서 정리 commit `279a88c`의 PR #118 CI에서 Python3.11/3.12 각각
 4,339passed/139skipped, Feast·Postgres, Ruff, lock/export drift 및 app/train/feast/serving
 이미지 빌드와 집계가 모두 통과했다. 경로 필터상 무관한 agent-orchestration/mlflow 이미지는
-skip됐다. 최종 문서 정리 commit도 별도로 PR CI를 확인하고 squash 머지한다.
+skip됐다. 최종 문서 커밋의 CI와 squash 머지 여부는 [PR #118](https://github.com/bbungjun/Autoresearch/pull/118)의
+최종 head 검사와 merge 기록을 정본으로 삼는다.
+
+Windows 로컬 전체 pytest는1,287.69초에4,263passed/135skipped/**80failed**로 종료했다.
+실패는 이번 변경 밖15개 테스트 파일에서 발생했고 신규 recall 테스트 실패는0개였다.
+75개 실패의 traceback에서 `os.fchmod` 부재, POSIX 권한·symlink·`/bin/sh` 전제,
+경로 구분자, cp949 디코딩, LF/CRLF에 따른 변경 내용 판정 차이 및 WinError10106을 확인했다.
+나머지 finalizer5개는 `verified_tree_mismatch` 증상까지 확인했으며 근본 원인은 미확정이다.
+줄바꿈 설정 영향은 가능성으로만 남기고 확인 사실로 기록하지 않는다.
+독립 검토자가 원본 로그로 분류했으며 로컬 전체 통과로 간주하지 않는다.
+이 작업에서는 이 변경 범위 밖 실패들을 수정하거나 전체 테스트를 재실행하지 않았다.
+동일 변경의 Linux CI 전체 통과와 로컬 실패를 구분해 보존한다.
 
 ## 수행·미수행
 
