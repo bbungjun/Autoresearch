@@ -1394,3 +1394,15 @@ event ID 고유성을 직접 대조했다. 관련 79개 회귀, 추가 보완 �
 final200명과 9/4평가·9/5scan tail로 사전 등록했다. 기존 coverage 기준은 유지한다.
 새 cohort 생성 확장·snapshot 봉인·bundle 소비 executor와 실제 학습은 다음 작업이다.
 실측과 한계는 [학습 입력 조립 보고서](2026-09-05-behavior-training-assembly.md)에 기록했다.
+
+## 30. #111 — 고정 bundle 학습 실행기와 신규 평가 봉인
+
+**문제:** #109의 15/10피처 bundle을 기존 학습 코드가 자동으로 소비하지 않았으며, validation/final에서 모델을 다시 fit하면 동일 모델 비교라는 사전 등록이 깨질 수 있었다. 기존 fixture의 고정 24노출·전원 클릭 가정도 다양한 행동 평가에 맞지 않았다.
+
+**해결:** hash와 공통 split을 검사하는 전용 학습 함수, 저장 모델만 재사용하는 예측 함수를 분리했다. 기존 행동/production event 생성기를 재사용해 8/3 anchor, 9/4 평가, 9/5 귀속 tail의 신규 사용자 cohort를 만들고 Stage B snapshot publisher로 봉인했다. 정책·코드 hash는 원본 생성 전에 기록하고 candidate에는 과거 이력·허용 metadata·label 없는 validation slate만 전달했다.
+
+**결과:** 좁은 회귀 22개와 독립 코드 리뷰를 통과했다. 실제 3개 cohort(각 1,000명)의 34일 raw event 915,501건, validation 노출 19,600행을 81.502초에 생성·봉인했다. 실제 모델 fit/채점/final claim은 모두 0회다. 소형 테스트 모델에서 저장·재로딩 예측 일치와 train-only fit을 검증했지만 실제 ablation 성능은 아직 측정하지 않았다.
+
+**후속:** 고정 model/bundle/snapshot receipt를 소비하는 실험 오케스트레이션에서 18개 모델·36개 관측을 실행하고 validation 유효성 후 cohort별 final 단일 소비를 적용한다. 준비 단계 완료를 성능 개선이나 MVP 전체 완료로 확대하지 않는다.
+
+근거: [실측 보고서](2026-09-05-behavior-executor-sealing.md), #111.

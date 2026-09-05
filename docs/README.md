@@ -51,6 +51,8 @@
 
 ### 🏋️ 학습 파이프라인 (Training)
 
+- [Report — 고정 학습 실행기와 신규 평가 봉인](reports/2026-09-05-behavior-executor-sealing.md) — 저장 모델 재사용·신규 cohort 준비 (#111)
+
 - [가이드 — 학습 데이터셋](guides/training-dataset.md)
 - [가이드 — CTR 모델 명세](guides/ctr-model-specification.md)
 - [가이드 — 학습 실험 provenance 애플리케이션 설계](guides/training-experiment-provenance.md)
