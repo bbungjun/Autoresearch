@@ -51,6 +51,8 @@
 
 ### 🏋️ 학습 파이프라인 (Training)
 
+- [보고서 — 고정 모델의 보정 표본 확대](reports/2026-09-06-calibration-sample-experiment.md) — #119, 모델을 고정한 보정 표본 확대의 Brier 효과 검증
+
 - [Spec — Recall@10 원인 후보 통제 실험](archive/specs/2026-09-06-recall-controlled-experiment.md) — #117 완료, 사용자 분할·공통 확률 보정·72fit 예산·신규 final 계약
 - [Plan — Recall@10 통제 실험 실행](archive/plans/2026-09-06-recall-controlled-experiment.md) — 실험 완료
 - [보고서 — Recall@10 통제 실험과 채택 거절](reports/2026-09-06-recall-controlled-experiment.md) — #117, 신규 final의 ranking 개선과 Brier guardrail 미달
