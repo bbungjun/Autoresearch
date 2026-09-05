@@ -1,7 +1,7 @@
 """Judge 소유 local evaluation fixture의 결정적 조립·게시 경계.
 
 [파이프라인] canonical virtual user·YouTube 입력과 Stage B 평가 snapshot 사이에서
-production 일일 action log 4개를 생성하고 P0-2가 소비할 검증된 Judge handoff를 게시한다.
+production 일일 action log를 날짜순으로 4개(v1) 또는 34개(v2) 생성하고 P0-2가 소비할 검증된 Judge handoff를 게시한다.
 
 [기능] 물리 Judge 경로를 canonical fixture URI로 가리는 source adapter, coverage 검사,
 derived path·lock alias 검증, content-addressed write-once fixture 게시와 완성 target
@@ -240,7 +240,7 @@ def _build_staged_fixture(
     descriptor: FixtureDescriptor,
     descriptor_digest: str,
 ) -> None:
-    for partition_date in canonical_fixture_dates(descriptor.evaluation_start_date):
+    for partition_date in canonical_fixture_dates(descriptor.evaluation_start_date, history_days=descriptor.history_days):
         run_daily_action_log(
             partition_date=partition_date,
             youtube_base_path=str(staging / "inputs" / "youtube_trending_kr"),
@@ -475,7 +475,7 @@ def _fixture_is_valid(
             expected_fingerprint=str(integrity.snapshot_fingerprint),
         )
         partitions = _manifest_partitions(handoff.snapshot_root)
-        expected_dates = canonical_fixture_dates(parsed.evaluation_start_date)
+        expected_dates = canonical_fixture_dates(parsed.evaluation_start_date, history_days=parsed.history_days)
         if (
             tuple(receipt.dt for receipt in partitions) != expected_dates
             or partitions != integrity.action_log_partitions
@@ -681,7 +681,7 @@ def _fixture_tree_is_exact(
         *(receipt.relative_path for receipt in descriptor.youtube_partitions),
         *(
             f"action_log/dt={partition_date.isoformat()}/part-0.parquet"
-            for partition_date in canonical_fixture_dates(descriptor.evaluation_start_date)
+            for partition_date in canonical_fixture_dates(descriptor.evaluation_start_date, history_days=descriptor.history_days)
         ),
         *(
             f"evaluation-snapshots/by-hash/{handoff.snapshot_fingerprint}/{path}"
@@ -695,7 +695,7 @@ def _fixture_tree_is_exact(
         "evaluation-snapshots",
         "evaluation-snapshots/by-hash",
         *(f"inputs/youtube_trending_kr/dt={receipt.dt.isoformat()}" for receipt in descriptor.youtube_partitions),
-        *(f"action_log/dt={partition_date.isoformat()}" for partition_date in canonical_fixture_dates(descriptor.evaluation_start_date)),
+        *(f"action_log/dt={partition_date.isoformat()}" for partition_date in canonical_fixture_dates(descriptor.evaluation_start_date, history_days=descriptor.history_days)),
         f"evaluation-snapshots/by-hash/{handoff.snapshot_fingerprint}",
         *(
             f"evaluation-snapshots/by-hash/{handoff.snapshot_fingerprint}/{path}"
