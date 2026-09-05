@@ -35,6 +35,8 @@
 
 ### 📝 Action Log
 
+- [Spec — 다양한 합성 행동 이력](specs/2026-09-05-diverse-behavior-data.md) — 날짜순 30일 warm-up, 사용자별 활동·관심 변화와 데이터 품질 감사 (#107)
+- [실측 — 행동 다양성 데이터 생성](reports/2026-09-05-diverse-behavior-data.md) — 32일×3 seed, 168,548개 이벤트와 최근 피처 5개 분산 검증 (#107)
 - [가이드 — action log 모듈 사용법](guides/action-log.md)
 - [가이드 — Agent Simulator 명세 (action log SSOT)](guides/agent-simulator-spec.md)
 - [Spec — Research Harness P0-1 평가 snapshot](specs/2026-08-31-research-harness-evaluation-snapshot.md) — 원천 `slate_id`, 시간·click 귀속, validation/final split, label 봉인과 write-once manifest 계약 (#17)
