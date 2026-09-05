@@ -42,6 +42,7 @@ click영상 category는 관측 가능한 시점 metadata에서 얻는다. 잠재
 분모는 해당 사용자 기간 내 모든 click 수이며 0이면 비율0이다.
 
 각 모델은 같은 calibration 사용자들의 자연 노출 분포에 양의 기울기 sigmoid 보정을 1회 fit한다.
+모든 arm은 Booster.predict(raw_score=True)의 margin(binary는 logit)을 보정 입력으로 통일한다.
 raw score로 ranking/AUC/AP를, 보정 확률로 LogLoss/Brier를 계산하고 둘을 별도 보존한다.
 보정은 logaddexp logistic loss, slope bounds[1e-6,100], intercept[-100,100], 초기값(1,0),
 L-BFGS-B maxiter500으로 고정한다. 실패/비유한값은 실험 중단이며 다른 보정법으로 교체하지 않는다.

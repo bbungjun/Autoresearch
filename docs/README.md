@@ -51,6 +51,9 @@
 
 ### 🏋️ 학습 파이프라인 (Training)
 
+- [Spec — Recall@10 원인 후보 통제 실험](specs/2026-09-06-recall-controlled-experiment.md) — #117, 사용자 분할·공통 확률 보정·72fit 예산·신규 final 계약
+- [Plan — Recall@10 통제 실험 실행](plans/2026-09-06-recall-controlled-experiment.md)
+
 - [Report — 다양한 행동 15/10피처 실제 평가](reports/2026-09-05-diverse-behavior-ablation.md) — 18모델·36평가, NDCG 상승/Recall 감소와 반복 기준 미달로 not_supported (#113)
 
 - [Report — 고정 학습 실행기와 신규 평가 봉인](reports/2026-09-05-behavior-executor-sealing.md) — 저장 모델 재사용·신규 cohort 준비 (#111)
