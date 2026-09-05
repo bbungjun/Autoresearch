@@ -57,6 +57,8 @@
 - [Spec — paired offline 실험 배치·비교 결과 계약](specs/2026-08-03-paired-offline-experiment-comparison.md) — 조건 격리 좌표·피처 보존·결과 payload (#454)
 - [Plan — paired offline 실험 배치·비교 결과 구현](plans/2026-08-03-paired-offline-experiment-comparison.md) (#454)
 - [Plan — #16 개인화 비교군·ablation 실험](archive/plans/2026-09-05-personalization-ablation-experiment.md) — rule-based 합성 평가 세계 3개에서 비교군 5종·피처군 ablation 5종을 paired 검증해 `not_supported`로 완료했다
+- [Report — #103 인기도 제거·Recall 확인](reports/2026-09-05-popularity-recall-confirmation.md) — 신규 합성 snapshot 3개, 54회 비교에서 `supported`; production 계약은 유지한다
+- [Plan — #103 사전 등록·완료 기록](archive/plans/2026-09-05-popularity-recall-confirmation.md)
 - [Spec — 모델 성능 열화 시점 측정(rolling-origin 평가)](specs/2026-08-03-model-degradation-rolling-origin-evaluation.md) — 단일 cutoff 기반 forward degradation evaluation, 날짜 구간·평가일 상태 계약, video staleness (#471)
 - [Plan — 모델 성능 열화 시점 측정 구현](plans/2026-08-03-model-degradation-rolling-origin-evaluation.md) (#471)
 - [Spec — temporal signal 승격 판정 연결](specs/2026-08-04-temporal-signal-promotion-integration.md) — baseline 재정의, hard retrain limit 산출 절차, #425 다중 신호 연결, fail-closed hold (#485 잔여 범위)

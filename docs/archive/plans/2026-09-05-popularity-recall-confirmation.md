@@ -1,6 +1,8 @@
 # #103 video-popularity 제거와 Recall 재검증
 
-상태: 사전 등록. 결과 관측 전 고정한다. 관련: #103, #16, #102.
+상태: 실행·분석 완료, `supported`. 관련: #103, #16, #102.
+사전 등록 커밋 `c4ea827`, 실행 코드 `9de25ae`. 상세 결과는
+[확인 실험 보고서](../../reports/2026-09-05-popularity-recall-confirmation.md)에 보존한다.
 
 ## 문제와 가설
 
@@ -55,3 +57,11 @@ Recall@10이 낮았다. 새로운 합성 snapshot에서 제거 효과와 Recall 
 
 새 날짜와 seed도 같은 rule-based fixture 생성 규칙을 공유한다. 실제 사용자 CTR,
 LLM relevance, watch time, 장기 폐루프 일반화의 증거는 아니다.
+
+## 완료 기록
+
+54회 학습·평가 완료(174.062초). NDCG@10 제거−full 변화는 validation +0.048633,
+final +0.053591이며 각각 9/9 양수다. Final Recall은 0.997222→1.0이다.
+모든 split 평균 guardrail과 coverage가 사전 기준을 통과했다. 신규 final marker 3개와
+재소비 거절을 확인했다. 최근 행동 5개는 실제 fit 입력에서 모두 0이고 full 모델에서
+미사용임을 확인했다. Production 피처 계약은 유지하고 합성 비교 기준으로 15피처를 권고한다.
