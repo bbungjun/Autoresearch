@@ -34,3 +34,10 @@ Brier는 판별력과 보정을 함께 반영하므로 이것만으로 원인을
 종료했다. worker 생성 전이므로 모델/보정 fit·final claim·실험 출력 생성은 0이다.
 호출을 수정하고 실제 supervisor 시그니처의 autospec으로 CLI 회귀를 추가했다.
 이는 학습 실패 재시도가 아닌 학습 전 기동 오류 수정이며, 실패 기록을 보존한다.
+
+두 번째 기동은 prepare에서 `recall_code_hash_mismatch`로 차단됐다(0 fit/0 final,
+0.720초). Windows checkout의 CRLF 변환으로 코드 바이트가 달라졌다.
+Git 저장 원본(LF)의 SHA256 `f379e5d37c8b46bcc67a8e328c05c4301b91cb882d1a1f99e014ceaf5cc30179`가
+기존 모델 receipt와 정확히 일치함을 확인하여 해당 파일을 Git 원본 바이트로 복원했다.
+검증 조건이나 receipt는 변경하지 않았다. 실패 출력은 덮어쓰지 않고 보존하며,
+fit attempt와 공통 claim이 생성되기 전이므로 새 폴더에서 최초 학습을 진행한다.
