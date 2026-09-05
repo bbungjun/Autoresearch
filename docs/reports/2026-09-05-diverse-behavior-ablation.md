@@ -1,0 +1,75 @@
+# #113 다양한 행동 데이터의 최근 행동 피처 ablation
+
+## 문제
+
+#105에서는 과거 이력을 날짜순으로 만들었으나 행동 분산이 제한적이어서 최근 행동 피처의 학습 효과를 충분히 검증하지 못했다. #107에서 다양한 행동 이력을 만들고 #109에서15/10피처 학습 bundle을 고정했으며 #111에서 신규 평가 cohort를 봉인했다. 이번 작업은 준비한 입력이 실제 모델 비교에서 어떤 결과를 내는지 검증한다.
+
+## 고정한 실험과 구현
+
+사전 등록 문서의 복사본 SHA256 `a1490bca5ebbe8114f6a3619dca6f3684b9eac4cecbcb18eb95af6abd0f624aa`를 유지한다. 3개 학습 world10701/10702/10703의9/2 학습 입력, seed401/402/403, 15피처(with_recent) 대10피처(without_recent)와 기본 LightGBM을 사용한다. E5 small의 실제 모델/실행 identity를 학습 bundle과 대조한다. 평가 cohort10901/10902/10903과9/4 평가·9/5 귀속 tail은 #111의 봉인 산출물을 그대로 소비한다.
+
+모델18개를 전부 학습해 receipt를 봉인한 뒤 validation 전체18관측을 계산한다. Primary 개선 여부와 관계없이 행key/평가ID/coverage/유한성이 유효한 경우에만 final로 진행한다. Final은 원래 snapshot registry에서 cohort별 한 번, 최대3회 claim한다. 각 cohort의6개 예측 CSV를 모두 봉인한 뒤 채점하며 같은 저장 모델을 재사용한다. 모델 재학습이나 데이터 재생성을 하지 않는다.
+
+실행기와 분석 코드를 분리해 고정 그리드·동일 표본·guardrail 방향·표본 부족을 검증한다. 유효한 개선 실패는 not_supported, coverage 미달/비유한 지표는 uninformative로 구분한다. 9개의 seed pair와3개 world 평균의 표본 표준편차를 별도로 기록하며 독립 사용자 실험9개로 해석하지 않는다.
+
+Git 공통 경로의 평가 묶음 hash 기반 실행 claim으로 다른 출력/worktree의 반복 실행을 거절한다. 감독 프로세스는30분에 실행 프로세스 트리를 회수하고 실패·시간초과의 산출물을 보존한다. Candidate/Judge 파일 역할은 나누지만 Codex 및 실행 프로세스에 OS sandbox는 적용하지 않은 로컬 신뢰코드 실행이다. 외부 유료 API와 serving 배포는 사용하지 않는다.
+
+## 사전 검증
+
+실행/분석 회귀33 passed(0.88초), 독립 실행33 passed(0.89초), Ruff 통과. 테스트는 같은 관측을 중복 집계하지 않는다. 전체18fit 선행, validation 전체 검사 후final, 유효한 부정 결과도final 진행, final6예측 선행봉인, 잘못된hash/중복claim/timeout 중단을 확인했다. 독립 코드 리뷰에서 P1/P2 발견 사항은 없었다.
+
+실물 입력은3개 cohort의 원본·metadata·snapshot·학습bundle hash를 읽기 검증했으며, 이 단계에서는 학습·채점·finalclaim을 하지 않았다.
+
+## 실행 결과
+
+**18모델 학습·36개 평가를 완료했으며 고정 판정은 `not_supported`다.** 두 split 모두 coverage는 유효했다. NDCG 평균 상승과 확률 손실 감소가 관측됐지만, Recall guardrail 악화와 final 개선 반복 수 미달 때문에 가설을 채택하지 않았다.
+
+실행 commit은 `ad2db3d99e28ea7ba5c5f2471ede85f13173298a`, 결과 SHA256은 `5df339ce0c6d48cb2441f83770568cea850cb860c1b4be3fcdddac1a019d0593`이다. 임베딩 초기화부터 결과 집계·입력 재검증까지 실행부 **155.321초**가 걸렸다. 사전 입력 검증 시간은 이 수치에 포함하지 않으며 감독 프로세스의 전체30분 제한은 유지됐다. 실제 fit 시도/완료18/18, 평가 시도/완료36/36, 성공한 final claim3회, 재claim 거절 검증3회였다. 재학습·재채점·입력 재생성은 하지 않았다.
+
+### 동일 데이터 내 지표 비교
+
+각 값은3개 world ×3개 학습 seed의9개 관측 단순평균이다. LogLoss/Brier는 낮을수록 좋고 나머지는 높을수록 좋다. 아래 Δ는 원래 지표의15−10이며 손실에 방향을 뒤집지 않았다.
+
+| 지표 | validation 10피처 | validation 15피처 | Δ(15−10) | final 10피처 | final 15피처 | Δ(15−10) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| ndcg_at_10 | 0.466742 | 0.471595 | 0.004853 | 0.475404 | 0.496877 | 0.021472 |
+| recall_at_10 | 0.839655 | 0.825394 | -0.014261 | 0.881634 | 0.852081 | -0.029552 |
+| ndcg_at_24 | 0.507548 | 0.515276 | 0.007729 | 0.505408 | 0.534015 | 0.028607 |
+| grouped_roc_auc | 0.677578 | 0.671318 | -0.006260 | 0.674685 | 0.679165 | 0.004480 |
+| pr_auc | 0.065057 | 0.064886 | -0.000171 | 0.070151 | 0.074600 | 0.004449 |
+| log_loss | 0.271014 | 0.252799 | -0.018215 | 0.284002 | 0.268739 | -0.015263 |
+| brier | 0.061427 | 0.044499 | -0.016927 | 0.062582 | 0.046553 | -0.016030 |
+
+### 고정 기준에 따른 판정
+
+Validation의 NDCG@10 Δ는 +0.0048528033, 양수6/9쌍, 양수world평균3/3으로 primary 반복 기준을 통과했다. 그러나 Recall Δ−0.0142613439, grouped ROC-AUC Δ−0.0062601164, PR-AUC Δ−0.0001708750으로 guardrail을 통과하지 못했다. 유효성은 통과했으므로 개선 여부와 무관하게 예정된 final도 실행했다.
+
+Final의 NDCG@10 Δ는 +0.0214723247이고 world 평균은3/3 양수지만, 개별 seed pair는5/9 양수로 고정6/9 기준에 미달했다. Recall Δ−0.0295524930(약−2.96%p)도 guardrail 미달이다. 나머지 final guardrail의 평균 변화는 개선 방향이었다. 이는 품질/표본 부족이 아니라 **유효한 데이터에서 사전 등록 개선 조건을 충족하지 못한 결과**다.
+
+NDCG paired Δ의 표본 표준편차는 validation0.0098242361/final0.0382718458, world평균3개의 표본 표준편차는0.0031101491/0.0102725090이다. 서로 다른 표본 단위를 구분하며 유의확률이나 실제 사용자 일반화 주장을 하지 않는다.
+
+### 평가 coverage와 실제 피처 사용
+
+| cohort | validation 행 | validation 유효/전체 slate | final 행 | final 유효/전체 slate |
+| --- | ---: | ---: | ---: | ---: |
+| 10901 | 6,896 | 252/433 | 1,600 | 65/104 |
+| 10902 | 6,280 | 218/394 | 1,848 | 51/110 |
+| 10903 | 6,424 | 219/405 | 1,632 | 73/107 |
+
+두 arm과 모든 seed의 평가 row key/행 수/coverage가 동일했다. 각 split은 기존 최소30개 및20% 유효그룹 기준을 통과했다. 무클릭 slate는 ranking 평균에서 제외했으며 확률지표에는 보존했다. Validation19,600행과 final5,080행은 고유 평가 노출 수이고, 이를 모델6개로 반복 채점한 관측 수와 구분한다.
+
+9개15피처 모델 모두 최근 행동 열을 실제 tree split에 사용했다. 사용된 열은 recent_click_count_7d, recent_watch_time_7d, recent_like_count_7d, total_event_count_7d이고 recent_view_count_7d의 split 사용은0이었다. 3개 학습 bundle의4,608행과6개 평가 feature batch의24,680행 전부에서 recent_click_count_7d와 recent_view_count_7d 값이 같았다. 이는 생성기의 click/view 결합 설계 및 중복 입력이라는 한계이며 최근 행동 전체가 미사용이었다는 의미는 아니다.
+
+E5 identity는 `99df5a4c76f3522375a6166db96bf542c153fc3aaf1fbab654b36a9e2cd866cd`로 학습 입력과 일치했다. 검증된 cache54 hit, miss0, 새 encode inference0회였다. 실제 E5 캐시 벡터를 사용했으며 GPU 추론 속도 측정으로 해석하지 않는다.
+
+### 산출물과 독립 결과 검증
+
+출력에는 모델18개의 attempt/model/receipt, models-sealed.json, split별 feature/key/receipt와6예측 봉인 묶음,36개 metrics.json, validation-gate.json, final claim 증거3개, result.json/result.sha256이 있다. result의 worlds는 #111의 **준비 당시 receipt**를 출처로 보존해 그 안의 호출 수는0이다. 이번 실행 횟수는 result의 최상위 counts 및 각 모델/평가 산출물을 기준으로 확인한다.
+
+독립 리뷰에서 모델·예측·지표 해시와18모델 재사용,6묶음 선행 봉인 시각, final3 marker를 대조했다. 저장된36개 지표만 별도로 재집계해 판정·평균·양수 pair수·표준편차가 일치함을 확인했다. 학습12파일·평가raw207파일·snapshot12파일 등 총231개 데이터 파일의 기존 해시와 manifest pin도 유지됐다. 검토에서 모델 fit/예측/재채점/claim을 실행하지 않았고 P1/P2 발견 사항은 없었다.
+
+실행 도구는 `python -m tools.run_diverse_behavior`이며 고정 학습/평가 root, 새 output, 실제 model-dir/cache-dir를 명시한다. 원시 데이터·모델과 로컬 전용 경로는 커밋하지 않는다. Final marker를 보존하고 같은 봉인 평가의 반복 실행은 거절한다.
+
+## 한계와 후속
+
+이는 rule-based 합성 사용자에서의 고정 ablation이며, 실제 CTR·LLM 평가·장기 폐루프 효과·production champion 승격을 입증하지 않는다. 기존 #16/#103/#105 결과와 final을 초기화하지 않는다. 결과가 불리해도 seed나판정기준을 바꾸지 않는다.
