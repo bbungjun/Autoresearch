@@ -4,6 +4,7 @@
 [기능] typed 로컬 설정, 불변 run 입력·ledger 결속, 한 번의 feedback revision,
 실제 coding/training adapter와 Controller 조립 및 재개 결과 보존을 제공한다.
 봉인된 종료 결과가 있으면 Controller 재실행 없이 독립 기록 Judge/REPORT 게시로 재개한다.
+Judge 정책을 설정·불변 입력·Controller에 결속하며 trusted 코드 변경에 대한 재개 거부는 유지한다.
 [비책임] fixture 생성·모델 다운로드·sigma calibration은 별도 준비 단계이며,
 연구 기록 조립은 report가 소유한다. 운영 MLflow/GCP 게시도 하지 않는다.
 """
@@ -19,7 +20,7 @@ from importlib.metadata import PackageNotFoundError, version
 import json
 import os
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -121,6 +122,7 @@ class HarnessRunConfig(BaseModel):
     prediction: HarnessPredictConfig
     agent: CodexAgentConfig
     prediction_timeout_seconds: float = Field(default=300.0, gt=0, allow_inf_nan=False)
+    judge_policy_version: Literal["v1", "v2"] = "v1"
 
     @model_validator(mode="after")
     def validate_run(self) -> HarnessRunConfig:
@@ -185,9 +187,13 @@ def _runtime_identity(config: HarnessRunConfig) -> str:
             libraries[name] = None
     code_root = Path(__file__).parent
     code = {path.name: sha256(path.read_bytes()).hexdigest() for path in sorted(code_root.glob("*.py"))}
+    resolved_config = config.model_dump(mode="json")
+    if "judge_policy_version" not in config.model_fields_set:
+        # Missing legacy fields must not change config identity by default injection.
+        resolved_config.pop("judge_policy_version")
     return _canonical({
         "config": config.model_dump(mode="json", exclude_unset=True),
-        "resolved_config": config.model_dump(mode="json"),
+        "resolved_config": resolved_config,
         "model_files": _model_files(config.prediction.embedding.model_dir),
         "libraries": libraries, "trusted_harness_files": code,
         "agent_executable_sha256": sha256(config.agent.executable.read_bytes()).hexdigest(),
@@ -250,6 +256,7 @@ def run_local_research(config: HarnessRunConfig) -> ControllerRunResult:
             baseline_sigmas=tuple(sorted(config.baseline_sigmas.items())),
             screening_seed=config.screening_seed, confirmation_seeds=config.confirmation_seeds,
             runtime_json=_runtime_identity(config),
+            judge_policy_version=config.judge_policy_version,
         )
         if os.path.lexists(config.run_root / "run-inputs"):
             frozen = load_run_inputs(config.run_root, expected_contract=contract)
@@ -280,6 +287,7 @@ def run_local_research(config: HarnessRunConfig) -> ControllerRunResult:
                 config.initial_card, contract.budget, config.baseline_sha, config.champion_sha,
                 config.handoff, fixture_root, contract.baseline_sigmas, config.screening_seed,
                 config.confirmation_seeds, ledger,
+                judge_policy_version=contract.judge_policy_version,
             ),
         )
         seal_terminal_result(config.run_root, contract=contract, result=result)

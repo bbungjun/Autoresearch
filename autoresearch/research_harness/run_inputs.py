@@ -1,7 +1,8 @@
 """자율 실험 시작과 Controller 재개 사이의 불변 입력을 보존한다.
 
 [파이프라인] Judge가 metadata를 준비한 뒤 candidate 실행을 시작하기 전 구간이다.
-[기능] 실행 계약과 두 split의 원래 metadata bytes를 write-once 게시하고 검증·복구한다.
+[기능] 정책 버전을 고정한 실행 계약과 두 split의 원래 metadata bytes를 write-once
+게시하고 검증·복구한다. 기존 v1 형식은 원본 bytes와 SHA를 보존하며 읽는다.
 [비책임] 원천 조회·final 권한은 candidate_data_view/consumption_registry,
 checkpoint append와 candidate checkout 분리는 실행 호출자가 담당한다.
 """
@@ -63,6 +64,7 @@ class RunInputContract:
     screening_seed: int
     confirmation_seeds: tuple[int, ...]
     runtime_json: str = field(repr=False)
+    judge_policy_version: str = "v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,7 +113,8 @@ def freeze_run_inputs(
                     raise ValueError
                 if os.path.lexists(target):
                     result = _load(target, contract, contract_value)
-                    if result.manifest_sha256 != sha256(manifest).hexdigest():
+                    if (result.validation_metadata != validation_metadata
+                            or result.final_metadata != final_metadata):
                         raise ValueError
                     # A previous rename may have succeeded before its parent sync failed.
                     sync_directory(root)
@@ -171,7 +174,9 @@ def _contract_value(contract: RunInputContract) -> dict[str, CanonicalValue]:
             or any(type(seed) is not int or not 0 <= seed <= 2**32 - 1
                    for seed in (contract.screening_seed, *contract.confirmation_seeds))
             or len(set((contract.screening_seed, *contract.confirmation_seeds))) != 6
-            or type(contract.baseline_sigmas) is not tuple):
+            or type(contract.baseline_sigmas) is not tuple
+            or not isinstance(contract.judge_policy_version, str)
+            or contract.judge_policy_version not in {"v1", "v2"}):
         raise ValueError
     for pair in contract.baseline_sigmas:
         if (type(pair) is not tuple or len(pair) != 2 or not isinstance(pair[0], str)
@@ -207,6 +212,7 @@ def _contract_value(contract: RunInputContract) -> dict[str, CanonicalValue]:
         "baseline_sigmas": {name: float(value) for name, value in sigmas.items()},
         "screening_seed": contract.screening_seed,
         "confirmation_seeds": list(contract.confirmation_seeds), "runtime": runtime,
+        "judge_policy_version": contract.judge_policy_version,
     }
 
 
@@ -262,6 +268,7 @@ def _validate_bundle(bundle: PreparedCandidateMetadata, contract: RunInputContra
 def _manifest_bytes(
     contract: RunInputContract, contract_value: dict[str, CanonicalValue],
     bundles: tuple[PreparedCandidateMetadata, PreparedCandidateMetadata],
+    *, contract_version: str = "run-inputs-v2",
 ) -> bytes:
     metadata: dict[str, CanonicalValue] = {}
     for split, bundle in zip(("validation", "final"), bundles, strict=True):
@@ -269,7 +276,7 @@ def _manifest_bytes(
         metadata[split] = {"snapshot_fingerprint": str(bundle.snapshot_fingerprint),
                            "evaluation_id": str(bundle.evaluation_id),
                            "users": asdict(bundle.users.receipt), "videos": asdict(bundle.videos.receipt)}
-    return canonical_json_bytes({"contract_version": "run-inputs-v1", "contract": contract_value,
+    return canonical_json_bytes({"contract_version": contract_version, "contract": contract_value,
                                  "metadata": metadata})
 
 
@@ -295,7 +302,17 @@ def _load(
         raise ValueError
     manifest = _read_file(target / "manifest.json")
     value = json.loads(manifest)
-    if not isinstance(value, dict) or value.get("contract") != contract_value:
+    if not isinstance(value, dict):
+        raise ValueError
+    version = value.get("contract_version")
+    if version == "run-inputs-v1" and contract.judge_policy_version == "v1":
+        expected_value = {key: item for key, item in contract_value.items()
+                          if key != "judge_policy_version"}
+    elif version == "run-inputs-v2":
+        expected_value = contract_value
+    else:
+        raise ValueError
+    if value.get("contract") != expected_value:
         raise ValueError
     bundles: list[PreparedCandidateMetadata] = []
     for split in ("validation", "final"):
@@ -304,7 +321,8 @@ def _load(
                      for name in ("users", "videos")]
         bundles.append(PreparedCandidateMetadata(meta["snapshot_fingerprint"], meta["evaluation_id"], *artifacts))
     validation, final = bundles
-    if manifest != _manifest_bytes(contract, contract_value, (validation, final)):
+    if manifest != _manifest_bytes(contract, expected_value, (validation, final),
+                                   contract_version=version):
         raise ValueError
     digest = sha256(manifest).hexdigest()
     return FrozenRunInputs(validation, final, digest,

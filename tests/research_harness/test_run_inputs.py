@@ -27,6 +27,26 @@ from autoresearch.research_harness.judge_decision import JudgeMetric
 from tests.research_harness.test_workspace import candidate_fixture as candidate_fixture
 
 
+# Captured from freeze_run_inputs at f06c9ab75461a04df4ccef65bc9ec7bcd90313fa
+# using the deterministic workspace fixture. Only private paths and receipt identities
+# are replaced by JSON token placeholders; no current serializer generates this oracle.
+_LEGACY_MANIFEST_TEMPLATE = (
+    b'{"contract":{"baseline_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","baseline_sigmas":{"brier":0.01,'
+    b'"grouped_roc_auc":0.01,"log_loss":0.01,"ndcg_at_10":0.01,"ndcg_at_24":0.01,"pr_auc":0.01,"recall_at_10":0.01},'
+    b'"budget":{"max_duration_seconds":600.0,"max_trials":2},"champion_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+    b'"confirmation_seeds":[1,2,3,4,5],"handoff":{"final_holdout_id":__FINAL_ID__,"manifest_sha256":__MANIFEST_SHA256__,'
+    b'"snapshot_fingerprint":__SNAPSHOT_FINGERPRINT__,"snapshot_root":__SNAPSHOT_ROOT__,"validation_id":__VALIDATION_ID__},'
+    b'"initial_card":{"card_id":"card-1","change":"Change","falsification_condition":"No gain","hypothesis":"Hypothesis"},'
+    b'"judge_state_root":__JUDGE_STATE_ROOT__,"runtime":{"model":"fixed-model","timeout":60},"screening_seed":0},'
+    b'"contract_version":"run-inputs-v1","metadata":{"final":{"evaluation_id":__FINAL_ID__,'
+    b'"snapshot_fingerprint":__SNAPSHOT_FINGERPRINT__,"users":{"relative_path":"metadata/users.parquet","rows":200,'
+    b'"sha256":__V_USERS_SHA256__},"videos":{"relative_path":"metadata/videos.parquet","rows":144,"sha256":__V_VIDEOS_SHA256__}},'
+    b'"validation":{"evaluation_id":__VALIDATION_ID__,"snapshot_fingerprint":__SNAPSHOT_FINGERPRINT__,'
+    b'"users":{"relative_path":"metadata/users.parquet","rows":200,"sha256":__V_USERS_SHA256__},'
+    b'"videos":{"relative_path":"metadata/videos.parquet","rows":144,"sha256":__V_VIDEOS_SHA256__}}}}'
+)
+
+
 def test_run_input_interfaces_exist() -> None:
     name = "autoresearch.research_harness.run_inputs"
     assert importlib.util.find_spec(name) is not None, "run_inputs module is required"
@@ -150,6 +170,94 @@ def test_manifest_is_canonical_and_has_private_contract(case) -> None:
     payload = json.loads((root / "run-inputs/manifest.json").read_bytes())
     assert payload["contract"]["handoff"]["snapshot_root"] == str(contract.handoff.snapshot_root)
     assert payload["contract"]["judge_state_root"] == str(contract.judge_state_root)
+    assert payload["contract_version"] == "run-inputs-v2"
+    assert payload["contract"]["judge_policy_version"] == "v1"
+
+
+def test_explicit_policy_version_is_part_of_new_input_identity(case) -> None:
+    module, root, contract, validation, final = case
+    v1 = _freeze(case)
+    changed = replace(contract, judge_policy_version="v2")
+    v2 = module.freeze_run_inputs(root.parent / "v2-run", contract=changed,
+                                 validation_metadata=validation, final_metadata=final)
+    assert v1.manifest_sha256 != v2.manifest_sha256
+    assert module.load_run_inputs(root.parent / "v2-run", expected_contract=changed) == v2
+    with pytest.raises(StageCError):
+        module.load_run_inputs(root, expected_contract=changed)
+    with pytest.raises(StageCError):
+        module.freeze_run_inputs(root, contract=changed,
+                                 validation_metadata=validation, final_metadata=final)
+    assert module.load_run_inputs(root, expected_contract=contract) == v1
+
+
+@pytest.mark.parametrize("version", ["unknown", "", True, None, ["v1"]])
+def test_unknown_policy_fails_before_persistence(case, version: object) -> None:
+    module, root, contract, validation, final = case
+    with pytest.raises(StageCError):
+        module.freeze_run_inputs(root, contract=replace(contract, judge_policy_version=version),
+                                 validation_metadata=validation, final_metadata=final)
+    assert not root.exists()
+
+
+def test_legacy_layout_load_and_refreeze_do_not_upgrade_bytes(case) -> None:
+    module, root, contract, validation, final = case
+    assert validation.users == final.users and validation.videos == final.videos
+    values = {
+        "SNAPSHOT_ROOT": str(contract.handoff.snapshot_root),
+        "JUDGE_STATE_ROOT": str(contract.judge_state_root),
+        "SNAPSHOT_FINGERPRINT": contract.handoff.snapshot_fingerprint,
+        "MANIFEST_SHA256": contract.handoff.manifest_sha256,
+        "VALIDATION_ID": contract.handoff.validation_id,
+        "FINAL_ID": contract.handoff.final_holdout_id,
+        "V_USERS_SHA256": validation.users.receipt.sha256,
+        "V_VIDEOS_SHA256": validation.videos.receipt.sha256,
+    }
+    legacy_bytes = _LEGACY_MANIFEST_TEMPLATE
+    for key, item in values.items():
+        legacy_bytes = legacy_bytes.replace(f"__{key}__".encode(),
+                                            json.dumps(item, ensure_ascii=False).encode())
+    for split, bundle in (("validation", validation), ("final", final)):
+        target = root / "run-inputs" / split
+        target.mkdir(parents=True)
+        (target / "users.parquet").write_bytes(bundle.users.payload)
+        (target / "videos.parquet").write_bytes(bundle.videos.payload)
+    manifest = root / "run-inputs/manifest.json"
+    manifest.write_bytes(legacy_bytes)
+    before = {path.relative_to(root): path.read_bytes()
+              for path in (root / "run-inputs").rglob("*") if path.is_file()}
+    original = sha256(manifest.read_bytes()).hexdigest()
+    loaded = module.load_run_inputs(root, expected_contract=contract)
+    assert loaded.manifest_sha256 == original
+    assert _freeze(case) == loaded
+    assert loaded.validation_metadata == validation and loaded.final_metadata == final
+    with pytest.raises(StageCError):
+        module.load_run_inputs(root, expected_contract=replace(contract, judge_policy_version="v2"))
+    with pytest.raises(StageCError):
+        module.freeze_run_inputs(root, contract=replace(contract, judge_policy_version="v2"),
+                                 validation_metadata=validation, final_metadata=final)
+    assert {path.relative_to(root): path.read_bytes()
+            for path in (root / "run-inputs").rglob("*") if path.is_file()} == before
+
+
+@pytest.mark.parametrize("mutation", ["legacy-with-version", "v2-missing-version", "unknown-format"])
+def test_policy_format_is_strict(case, mutation: str) -> None:
+    module, root, contract, _, _ = case
+    _freeze(case)
+    manifest = root / "run-inputs/manifest.json"
+    value = json.loads(manifest.read_bytes())
+    if mutation == "legacy-with-version":
+        value["contract_version"] = "run-inputs-v1"
+    elif mutation == "v2-missing-version":
+        del value["contract"]["judge_policy_version"]
+    else:
+        value["contract_version"] = "run-inputs-v3"
+    malformed = module.canonical_json_bytes(value)
+    manifest.write_bytes(malformed)
+    with pytest.raises(StageCError):
+        module.load_run_inputs(root, expected_contract=contract)
+    with pytest.raises(StageCError):
+        _freeze(case)
+    assert manifest.read_bytes() == malformed
 
 
 def test_fixture_root_cannot_be_used_as_run_root(case) -> None:

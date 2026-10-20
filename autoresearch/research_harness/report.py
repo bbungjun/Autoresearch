@@ -3,8 +3,9 @@
 [파이프라인] Controller의 validation/final 수치 판정이 끝난 뒤 사람에게 근거를
 전달하는 마지막 구간이다. 기록 Judge는 새 read-only context에서 설명만 검토한다.
 [기능] immutable 입력·ledger·attempt를 대조해 사실과 자기 주장을 분리하고, 단일
-Judge 호출 intent·복구·관측 비용·안전한 Markdown을 write-once 게시한다. v2는
-지표별 관측 범위와 기존 판정 정책을 설명하며 이미 게시된 v1 바이트는 보존한다.
+Judge 호출 intent·복구·관측 비용·안전한 Markdown을 write-once 게시한다.
+지표별 관측 범위와 실행에 고정된 v1/v2 판정 정책을 설명하며 이미 게시된 기록의
+바이트를 보존한다. 새 기록은 research-record-v3로 정책 버전·변동 없는 지표를 드러낸다.
 선택적 실패 후보 복원 출처는 ledger와 대조하고, 필드가 없던 기존 기록은 그대로 보존한다.
 [비책임] 모델 채점·승격·final 소비·feedback 추가는 수행하지 않는다. 동일 OS의
 적대적 탐색을 완전히 차단하는 격리나 미관측 비용 추정도 제공하지 않는다.
@@ -225,8 +226,8 @@ def _metric_groups(trial: dict, pairs: list[dict], contract: RunInputContract) -
     return groups
 
 
-def _decision_policy(sigmas: dict[str, float]) -> dict:
-    """현재 수치 Judge의 gate를 설명할 뿐 기존 decision을 다시 계산하지 않는다."""
+def _legacy_decision_policy(sigmas: dict[str, float]) -> dict:
+    """버전 필드 도입 전 보고서의 v1 정책 설명 바이트를 보존한다."""
     thresholds = {}
     for metric in JudgeMetric:
         sigma = sigmas.get(metric.value)
@@ -254,9 +255,35 @@ def _decision_policy(sigmas: dict[str, float]) -> dict:
     }
 
 
+def _decision_policy(sigmas: dict[str, float], judge_policy_version: str = "v1") -> dict:
+    """고정 정책의 문턱과 관측 한계를 설명하며 과거 판정은 재계산하지 않는다."""
+    if judge_policy_version not in {"v1", "v2"}:
+        raise ReportError("judge_policy_version")
+    policy = _legacy_decision_policy(sigmas)
+    policy["judge_policy_version"] = judge_policy_version
+    if judge_policy_version == "v2":
+        policy["validity"]["sigma"] = {
+            "primary": {"operator": ">", "threshold": 1e-6},
+            "guardrails": {"operator": ">=", "threshold": 0.0,
+                           "zero_observed_variance_max": 1e-6},
+        }
+    for metric in JudgeMetric:
+        item = policy["confirmation"]["thresholds"][metric.value]
+        sigma = item["sigma"]
+        zero = (judge_policy_version == "v2" and metric is not JudgeMetric.NDCG_AT_10
+                and type(sigma) in (int, float) and math.isfinite(sigma) and 0 <= sigma <= 1e-6)
+        if zero:
+            item.update(factor=0.0, threshold=0.0, status="zero_observed_variance")
+        item["basis"] = "zero_tolerance_non_inferiority" if zero else "baseline_seed_sigma"
+        # Sigma alone cannot establish whether an absolute calibration score is at a bound.
+        item["at_bound"] = None
+        item["at_bound_basis"] = "deferred_calibration_raw_values_not_in_run_contract"
+    return policy
+
+
 def _collect_record(root: Path, contract: RunInputContract, result: ControllerRunResult,
-                    *, version: str = "research-record-v2") -> dict:
-    if version not in {"research-record-v1", "research-record-v2"}:
+                    *, version: str = "research-record-v3") -> dict:
+    if version not in {"research-record-v1", "research-record-v2", "research-record-v3"}:
         raise ReportError("record_version")
     frozen, state, ledger_digest = terminal_context(root, contract)
     linked: dict[str, tuple[str, str]] = {}
@@ -378,7 +405,7 @@ def _collect_record(root: Path, contract: RunInputContract, result: ControllerRu
                 projected["observed_pair"] = {"baseline": _metrics(pair["baseline"], split_id),
                                                "candidate": _metrics(pair["candidate"], split_id)}
                 pair_path = f"attempts/{directory.name}/pair.json"
-                if version == "research-record-v2" and pair_path in linked:
+                if version in {"research-record-v2", "research-record-v3"} and pair_path in linked:
                     if (trial.evaluation_id != split_id
                             or metadata["stage"] != ("final" if trial.split == "final_holdout" else "validation")):
                         raise ReportError("pair_scope_identity")
@@ -442,11 +469,19 @@ def _collect_record(root: Path, contract: RunInputContract, result: ControllerRu
                                   "ledger and attempt durations overlap; only attempt durations are summed", "dollars/human interventions are unmeasured"]},
         "sources": sources,
     }
-    if version == "research-record-v2":
+    if version in {"research-record-v2", "research-record-v3"}:
         for trial in trials:
             trial["metric_groups"] = _metric_groups(trial, linked_pairs, contract)
             del trial["observed_metrics"], trial["metric_scope"]
-        record["run"]["decision_policy"] = _decision_policy(dict(contract.baseline_sigmas))
+        record["run"]["decision_policy"] = _legacy_decision_policy(dict(contract.baseline_sigmas))
+    if version == "research-record-v3":
+        record["run"]["judge_policy_version"] = contract.judge_policy_version
+        record["run"]["decision_policy"] = _decision_policy(dict(contract.baseline_sigmas), contract.judge_policy_version)
+        for trial, source in zip(trials, state.trials, strict=True):
+            trial["judge_policy_version"] = source.judge_policy_version
+            trial["zero_variance_guardrails"] = list(source.zero_variance_guardrails)
+    elif contract.judge_policy_version != "v1":
+        raise ReportError("legacy_record_policy_version")
     return _redact(record, _private_strings(root, contract))
 
 
@@ -474,7 +509,7 @@ def _judge_prompt(record: dict) -> str:
            "Use each group's scope, seeds, aggregation and evidence_refs; unknown means the source is not established. "
            "run.decision_policy explains existing numeric thresholds and directions, not a new judgment. "
            "Preserve the recorded decision even if all metric means improve; promotion also requires the sigma thresholds.\n"
-           if record["version"] == "research-record-v2" else "")
+           if record["version"] in {"research-record-v2", "research-record-v3"} else "")
         + json_bytes(record).decode("ascii")
     )
 
@@ -631,7 +666,7 @@ def _render_report(record: dict, review: dict) -> bytes:
         for metric in JudgeMetric:
             lines.append(f"| {_safe_text(metric.value)} | {_safe_text(means['baseline'][metric.value])} | {_safe_text(means['candidate'][metric.value])} |")
         lines.append("")
-    if record["version"] == "research-record-v2":
+    if record["version"] in {"research-record-v2", "research-record-v3"}:
         policy = record["run"]["decision_policy"]
         lines += ["## 기존 수치 Judge 정책 (설명이며 재채점 아님)", "",
                   "- 유효한 screening NDCG@10 delta > 0일 때만 confirmation을 진행합니다.",
@@ -643,9 +678,24 @@ def _render_report(record: dict, review: dict) -> bytes:
                   f"- Coverage: {_safe_text(policy['validity']['coverage'])}; {_safe_text(policy['validity']['coverage_applies_to'])}",
                   f"- Score validity: {_safe_text(policy['validity']['score_requirements'])}", "",
                   "| 지표 | sigma | 배수 | 비교 | threshold | 방향 | 상태 |", "| --- | ---: | ---: | --- | ---: | --- | --- |"]
+        if record["version"] == "research-record-v3":
+            lines.insert(-3, f"- 고정 판정 정책 버전: {_safe_text(policy['judge_policy_version'])}")
+            if policy["judge_policy_version"] == "v2":
+                lines[lines.index("- 각 sigma > 1e-6가 필요하며 누락·무효 sigma의 threshold는 None으로 보존합니다.")] = (
+                    "- Primary sigma > 1e-6가 필요합니다. Guardrail의 0 <= sigma <= 1e-6는 관측 변동 없음이며 delta >= 0.0으로 검사합니다."
+                )
+                lines[lines.index("- Primary delta >= 2σ, 여섯 guardrail 각각 delta >= -σ: primary 미달은 discard, 이후 guardrail 미달은 revise, 모두 통과하면 promote입니다.")] = (
+                    "- Primary delta >= 2σ, guardrail은 유효 sigma이면 delta >= -σ, 관측 변동 없음이면 delta >= 0.0입니다. Primary 미달은 discard, 이후 guardrail 미달은 revise, 모두 통과하면 promote입니다."
+                )
+            lines.insert(-3, "- at_bound는 calibration 원값이 실행 계약에 없어 미측정(None)입니다. sigma만으로 포화를 추정하지 않습니다.")
+        if record["version"] == "research-record-v3":
+            lines[-2:] = ["| 지표 | sigma | 배수 | 비교 | threshold | 방향 | 상태 | 근거 | at_bound |",
+                          "| --- | ---: | ---: | --- | ---: | --- | --- | --- | --- |"]
         for name, item in policy["confirmation"]["thresholds"].items():
-            lines.append("| " + " | ".join(_safe_text(value) for value in (
-                name, item["sigma"], item["factor"], item["operator"], item["threshold"], item["direction"], item["status"])) + " |")
+            cells = (name, item["sigma"], item["factor"], item["operator"], item["threshold"], item["direction"], item["status"])
+            if record["version"] == "research-record-v3":
+                cells += (item["basis"], item["at_bound"])
+            lines.append("| " + " | ".join(_safe_text(value) for value in cells) + " |")
         lines.append("")
     lines += ["## 가설과 실행 근거", "", _safe_text(record["run"]["card"]["hypothesis"]), ""]
     for trial in record["trials"]:
@@ -654,6 +704,8 @@ def _render_report(record: dict, review: dict) -> bytes:
                   f"- Candidate SHA / diff: {_safe_text(trial['candidate_sha'])} / {_safe_text(trial['diff_fingerprint'])}",
                   f"- 판정 / 이유: {_safe_text(trial['decision'])} / {_safe_text(trial['reason_code'])}",
                   f"- Evaluation / seed: {_safe_text(trial['evaluation_id'])} / {_safe_text(trial['seed'])}"]
+        if record["version"] == "research-record-v3":
+            lines += [f"- 고정 정책 / 변동 없는 guardrail: {_safe_text(trial['judge_policy_version'])} / {_safe_text(trial['zero_variance_guardrails'])}"]
         if record["version"] == "research-record-v1":
             lines += [f"- 관측 지표 범위: {_safe_text(trial['metric_scope'])}", "", "| 관측 지표 | 값 |", "| --- | ---: |"]
             lines.extend(f"| {_safe_text(name)} | {_safe_text(value)} |" for name, value in trial["observed_metrics"].items())
@@ -739,10 +791,10 @@ def publish_research_report(
                     "research-report.md", "research-report-manifest.json", "research-judge-workspace-failure.json",
                 )):
                     raise ReportError("record_missing")
-                version = "research-record-v2"
+                version = "research-record-v3"
             else:
                 version = read_json(record_path).get("version")
-                if version not in {"research-record-v1", "research-record-v2"}:
+                if version not in {"research-record-v1", "research-record-v2", "research-record-v3"}:
                     raise ReportError("record_version")
             record = _collect_record(run_root, contract, result, version=version)
             record_bytes = json_bytes(record)

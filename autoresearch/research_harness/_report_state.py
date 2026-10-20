@@ -2,7 +2,8 @@
 
 [파이프라인] 수치 판정 종료 뒤, 기록 Judge 호출 전에 durable 종료 상태를 검증한다.
 [기능] bounded regular-file 읽기, write-once 게시, report 잠금과 input/ledger/result
-결속을 제공한다. 종료 파일 복구는 수행하지만 Controller나 final claim은 실행하지 않는다.
+결속과 입력·ledger 간 판정 정책 버전 대조를 제공한다. 종료 파일 복구는 수행하지만
+Controller나 final claim은 실행하지 않는다.
 [비책임] 실험 실행·판정은 controller, 기록 투영·advisory 검토는 report가 소유한다.
 """
 
@@ -156,6 +157,9 @@ def terminal_context(root: Path, contract: RunInputContract) -> tuple[FrozenRunI
     state = open_trial_ledger(path).read_state()
     if read_file(path) != before or state.recovered_trailing_bytes:
         raise ReportError("terminal_ledger_changed")
+    for trial in state.trials:
+        if trial.judge_policy_version != contract.judge_policy_version:
+            raise ReportError("terminal_judge_policy_version")
     checkpoint = state.checkpoint("run-inputs")
     if (checkpoint.stage != "run-inputs" or checkpoint.trial_id != "run"
             or checkpoint.artifacts != (frozen.artifact,) or checkpoint.final_consumption is not None):

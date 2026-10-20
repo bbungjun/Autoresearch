@@ -60,7 +60,7 @@ def test_new_record_separates_screening_values_and_confirmation_deltas(finished)
     judge = FakeJudge()
     publish(finished, judge)
     record = json.loads((finished[0] / "research-record.json").read_bytes())
-    assert record["version"] == "research-record-v2"
+    assert record["version"] == "research-record-v3"
     trial = record["trials"][0]
     assert "metric_scope" not in trial and "observed_metrics" not in trial
     absolute, delta = (trial["metric_groups"][key] for key in ("candidate_absolute", "decision_delta"))
@@ -208,11 +208,12 @@ def test_existing_record_content_is_revalidated_not_just_its_version(finished):
 
 
 @pytest.mark.parametrize("partial", [False, True])
-def test_existing_v1_keeps_every_published_byte_and_never_reinvokes(finished, partial, monkeypatch):
+@pytest.mark.parametrize("version", ["research-record-v1", "research-record-v2"])
+def test_existing_v1_keeps_every_published_byte_and_never_reinvokes(finished, partial, monkeypatch, version):
     m = module()
     root, contract, result, _ = finished
     m.seal_terminal_result(root, contract=contract, result=result)
-    legacy = m._collect_record(root, contract, result, version="research-record-v1")
+    legacy = m._collect_record(root, contract, result, version=version)
     (root / "research-record.json").write_bytes(m.json_bytes(legacy))
     judge = FakeJudge()
     publish(finished, judge)
@@ -250,7 +251,7 @@ def test_legacy_intent_only_and_completed_attempt_recover_without_new_judge(fini
     assert review["availability"] == ("available" if attempt_completed else "unavailable")
 
 
-@pytest.mark.parametrize("version", ["research-record-v0", "research-record-v3", None])
+@pytest.mark.parametrize("version", ["research-record-v0", "research-record-v4", None])
 def test_unsupported_record_version_fails_before_judge(finished, version):
     module().seal_terminal_result(finished[0], contract=finished[1], result=finished[2])
     write_json(finished[0] / "research-record.json", {"version": version})
@@ -273,13 +274,13 @@ def test_missing_record_with_later_evidence_fails_before_any_publication(finishe
     assert not (root / "research-record.json").exists() and judge.requests == []
 
 
-def legacy_golden_record(tmp_path, monkeypatch):
+def legacy_golden_record(tmp_path, monkeypatch, *, version="research-record-v1"):
     """수정 전 5025926 구현으로 계산한 고정 projection/prompt/render 해시의 입력."""
     @dataclass
     class Card:
         hypothesis: str = "golden"
     contract = SimpleNamespace(initial_card=Card(), budget=Card(), baseline_sha="a" * 40, champion_sha="a" * 40,
-                               screening_seed=42, confirmation_seeds=(101, 102, 103, 104, 105), baseline_sigmas={"ndcg_at_10": 0.01},
+                               screening_seed=42, confirmation_seeds=(101, 102, 103, 104, 105), baseline_sigmas={"ndcg_at_10": 0.01}, judge_policy_version="v1",
                                handoff=SimpleNamespace(snapshot_fingerprint="snapshot", validation_id="validation", final_holdout_id="final"))
     trial = SimpleNamespace(trial_id="trial-0001", split="validation", base_sha="a" * 40, candidate_sha="b" * 40,
                             diff_fingerprint="diff", experiment_summary=None, evaluation_id="validation", seed=42,
@@ -293,7 +294,7 @@ def legacy_golden_record(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "_private_strings", lambda *args: [])
     result = SimpleNamespace(conclusion=SimpleNamespace(value="inconclusive"), champion_sha="a" * 40,
                              final_decision=None, final_reason_code="already_consumed")
-    return m._collect_record(tmp_path, contract, result, version="research-record-v1")
+    return m._collect_record(tmp_path, contract, result, version=version)
 
 
 def test_v1_projection_prompt_and_render_match_prechange_golden(tmp_path, monkeypatch):
@@ -303,3 +304,13 @@ def test_v1_projection_prompt_and_render_match_prechange_golden(tmp_path, monkey
     assert sha256(m.json_bytes(record)).hexdigest() == "b02581927bbac630a1bfec21453b0258c9640fe235eaf62d6f3bda6bda9cccc4"
     assert sha256(m._judge_prompt(record).encode()).hexdigest() == "b48eab35517593f85c54c0a94c3f293c5e8c2da6ac2e2056a8e86591bf0a757f"
     assert sha256(m._render_report(record, review)).hexdigest() == "82e860fee71852ed6fcb4d3bfdf482e0fc87708327b5f41e5a7dd95dfbb2154f"
+
+
+def test_v2_projection_prompt_and_render_match_prechange_golden(tmp_path, monkeypatch):
+    """#148 전 HEAD 코드에서 직접 얻은 v2 bytes 해시를 보존한다."""
+    record = legacy_golden_record(tmp_path, monkeypatch, version="research-record-v2")
+    m = module()
+    review = {"availability": "unavailable", "response": None, "reason_code": "judge_unavailable", "usage": None, "duration_ms": None}
+    assert sha256(m.json_bytes(record)).hexdigest() == "5da84b70ba727cbbd0d29fa819e88d8969788f5ef1beee1e91eee3fd80f18d07"
+    assert sha256(m._judge_prompt(record).encode()).hexdigest() == "d5231b85962f66ca3df058a30555e5a23e4fe2ef010bde8811be529be47ec692"
+    assert sha256(m._render_report(record, review)).hexdigest() == "f31ceedb887e6c6c0f8d19d6697ddf829660947bf15802088d64acd13818734b"
