@@ -4,7 +4,8 @@
 confirmation 판정까지, 후속 Controller가 호출할 도메인 interface 구간을 담당한다.
 
 [기능] 다섯 동작으로 제한된 ``ResearchDomain`` ABC와 기존 YouTube CTR snapshot·봉인·
-scoring·판정 module에 위임하는 ``YouTubeCTRDomain`` adapter를 제공한다.
+scoring·판정 module에 위임하는 ``YouTubeCTRDomain`` adapter를 제공한다. confirmation은
+Controller가 고정한 정책 버전을 Judge에 전달하고 오류 결과에도 같은 버전을 보존한다.
 
 [비책임] candidate workspace·실행, screening fidelity 선택, baseline sigma 측정, final holdout
 소비 registry와 Paper Discovery capability 모델은 후속 Task가 담당한다.
@@ -112,6 +113,7 @@ class ResearchDomain(ABC):
         results: PairedJudgeResult,
         *,
         baseline_sigmas: None = None,
+        judge_policy_version: str = "v1",
     ) -> ScreeningResult: ...
 
     @overload
@@ -120,6 +122,7 @@ class ResearchDomain(ABC):
         results: Sequence[PairedJudgeResult],
         *,
         baseline_sigmas: Mapping[str, float],
+        judge_policy_version: str = "v1",
     ) -> ConfirmationDecision: ...
 
     @abstractmethod
@@ -128,8 +131,9 @@ class ResearchDomain(ABC):
         results: PairedJudgeResult | Sequence[PairedJudgeResult],
         *,
         baseline_sigmas: Mapping[str, float] | None = None,
+        judge_policy_version: str = "v1",
     ) -> ScreeningResult | ConfirmationDecision:
-        """단일 screening 또는 paired confirmation 결과를 판정한다."""
+        """screening 규칙은 유지하고 confirmation은 요청 정책 버전으로 판정한다."""
 
         raise NotImplementedError
 
@@ -175,6 +179,7 @@ class YouTubeCTRDomain(ResearchDomain):
         results: PairedJudgeResult,
         *,
         baseline_sigmas: None = None,
+        judge_policy_version: str = "v1",
     ) -> ScreeningResult: ...
 
     @overload
@@ -183,6 +188,7 @@ class YouTubeCTRDomain(ResearchDomain):
         results: Sequence[PairedJudgeResult],
         *,
         baseline_sigmas: Mapping[str, float],
+        judge_policy_version: str = "v1",
     ) -> ConfirmationDecision: ...
 
     def compare(
@@ -190,10 +196,13 @@ class YouTubeCTRDomain(ResearchDomain):
         results: PairedJudgeResult | Sequence[PairedJudgeResult],
         *,
         baseline_sigmas: Mapping[str, float] | None = None,
+        judge_policy_version: str = "v1",
     ) -> ScreeningResult | ConfirmationDecision:
+        if judge_policy_version not in ("v1", "v2"):
+            return _invalid_confirmation(judge_policy_version)
         if isinstance(results, PairedJudgeResult):
             if baseline_sigmas is not None:
-                return _invalid_confirmation()
+                return _invalid_confirmation(judge_policy_version)
             return screen_candidate(results)
         if (
             isinstance(results, (str, bytes))
@@ -201,12 +210,17 @@ class YouTubeCTRDomain(ResearchDomain):
             or any(not isinstance(pair, PairedJudgeResult) for pair in results)
             or baseline_sigmas is None
         ):
-            return _invalid_confirmation()
+            return _invalid_confirmation(judge_policy_version)
         return compare_confirmation(
             results,
             baseline_sigmas=baseline_sigmas,
+            judge_policy_version=judge_policy_version,
         )
 
 
-def _invalid_confirmation() -> ConfirmationDecision:
-    return ConfirmationDecision(None, JudgeReasonCode.INVALID_COMPARISON_INPUT)
+def _invalid_confirmation(judge_policy_version: str) -> ConfirmationDecision:
+    return ConfirmationDecision(
+        None,
+        JudgeReasonCode.INVALID_COMPARISON_INPUT,
+        judge_policy_version=judge_policy_version,
+    )

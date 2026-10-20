@@ -89,12 +89,15 @@ def run_config(candidate_fixture, tmp_path: Path, tmp_path_factory) -> HarnessRu
 
 def test_config_preserves_only_explicit_training_overrides(run_config: HarnessRunConfig) -> None:
     assert "training" not in run_config.prediction.model_dump(mode="json", exclude_unset=True)
+    assert run_config.judge_policy_version == "v1"
+    assert "judge_policy_version" not in run_config.model_fields_set
 
 
 @pytest.mark.parametrize("updates", [
     {"screening_seed": True}, {"screening_seed": 101}, {"confirmation_seeds": [1] * 5},
     {"baseline_sigmas": {"ndcg_at_10": 0.1}}, {"max_trials": 3},
     {"max_duration_seconds": float("inf")}, {"repository_root": "relative"},
+    {"judge_policy_version": "v3"}, {"judge_policy_version": True},
 ])
 def test_config_rejects_invalid_execution_contract(run_config, updates) -> None:
     payload = run_config.model_dump(mode="json")
@@ -164,6 +167,68 @@ def test_runtime_restores_metadata_without_source_preparation(run_config, monkey
     with pytest.raises(LocalRuntimeError):
         run_local_research(drifted)
     assert len(captured) == 1
+
+
+@pytest.mark.parametrize("policy", ["v1", "v2"])
+def test_runtime_binds_selected_policy_and_rejects_version_drift(run_config, monkeypatch, policy) -> None:
+    import autoresearch.research_harness.local_runtime as runtime
+    import autoresearch.research_harness.local_trial_runner as trials
+    import autoresearch.research_harness.report as report
+
+    run_config = run_config.model_copy(update={"judge_policy_version": policy})
+    monkeypatch.setattr(runtime, "_runtime_identity", lambda _: "{}")
+    monkeypatch.setattr(trials, "LocalResearchTrialRunner", lambda **kwargs: None)
+    monkeypatch.setattr(report, "publish_research_report", lambda *args, **kwargs: None)
+    result = ControllerRunResult(ControllerConclusion.INCONCLUSIVE, "a" * 40, 0, (), None, "already_consumed", None)
+    calls = []
+
+    class Controller:
+        def __init__(self, *args):
+            pass
+
+        def run(self, request):
+            calls.append(request)
+            assert request.judge_policy_version == policy
+            return result
+
+    monkeypatch.setattr(runtime, "ResearchController", Controller)
+    assert run_local_research(run_config) == result
+    manifest = json.loads((run_config.run_root / "run-inputs" / "manifest.json").read_bytes())
+    assert manifest["contract"]["judge_policy_version"] == policy
+    assert run_local_research(run_config) == result
+    assert len(calls) == 1
+    monkeypatch.setattr(runtime, "_runtime_identity", lambda _: '{"trusted_harness_files":{"controller.py":"drift"}}')
+    with pytest.raises(LocalRuntimeError):
+        run_local_research(run_config)
+    assert len(calls) == 1
+    monkeypatch.setattr(runtime, "_runtime_identity", lambda _: "{}")
+    changed = run_config.model_copy(update={"judge_policy_version": "v2" if policy == "v1" else "v1"})
+    with pytest.raises(LocalRuntimeError):
+        run_local_research(changed)
+    assert len(calls) == 1
+
+
+def test_runtime_identity_preserves_missing_default_but_binds_explicit_policy_and_code(
+    run_config: HarnessRunConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    import autoresearch.research_harness.local_runtime as runtime
+    import autoresearch.research_harness.local_embedding as embedding
+
+    code_root = tmp_path / "trusted-code"
+    code_root.mkdir()
+    code_file = code_root / "local_runtime.py"
+    code_file.write_text("legacy source", encoding="utf-8")
+    run_config.agent.executable.write_bytes(b"synthetic executable")
+    monkeypatch.setattr(runtime, "__file__", str(code_file))
+    monkeypatch.setattr(embedding, "_model_files", lambda _: {})
+    identity = runtime._runtime_identity(run_config)
+    parsed = json.loads(identity)
+    assert "judge_policy_version" not in parsed["config"]
+    assert "judge_policy_version" not in parsed["resolved_config"]
+    selected = run_config.model_copy(update={"judge_policy_version": "v2"})
+    assert json.loads(runtime._runtime_identity(selected))["resolved_config"]["judge_policy_version"] == "v2"
+    code_file.write_text("updated source", encoding="utf-8")
+    assert runtime._runtime_identity(run_config) != identity
 
 
 def test_runtime_does_not_initialize_registry(run_config) -> None:

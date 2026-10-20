@@ -4,7 +4,8 @@
 champion 교체를 결정하기 전에 metric 유효성과 paired delta를 판정하는 구간을 담당한다.
 
 [기능] same-seed screening 비용 gate와 5-seed confirmation의 방향 정규화 delta,
-``promote | revise | discard`` 및 안정적인 reason code를 반환한다.
+고정된 v1/v2 정책에 따른 ``promote | revise | discard`` 및 안정적인 reason code를
+반환한다. v2는 변동 없는 guardrail을 허용 폭 0으로 검사하고 해당 지표를 기록한다.
 
 [비책임] prediction 파일 봉인·파싱·metric 계산은 ``prediction_ingestion``과 ``judge``가,
 실제 baseline sigma 측정은 Task 7이, 반복 실행은 후속 Controller가 담당한다.
@@ -101,6 +102,8 @@ class ConfirmationDecision:
     decision: JudgeDecision | None
     reason_code: JudgeReasonCode
     normalized_deltas: tuple[MetricDelta, ...] = ()
+    zero_variance_guardrails: tuple[JudgeMetric, ...] = ()
+    judge_policy_version: str = "v1"
 
     def delta_for(self, metric: JudgeMetric) -> float:
         """요청 지표의 정규화 delta를 반환한다."""
@@ -136,8 +139,26 @@ def compare_confirmation(
     pairs: Sequence[PairedJudgeResult],
     *,
     baseline_sigmas: Mapping[str, float],
+    judge_policy_version: str = "v1",
 ) -> ConfirmationDecision:
-    """5개 paired 결과 평균을 지표별 baseline sigma에 비교한다."""
+    """5개 paired 결과 평균을 실행에 고정한 정책의 sigma 문턱에 비교한다.
+
+    Args:
+        pairs: 같은 평가 대상을 사용한 5개 고유 seed의 paired 결과.
+        baseline_sigmas: 각 필수 지표의 calibration 표준편차 원값.
+        judge_policy_version: v1은 모든 sigma, v2는 primary sigma만 1e-6 초과를
+            요구한다. v2의 0 이상 1e-6 이하 guardrail은 평균 delta 0 이상이어야 한다.
+
+    Returns:
+        오류에서도 요청 정책 버전을 유지하는 판정 결과. 알 수 없는 버전은 invalid다.
+    """
+
+    if judge_policy_version not in ("v1", "v2"):
+        return ConfirmationDecision(
+            None,
+            JudgeReasonCode.INVALID_COMPARISON_INPUT,
+            judge_policy_version=judge_policy_version,
+        )
 
     if (
         len(pairs) != _CONFIRMATION_SEEDS
@@ -154,24 +175,35 @@ def compare_confirmation(
         return ConfirmationDecision(
             None,
             JudgeReasonCode.INVALID_COMPARISON_INPUT,
+            judge_policy_version=judge_policy_version,
         )
     for pair in pairs:
         invalid = _pair_invalid_reason(pair)
         if invalid is not None:
-            return ConfirmationDecision(None, invalid)
+            return ConfirmationDecision(
+                None, invalid, judge_policy_version=judge_policy_version
+            )
 
     try:
-        sigmas = _validated_sigmas(baseline_sigmas)
+        sigmas = _validated_sigmas(baseline_sigmas, judge_policy_version)
     except (KeyError, TypeError, ValueError):
         return ConfirmationDecision(
             None,
             JudgeReasonCode.INVALID_COMPARISON_INPUT,
+            judge_policy_version=judge_policy_version,
         )
     if sigmas is None:
         return ConfirmationDecision(
             None,
             JudgeReasonCode.INSUFFICIENT_BASELINE_NOISE,
+            judge_policy_version=judge_policy_version,
         )
+
+    zero_variance_guardrails = (
+        tuple(metric for metric in _GUARDRAILS if sigmas[metric] <= _MIN_SIGMA)
+        if judge_policy_version == "v2"
+        else ()
+    )
 
     paired_deltas = tuple(_normalized_deltas(pair) for pair in pairs)
     mean_deltas = tuple(
@@ -190,20 +222,29 @@ def compare_confirmation(
             JudgeDecision.DISCARD,
             JudgeReasonCode.PRIMARY_THRESHOLD_NOT_MET,
             mean_deltas,
+            zero_variance_guardrails,
+            judge_policy_version,
         )
     if any(
-        not _at_least(_delta_value(mean_deltas, metric), -sigmas[metric])
+        not _at_least(
+            _delta_value(mean_deltas, metric),
+            0.0 if metric in zero_variance_guardrails else -sigmas[metric],
+        )
         for metric in _GUARDRAILS
     ):
         return ConfirmationDecision(
             JudgeDecision.REVISE,
             JudgeReasonCode.GUARDRAIL_REGRESSION,
             mean_deltas,
+            zero_variance_guardrails,
+            judge_policy_version,
         )
     return ConfirmationDecision(
         JudgeDecision.PROMOTE,
         JudgeReasonCode.PROMOTION_THRESHOLD_MET,
         mean_deltas,
+        zero_variance_guardrails,
+        judge_policy_version,
     )
 
 
@@ -294,6 +335,7 @@ def _normalized_deltas(pair: PairedJudgeResult) -> tuple[MetricDelta, ...]:
 
 def _validated_sigmas(
     raw: Mapping[str, float],
+    judge_policy_version: str = "v1",
 ) -> dict[JudgeMetric, float] | None:
     if set(raw) != {metric.value for metric in JudgeMetric}:
         raise ValueError("baseline sigma keys do not match required metrics")
@@ -302,7 +344,11 @@ def _validated_sigmas(
         value = raw[metric.value]
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise TypeError("baseline sigma must be numeric")
-        if not isfinite(value) or value <= _MIN_SIGMA:
+        if not isfinite(value) or value < 0.0:
+            return None
+        if value <= _MIN_SIGMA and (
+            judge_policy_version == "v1" or metric is _PRIMARY
+        ):
             return None
         validated[metric] = float(value)
     return validated

@@ -153,28 +153,33 @@ def test_youtube_domain_uses_grant_for_final_evaluation(
     ]
 
 
+@pytest.mark.parametrize("policy", ["v1", "v2"])
 def test_youtube_domain_delegates_confirmation_comparison(
     monkeypatch: pytest.MonkeyPatch,
+    policy: str,
 ) -> None:
     pairs = tuple(object.__new__(PairedJudgeResult) for _ in range(5))
     sigmas = {"ndcg_at_10": 0.01}
     expected = cast(Any, object())
-    calls: list[tuple[object, object]] = []
+    calls: list[tuple[object, object, str]] = []
 
     def fake_compare(
         values: object,
         *,
         baseline_sigmas: object,
+        judge_policy_version: str,
     ) -> object:
-        calls.append((values, baseline_sigmas))
+        calls.append((values, baseline_sigmas, judge_policy_version))
         return expected
 
     monkeypatch.setattr(domain_module, "compare_confirmation", fake_compare)
 
-    result = YouTubeCTRDomain().compare(pairs, baseline_sigmas=sigmas)
+    result = YouTubeCTRDomain().compare(
+        pairs, baseline_sigmas=sigmas, judge_policy_version=policy
+    )
 
     assert result is expected
-    assert calls == [(pairs, sigmas)]
+    assert calls == [(pairs, sigmas, policy)]
 
 
 def test_youtube_domain_delegates_single_pair_screening(
@@ -196,33 +201,59 @@ def test_youtube_domain_delegates_single_pair_screening(
     assert calls == [pair]
 
 
-def test_youtube_domain_confirmation_without_sigmas_fails_closed() -> None:
-    result = YouTubeCTRDomain().compare(())
+@pytest.mark.parametrize("policy", ["v1", "v2"])
+def test_youtube_domain_confirmation_without_sigmas_fails_closed(policy: str) -> None:
+    result = YouTubeCTRDomain().compare((), judge_policy_version=policy)
 
     assert result.decision is None
     assert result.reason_code is JudgeReasonCode.INVALID_COMPARISON_INPUT
+    assert result.judge_policy_version == policy
 
 
-def test_youtube_domain_rejects_sigmas_for_single_screening_pair() -> None:
+@pytest.mark.parametrize("policy", ["v1", "v2"])
+def test_youtube_domain_rejects_sigmas_for_single_screening_pair(policy: str) -> None:
     pair = object.__new__(PairedJudgeResult)
 
     result = YouTubeCTRDomain().compare(  # type: ignore[call-overload]
         pair,
         baseline_sigmas={"ndcg_at_10": 0.01},
+        judge_policy_version=policy,
     )
 
     assert result.decision is None
     assert result.reason_code is JudgeReasonCode.INVALID_COMPARISON_INPUT
+    assert result.judge_policy_version == policy
 
 
 @pytest.mark.parametrize("malformed", ["abcde", [object()] * 5])
+@pytest.mark.parametrize("policy", ["v1", "v2"])
 def test_youtube_domain_rejects_malformed_confirmation_sequence(
     malformed: object,
+    policy: str,
 ) -> None:
     result = YouTubeCTRDomain().compare(  # type: ignore[call-overload]
         malformed,
         baseline_sigmas={"ndcg_at_10": 0.01},
+        judge_policy_version=policy,
     )
 
     assert result.decision is None
     assert result.reason_code is JudgeReasonCode.INVALID_COMPARISON_INPUT
+    assert result.judge_policy_version == policy
+
+
+def test_youtube_domain_rejects_unknown_policy_before_judge_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected_compare(*args: object, **kwargs: object) -> Never:
+        pytest.fail("unknown policy must not reach Judge")
+
+    monkeypatch.setattr(domain_module, "compare_confirmation", unexpected_compare)
+
+    result = YouTubeCTRDomain().compare(
+        (), baseline_sigmas={}, judge_policy_version="v3"
+    )
+
+    assert result.decision is None
+    assert result.reason_code is JudgeReasonCode.INVALID_COMPARISON_INPUT
+    assert result.judge_policy_version == "v3"

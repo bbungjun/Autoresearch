@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from math import inf, nextafter
 
 import pytest
 
@@ -305,3 +306,259 @@ def test_screening_rejects_different_evaluation_targets() -> None:
 
     assert result.should_confirm is False
     assert result.reason_code is JudgeReasonCode.INVALID_COMPARISON_INPUT
+
+
+@pytest.mark.parametrize("policy", ["v1", "v2"])
+@pytest.mark.parametrize("metric", list(JudgeMetric))
+@pytest.mark.parametrize(
+    "sigma", [0.0, nextafter(1e-6, 0.0), 1e-6, nextafter(1e-6, inf)]
+)
+def test_confirmation_sigma_boundaries_by_policy_and_metric(
+    policy: str, metric: JudgeMetric, sigma: float
+) -> None:
+    sigmas = _sigmas()
+    sigmas[metric.value] = sigma
+
+    result = compare_confirmation(
+        tuple(_pair(seed) for seed in range(5)),
+        baseline_sigmas=sigmas,
+        judge_policy_version=policy,
+    )
+
+    invalid = sigma <= 1e-6 and (
+        policy == "v1" or metric is JudgeMetric.NDCG_AT_10
+    )
+    assert result.judge_policy_version == policy
+    assert result.decision is (None if invalid else JudgeDecision.PROMOTE)
+    assert result.reason_code is (
+        JudgeReasonCode.INSUFFICIENT_BASELINE_NOISE
+        if invalid
+        else JudgeReasonCode.PROMOTION_THRESHOLD_MET
+    )
+    assert result.zero_variance_guardrails == (
+        (metric,) if not invalid and sigma <= 1e-6 else ()
+    )
+
+
+@pytest.mark.parametrize("policy", ["v1", "v2"])
+@pytest.mark.parametrize("metric", list(JudgeMetric))
+@pytest.mark.parametrize("sigma", [-0.01, float("nan"), inf, -inf, True])
+def test_confirmation_unusable_sigma_preserves_reason_and_requested_policy(
+    policy: str, metric: JudgeMetric, sigma: float
+) -> None:
+    sigmas = _sigmas()
+    sigmas[metric.value] = sigma
+
+    result = compare_confirmation(
+        tuple(_pair(seed) for seed in range(5)),
+        baseline_sigmas=sigmas,
+        judge_policy_version=policy,
+    )
+
+    assert result.decision is None
+    assert result.reason_code is (
+        JudgeReasonCode.INVALID_COMPARISON_INPUT
+        if isinstance(sigma, bool)
+        else JudgeReasonCode.INSUFFICIENT_BASELINE_NOISE
+    )
+    assert result.judge_policy_version == policy
+
+
+@pytest.mark.parametrize("primary_delta", [0.01, 0.03])
+@pytest.mark.parametrize("guardrail_delta", [-0.02, 0.0, 0.01])
+def test_v1_default_and_v2_are_equivalent_with_positive_valid_sigmas(
+    primary_delta: float, guardrail_delta: float
+) -> None:
+    pairs = tuple(
+        PairedJudgeResult(
+            seed=seed,
+            baseline=_score(),
+            candidate=_score(
+                ndcg_at_10=0.5 + primary_delta,
+                recall_at_10=0.5 + guardrail_delta,
+            ),
+        )
+        for seed in range(5)
+    )
+    default = compare_confirmation(pairs, baseline_sigmas=_sigmas())
+    v1 = compare_confirmation(
+        pairs, baseline_sigmas=_sigmas(), judge_policy_version="v1"
+    )
+    v2 = compare_confirmation(
+        pairs, baseline_sigmas=_sigmas(), judge_policy_version="v2"
+    )
+
+    assert default == v1
+    assert replace(v2, judge_policy_version="v1") == v1
+
+
+@pytest.mark.parametrize("metric", list(JudgeMetric)[1:])
+@pytest.mark.parametrize("sigma", [0.0, nextafter(1e-6, 0.0), 1e-6])
+@pytest.mark.parametrize("regression", [False, True])
+def test_v2_zero_variance_guardrail_has_no_regression_allowance(
+    metric: JudgeMetric, sigma: float, regression: bool
+) -> None:
+    sigmas = _sigmas()
+    sigmas[metric.value] = sigma
+    candidate_value = (
+        nextafter(0.5, inf if metric in (JudgeMetric.LOG_LOSS, JudgeMetric.BRIER) else 0.0)
+        if regression
+        else 0.5
+    )
+    candidate = _score(
+        ndcg_at_10=0.53,
+        recall_at_10=0.5,
+        ndcg_at_24=0.5,
+        grouped_roc_auc=0.5,
+        pr_auc=0.5,
+        log_loss=0.5,
+        brier=0.5,
+    )
+    if metric in (JudgeMetric.LOG_LOSS, JudgeMetric.BRIER, JudgeMetric.PR_AUC):
+        candidate = replace(
+            candidate,
+            probability=replace(candidate.probability, **{metric.value: candidate_value}),
+        )
+    elif metric is JudgeMetric.GROUPED_ROC_AUC:
+        grouped = candidate.probability.grouped_roc_auc
+        assert grouped is not None
+        candidate = replace(
+            candidate,
+            probability=replace(
+                candidate.probability,
+                grouped_roc_auc=replace(grouped, value=candidate_value),
+            ),
+        )
+    else:
+        candidate = replace(candidate, **{metric.value: _ranking(candidate_value)})
+    pairs = tuple(
+        PairedJudgeResult(
+            seed=seed, baseline=_score(log_loss=0.5, brier=0.5), candidate=candidate
+        )
+        for seed in range(5)
+    )
+
+    result = compare_confirmation(
+        pairs, baseline_sigmas=sigmas, judge_policy_version="v2"
+    )
+
+    assert result.decision is (JudgeDecision.REVISE if regression else JudgeDecision.PROMOTE)
+    assert result.reason_code is (
+        JudgeReasonCode.GUARDRAIL_REGRESSION
+        if regression
+        else JudgeReasonCode.PROMOTION_THRESHOLD_MET
+    )
+    assert result.zero_variance_guardrails == (metric,)
+    assert result.judge_policy_version == "v2"
+
+
+@pytest.mark.parametrize("recall", [0.5, 1.0])
+def test_v2_zero_variance_guardrail_does_not_depend_on_being_at_bound(
+    recall: float,
+) -> None:
+    sigmas = _sigmas()
+    sigmas[JudgeMetric.RECALL_AT_10.value] = 0.0
+    pairs = tuple(
+        PairedJudgeResult(
+            seed=seed,
+            baseline=_score(recall_at_10=recall),
+            candidate=_score(ndcg_at_10=0.53, recall_at_10=recall),
+        )
+        for seed in range(5)
+    )
+
+    result = compare_confirmation(
+        pairs, baseline_sigmas=sigmas, judge_policy_version="v2"
+    )
+
+    assert result.decision is JudgeDecision.PROMOTE
+    assert result.zero_variance_guardrails == (JudgeMetric.RECALL_AT_10,)
+
+
+@pytest.mark.parametrize(
+    "sigma,decision",
+    [(1e-6, JudgeDecision.REVISE), (nextafter(1e-6, inf), JudgeDecision.PROMOTE)],
+)
+def test_v2_guardrail_above_resolution_retains_negative_sigma_allowance(
+    sigma: float, decision: JudgeDecision
+) -> None:
+    sigmas = _sigmas()
+    sigmas[JudgeMetric.RECALL_AT_10.value] = sigma
+    pairs = tuple(
+        PairedJudgeResult(
+            seed=seed,
+            baseline=_score(),
+            candidate=_score(ndcg_at_10=0.53, recall_at_10=0.5 - 0.5e-6),
+        )
+        for seed in range(5)
+    )
+
+    result = compare_confirmation(
+        pairs, baseline_sigmas=sigmas, judge_policy_version="v2"
+    )
+
+    assert result.decision is decision
+    assert result.zero_variance_guardrails == (
+        (JudgeMetric.RECALL_AT_10,) if sigma <= 1e-6 else ()
+    )
+
+
+def test_v2_records_all_zero_variance_guardrails_even_when_primary_discards() -> None:
+    sigmas = _sigmas(0.0)
+    sigmas[JudgeMetric.NDCG_AT_10.value] = 0.01
+
+    result = compare_confirmation(
+        tuple(_pair(seed, primary_delta=0.01) for seed in range(5)),
+        baseline_sigmas=sigmas,
+        judge_policy_version="v2",
+    )
+
+    assert result.decision is JudgeDecision.DISCARD
+    assert result.zero_variance_guardrails == tuple(JudgeMetric)[1:]
+    assert result.judge_policy_version == "v2"
+
+
+@pytest.mark.parametrize("policy", ["", "v3"])
+def test_confirmation_rejects_unknown_policy(policy: str) -> None:
+    result = compare_confirmation(
+        tuple(_pair(seed) for seed in range(5)),
+        baseline_sigmas=_sigmas(),
+        judge_policy_version=policy,
+    )
+
+    assert result.decision is None
+    assert result.reason_code is JudgeReasonCode.INVALID_COMPARISON_INPUT
+    assert result.judge_policy_version == policy
+
+
+@pytest.mark.parametrize(
+    "error", ["seed_count", "seed_duplicate", "metric", "coverage", "sigma_map"]
+)
+def test_v2_validation_errors_preserve_policy(error: str) -> None:
+    pairs = tuple(_pair(seed) for seed in range(5))
+    sigmas = _sigmas()
+    reason = JudgeReasonCode.INVALID_COMPARISON_INPUT
+    if error == "seed_count":
+        pairs = pairs[:4]
+    elif error == "seed_duplicate":
+        pairs = (*pairs[:4], pairs[0])
+    elif error == "sigma_map":
+        sigmas = {}
+    elif error == "metric":
+        pairs = (replace(pairs[0], candidate=_score(ndcg_at_10=None)), *pairs[1:])
+        reason = JudgeReasonCode.METRIC_UNAVAILABLE
+    else:
+        candidate = replace(
+            pairs[0].candidate,
+            ndcg_at_10=replace(pairs[0].candidate.ndcg_at_10, scored_slates=1),
+        )
+        pairs = (replace(pairs[0], candidate=candidate), *pairs[1:])
+        reason = JudgeReasonCode.INSUFFICIENT_METRIC_COVERAGE
+
+    result = compare_confirmation(
+        pairs, baseline_sigmas=sigmas, judge_policy_version="v2"
+    )
+
+    assert result.decision is None
+    assert result.reason_code is reason
+    assert result.judge_policy_version == "v2"

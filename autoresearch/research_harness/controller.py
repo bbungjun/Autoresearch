@@ -7,6 +7,7 @@
 자동 계속, checkpoint 재생과 유효 validation 후보가 있을 때의 final 단일 소비를 하나의
 ``run`` interface로 제공한다.
 직전 실패 trial의 candidate만 수정 출발점으로 전달하며 비교 champion은 유지한다.
+실행에 고정된 Judge 정책을 validation·final에 전달하고 반환값과 저장 기록의 버전을 검증한다.
 
 [비책임] candidate 코드 작성·workspace 생성·LocalRunner 조립·prediction 봉인과 metric
 구현은 ResearchTrialRunner adapter와 ResearchDomain이 담당하며 REPORT·CLI는 후속 Task다.
@@ -221,6 +222,7 @@ class ControllerRunRequest:
     screening_seed: int
     confirmation_seeds: tuple[int, ...]
     ledger: TrialLedger = field(repr=False)
+    judge_policy_version: str = "v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,6 +280,12 @@ class ResearchController:
                 ControllerErrorCode.LEDGER_FAILED,
                 "ledger_read",
             ) from None
+
+        if any(record.judge_policy_version != request.judge_policy_version for record in state.trials):
+            raise ControllerError(
+                ControllerErrorCode.INTEGRITY_VIOLATION,
+                "judge_policy_replay",
+            )
 
         feedback: list[FeedbackPayload] = []
         lineage = _initial_lineage(request)
@@ -378,6 +386,7 @@ class ResearchController:
     ) -> tuple[TrialRecord, FeedbackPayload]:
         candidate: PreparedCandidate | None = None
         receipts: list[PairedRunReceipt] = []
+        zero_variance_guardrails: tuple[str, ...] = ()
         try:
             candidate = self._runner.prepare_candidate(
                 PrepareCandidateRequest(trial_id, card, champion_sha, tuple(feedback),
@@ -418,17 +427,20 @@ class ResearchController:
                 compared = self._domain.compare(
                     tuple(confirmation),
                     baseline_sigmas=sigmas,
+                    judge_policy_version=request.judge_policy_version,
                 )
                 if not isinstance(compared, ConfirmationDecision):
                     raise ControllerError(
                         ControllerErrorCode.INTEGRITY_VIOLATION,
                         "confirmation_result",
                     )
+                _validate_decision_policy(compared, request.judge_policy_version)
                 decision = (
                     compared.decision.value if compared.decision is not None else "invalid"
                 )
                 reason = compared.reason_code.value
                 deltas = compared.normalized_deltas
+                zero_variance_guardrails = tuple(metric.value for metric in compared.zero_variance_guardrails)
             duration = sum(item.duration_ms for item in receipts)
             metrics = _feedback_metrics(screening_receipt.pair.candidate, deltas)
             next_lineage = (
@@ -453,6 +465,8 @@ class ResearchController:
                 champion_lineage=next_lineage,
                 final_consumption=None,
                 experiment_summary=card.canonical_summary(),
+                judge_policy_version=request.judge_policy_version,
+                zero_variance_guardrails=zero_variance_guardrails,
             )
             return record, build_feedback(
                 initial_card=request.initial_card,
@@ -497,6 +511,7 @@ class ResearchController:
                 failure_stage=error.stage,
                 failure_stdout_tail=error.stdout_tail,
                 failure_stderr_tail=error.stderr_tail,
+                judge_policy_version=request.judge_policy_version,
             )
             return record, build_feedback(
                 initial_card=request.initial_card,
@@ -539,6 +554,7 @@ class ResearchController:
             )
 
         receipts: list[PairedRunReceipt] = []
+        zero_variance_guardrails: tuple[str, ...] = ()
         try:
             for seed in request.confirmation_seeds:
                 receipt = self._runner.run_final(
@@ -560,12 +576,15 @@ class ResearchController:
             compared = self._domain.compare(
                 tuple(item.pair for item in receipts),
                 baseline_sigmas=sigmas,
+                judge_policy_version=request.judge_policy_version,
             )
             if not isinstance(compared, ConfirmationDecision):
                 raise ControllerError(
                     ControllerErrorCode.INTEGRITY_VIOLATION,
                     "final_result",
                 )
+            _validate_decision_policy(compared, request.judge_policy_version)
+            zero_variance_guardrails = tuple(metric.value for metric in compared.zero_variance_guardrails)
             decision = compared.decision
             reason = compared.reason_code.value
             conclusion = _conclusion(decision)
@@ -609,6 +628,8 @@ class ResearchController:
             failure_stage=failure_stage,
             failure_stdout_tail=failure_stdout_tail,
             failure_stderr_tail=failure_stderr_tail,
+            judge_policy_version=request.judge_policy_version,
+            zero_variance_guardrails=zero_variance_guardrails,
         )
         _append_with_checkpoint(request.ledger, final_record)
         return ControllerRunResult(
@@ -627,6 +648,7 @@ def _validate_request(request: ControllerRunRequest) -> dict[str, float]:
         budget = request.budget
         if (
             not isinstance(request.initial_card, ExperimentCard)
+            or request.judge_policy_version not in ("v1", "v2")
             or isinstance(budget.max_trials, bool)
             or not isinstance(budget.max_trials, int)
             or budget.max_trials <= 0
@@ -668,6 +690,15 @@ def _validate_request(request: ControllerRunRequest) -> dict[str, float]:
             ControllerErrorCode.INVALID_REQUEST,
             "request_validation",
         ) from None
+
+
+def _validate_decision_policy(compared: ConfirmationDecision, expected: str) -> None:
+    """판정 결과를 기록하거나 champion을 전이하기 전에 고정 버전을 대조한다."""
+    if compared.judge_policy_version != expected:
+        raise ControllerError(
+            ControllerErrorCode.INTEGRITY_VIOLATION,
+            "judge_policy_result",
+        )
 
 
 def _is_sha(value: object) -> bool:

@@ -121,6 +121,7 @@ class FakeDomain(ResearchDomain):
         results: PairedJudgeResult | tuple[PairedJudgeResult, ...],
         *,
         baseline_sigmas: object = None,
+        judge_policy_version: str = "v1",
     ) -> ScreeningResult | ConfirmationDecision:
         del baseline_sigmas
         if isinstance(results, PairedJudgeResult):
@@ -141,6 +142,7 @@ class FakeDomain(ResearchDomain):
             JudgeDecision.PROMOTE,
             JudgeReasonCode.PROMOTION_THRESHOLD_MET,
             (MetricDelta(JudgeMetric.NDCG_AT_10, 0.2),),
+            judge_policy_version=judge_policy_version,
         )
 
 

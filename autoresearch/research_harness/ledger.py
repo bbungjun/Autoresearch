@@ -3,8 +3,10 @@
 [파이프라인] Candidate 실행과 Judge 판정 뒤부터 Controller 재개 판단 전까지의
 실험 증거 저장 구간을 담당한다.
 
-[기능] canonical JSONL append, idempotency key 충돌 검사, 파일 동기화, 손상 탐지,
-마지막 미완성 쓰기 복구와 checkpoint 조회를 하나의 영속 경계로 제공한다.
+[기능] 판정 정책 버전·변동 없는 guardrail 증거를 포함한 canonical JSONL append,
+idempotency key 충돌 검사, 파일 동기화, 손상 탐지, 마지막 미완성 쓰기 복구와
+checkpoint 조회를 제공한다.
+정책 필드가 없는 과거 행은 원본 bytes와 멱등성을 보존하며 v1으로 복구한다.
 
 [비책임] 실험 실행·채점·판정, final holdout 소비 권한 발급, 원격·분산 저장소의
 합의는 담당하지 않는다.
@@ -30,6 +32,7 @@ from autoresearch.research_harness.consumption_registry import (
     FinalConsumptionEvidence,
 )
 from autoresearch.research_harness._filesystem import sync_directory
+from autoresearch.research_harness.judge_decision import JudgeMetric
 
 
 _CONTRACT_VERSION = "trial-ledger-v1"
@@ -102,6 +105,8 @@ class TrialRecord:
     failure_stage: str | None = None
     failure_stdout_tail: str = ""
     failure_stderr_tail: str = ""
+    judge_policy_version: str = "v1"
+    zero_variance_guardrails: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -443,7 +448,9 @@ def _read_state(descriptor: int) -> TrialLedgerState:
                 raise ValueError
             record = _record_from_payload(envelope["record_type"], envelope["payload"])
             _validate_record(record)
-            if line != _canonical_line(expected_sequence, record):
+            legacy_policy = (isinstance(record, TrialRecord)
+                             and "judge_policy_version" not in envelope["payload"])
+            if line != _canonical_line(expected_sequence, record, legacy_policy=legacy_policy):
                 raise ValueError
             if isinstance(record, TrialRecord):
                 if record.trial_id in seen_trials:
@@ -511,10 +518,10 @@ def _find_existing(
     return None
 
 
-def _canonical_line(sequence: int, record: LedgerRecord) -> bytes:
+def _canonical_line(sequence: int, record: LedgerRecord, *, legacy_policy: bool = False) -> bytes:
     envelope = {
         "contract_version": _CONTRACT_VERSION,
-        "payload": _record_payload(record),
+        "payload": _record_payload(record, legacy_policy=legacy_policy),
         "record_type": "trial" if isinstance(record, TrialRecord) else "checkpoint",
         "sequence": sequence,
     }
@@ -533,7 +540,7 @@ def _canonical_line(sequence: int, record: LedgerRecord) -> bytes:
         raise LedgerError(LedgerErrorCode.INVALID_REQUEST, "serialization") from None
 
 
-def _record_payload(record: LedgerRecord) -> dict[str, object]:
+def _record_payload(record: LedgerRecord, *, legacy_policy: bool = False) -> dict[str, object]:
     artifacts = [
         {"name": item.name, "sha256": item.sha256, "uri": item.uri}
         for item in record.artifacts
@@ -568,6 +575,9 @@ def _record_payload(record: LedgerRecord) -> dict[str, object]:
             payload["failure_stdout_tail"] = record.failure_stdout_tail
         if record.failure_stderr_tail:
             payload["failure_stderr_tail"] = record.failure_stderr_tail
+        if not legacy_policy:
+            payload["judge_policy_version"] = record.judge_policy_version
+            payload["zero_variance_guardrails"] = list(record.zero_variance_guardrails)
         return payload
     return {
         "artifacts": artifacts,
@@ -603,8 +613,12 @@ def _record_from_payload(record_type: object, payload: object) -> LedgerRecord:
             "failure_stage",
             "failure_stdout_tail",
             "failure_stderr_tail",
+            "judge_policy_version",
+            "zero_variance_guardrails",
         }
         if not required <= set(payload) or not set(payload) <= required | optional:
+            raise ValueError
+        if ("judge_policy_version" in payload) != ("zero_variance_guardrails" in payload):
             raise ValueError
         return TrialRecord(
             trial_id=payload["trial_id"], split=payload["split"],
@@ -622,6 +636,8 @@ def _record_from_payload(record_type: object, payload: object) -> LedgerRecord:
             failure_stage=payload.get("failure_stage"),
             failure_stdout_tail=payload.get("failure_stdout_tail", ""),
             failure_stderr_tail=payload.get("failure_stderr_tail", ""),
+            judge_policy_version=payload.get("judge_policy_version", "v1"),
+            zero_variance_guardrails=tuple(_list(payload.get("zero_variance_guardrails", []))),
         )
     if record_type == "checkpoint":
         required = {
@@ -675,6 +691,16 @@ def _validate_record(record: LedgerRecord) -> None:
     try:
         if isinstance(record, TrialRecord):
             _validate_identifier(record.trial_id)
+            if (not isinstance(record.judge_policy_version, str)
+                    or record.judge_policy_version not in {"v1", "v2"}
+                    or not isinstance(record.zero_variance_guardrails, tuple)):
+                raise ValueError
+            allowed = {metric.value for metric in JudgeMetric if metric is not JudgeMetric.NDCG_AT_10}
+            if (any(not isinstance(metric, str) or metric not in allowed
+                    for metric in record.zero_variance_guardrails)
+                    or len(set(record.zero_variance_guardrails)) != len(record.zero_variance_guardrails)
+                    or (record.judge_policy_version == "v1" and record.zero_variance_guardrails)):
+                raise ValueError
             if record.split not in {"validation", "final_holdout"}:
                 raise ValueError
             if _SHA_PATTERN.fullmatch(record.base_sha) is None:
