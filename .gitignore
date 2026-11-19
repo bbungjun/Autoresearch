@@ -77,3 +77,7 @@ output/
 
 # 워크스페이스 전용 로컬 메모 — 파일 스스로 "Git에 커밋하지 않는다"고 선언한다 (#754)
 /agent.md
+
+# 로컬 kind executor 재현: 개인 설정과 실행 기록
+deployment/local_kind/local.env
+deployment/local_kind/.state/
