@@ -1,0 +1,15 @@
+# 로컬 executor 재현용 kind 클러스터.
+# - worker: API·Postgres·launcher가 뜨는 일반 노드
+# - worker2: executor 전용 노드. up.sh가 GKE와 같은 노드 풀 라벨과 taint를 붙인다.
+# containerd는 /etc/containerd/certs.d의 hosts.toml을 읽어 로컬 레지스트리(localhost:5001)를
+# kind 네트워크의 kind-registry 컨테이너로 연결한다.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
